@@ -1,5 +1,5 @@
 /target/
-/.agent-services/
+/.arcwell/
 /.env
 /.dev.vars
 *.sqlite3

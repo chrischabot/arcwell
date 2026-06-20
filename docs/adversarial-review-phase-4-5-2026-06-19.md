@@ -29,7 +29,7 @@ Evidence: the first implementation reused generic source URL validation for `wik
 
 Root cause: source identity URL validation and fetch-target validation were conflated.
 
-Fix: added a dedicated fetch URL validator. Fetches now require HTTPS and reject loopback, private, link-local, documentation, multicast, and metadata hosts. Loopback is available only under `AGENT_SERVICES_ALLOW_LOOPBACK_URL_INGEST=1` for tests.
+Fix: added a dedicated fetch URL validator. Fetches now require HTTPS and reject loopback, private, link-local, documentation, multicast, and metadata hosts. Loopback is available only under `ARCWELL_ALLOW_LOOPBACK_URL_INGEST=1` for tests.
 
 Validation: severe tests reject `127.0.0.1`, `169.254.169.254`, and `metadata.google.internal`; MCP URL-ingest rejects loopback too.
 

@@ -1,10 +1,10 @@
 # Functionality And Packages
 
-This document is the detailed map of what `agent-services` provides, what each package owns, and how a host agent should use it.
+This document is the detailed map of what `arcwell` provides, what each package owns, and how a host agent should use it.
 
 ## Architectural Approach
 
-Most assistant projects wrap a coding agent inside a larger agent framework. `agent-services` takes the opposite route:
+Most assistant projects wrap a coding agent inside a larger agent framework. `arcwell` takes the opposite route:
 
 - Codex stays the main workbench.
 - Services expose capabilities to Codex through MCP, CLI, skills, and optional HTTP.
@@ -18,48 +18,48 @@ The result is "add assistant infrastructure to Codex" rather than "put Codex ins
 
 ### Rust CLI
 
-The binary is `agent`.
+The binary is `arcwell`.
 
 It supports:
 
-- `agent doctor`
-- `agent profile ...`
-- `agent memory ...`
-- `agent wiki ...`
-- `agent source-card ...`
-- `agent research ...`
-- `agent x ...`
-- `agent worker ...`
-- `agent secrets ...`
+- `arcwell doctor`
+- `arcwell profile ...`
+- `arcwell memory ...`
+- `arcwell wiki ...`
+- `arcwell source-card ...`
+- `arcwell research ...`
+- `arcwell x ...`
+- `arcwell worker ...`
+- `arcwell secrets ...`
 - `agent cursors ...`
-- `agent serve`
-- `agent mcp`
+- `arcwell serve`
+- `arcwell mcp`
 
 ### MCP Server
 
-`agent mcp` is the primary agent control plane.
+`arcwell mcp` is the primary agent control plane.
 
 Core resources:
 
-- `agent://health`
-- `agent://profile`
-- `agent://memory`
-- `agent://wiki`
-- `agent://source-cards`
-- `agent://wiki-jobs`
-- `agent://cursors`
-- `agent://secret-values`
-- `agent://x-items`
-- `agent://research`
-- `agent://edge-events`
-- `agent://channels`
-- `agent://projects`
-- `agent://digest-candidates`
-- `agent://ops`
+- `arcwell://health`
+- `arcwell://profile`
+- `arcwell://memory`
+- `arcwell://wiki`
+- `arcwell://source-cards`
+- `arcwell://wiki-jobs`
+- `arcwell://cursors`
+- `arcwell://secret-values`
+- `arcwell://x-items`
+- `arcwell://research`
+- `arcwell://edge-events`
+- `arcwell://channels`
+- `arcwell://projects`
+- `arcwell://digest-candidates`
+- `arcwell://ops`
 
 ### HTTP Server
 
-`agent serve --addr 127.0.0.1:8787`
+`arcwell serve --addr 127.0.0.1:8787`
 
 Current endpoints:
 
@@ -80,7 +80,7 @@ Cloudflare is used for always-on capture:
 
 The local service remains the durable source of truth.
 
-## Package: `agent-profile`
+## Package: `arcwell-profile`
 
 Intent: store explicit user profile and preference records.
 
@@ -100,16 +100,16 @@ Main tools:
 CLI:
 
 ```sh
-agent profile set communication.style "Direct, sourced, warm."
-agent profile search communication
-agent profile list
+arcwell profile set communication.style "Direct, sourced, warm."
+arcwell profile search communication
+arcwell profile list
 ```
 
 Data store:
 
 - SQLite table `profile_items`
 
-## Package: `agent-memory`
+## Package: `arcwell-memory`
 
 Intent: personal memory for facts/preferences about the person, separate from wiki knowledge.
 
@@ -131,10 +131,10 @@ Main tools:
 CLI:
 
 ```sh
-agent memory add "My cat is called Ophelia"
-agent memory search Ophelia
-agent candidate list
-agent candidate apply <id>
+arcwell memory add "My cat is called Ophelia"
+arcwell memory search Ophelia
+arcwell candidate list
+arcwell candidate apply <id>
 ```
 
 Data store:
@@ -148,7 +148,7 @@ Safety:
 - Applying candidates is explicit.
 - Duplicate suppression prevents easy write amplification.
 
-## Package: `agent-llm-wiki`
+## Package: `arcwell-llm-wiki`
 
 Intent: a source-backed Markdown knowledge base.
 
@@ -169,6 +169,8 @@ Main tools:
 - `wiki_read`
 - `wiki_ingest_file`
 - `wiki_ingest_url`
+- `wiki_import_codex_swift_sources`
+- `wiki_watch_sources`
 - `wiki_enqueue_rss`
 - `wiki_enqueue_github`
 - `wiki_enqueue_arxiv`
@@ -180,28 +182,32 @@ Main tools:
 CLI:
 
 ```sh
-agent wiki ingest-file ./notes.md
-agent wiki ingest-dir ./corpus
-agent wiki search "MCP"
-agent wiki enqueue-github-owner openai --limit 10
-agent source-card add --title "Launch" --url "https://example.com" --summary "Summary"
-agent wiki expand "Vercel Eve"
+arcwell wiki ingest-file ./notes.md
+arcwell wiki ingest-dir ./corpus
+arcwell wiki import-codex-swift-sources /path/to/codex-swift
+arcwell wiki sources
+arcwell wiki search "MCP"
+arcwell wiki enqueue-github-owner openai --limit 10
+arcwell source-card add --title "Launch" --url "https://example.com" --summary "Summary"
+arcwell wiki expand "Vercel Eve"
 ```
 
 Data store:
 
-- Markdown files under `AGENT_SERVICES_HOME/wiki/pages`
+- Markdown files under `ARCWELL_HOME/wiki/pages`
 - SQLite `wiki_pages`
 - SQLite `wiki_pages_fts`
 - SQLite `source_cards`
+- SQLite `watch_sources`
 - SQLite `wiki_jobs`
 
 Safety:
 
 - Source cards mark external material as untrusted evidence.
+- Watch sources are monitor configuration, not retrieved evidence; Codex Swift seed imports merge duplicates idempotently and reject unsafe URLs/invalid handles.
 - URL ingest blocks local/private/metadata hosts.
 
-## Package: `agent-deep-research`
+## Package: `arcwell-deep-research`
 
 Intent: coordinate multi-source research.
 
@@ -218,10 +224,10 @@ Main tools:
 CLI:
 
 ```sh
-agent research plan "Vercel Eve"
-agent research workflow "Vercel Eve"
-agent research search "Vercel Eve" --provider brave --write-wiki
-agent research brief "Vercel Eve"
+arcwell research plan "Vercel Eve"
+arcwell research workflow "Vercel Eve"
+arcwell research search "Vercel Eve" --provider brave --write-wiki
+arcwell research brief "Vercel Eve"
 ```
 
 Providers:
@@ -238,13 +244,15 @@ Workflow roles:
 - skeptic
 - synthesizer
 
-## Package: `agent-x`
+## Package: `arcwell-x`
 
 Intent: import, search, and report on X/Twitter material as source evidence.
 
 Main tools:
 
 - `x_import_json_file`
+- `x_rebuild_definitive_watch_sources`
+- `x_import_following_watch_sources`
 - `x_oauth_authorize_url`
 - `x_oauth_exchange_code`
 - `x_oauth_refresh`
@@ -256,25 +264,29 @@ Main tools:
 CLI:
 
 ```sh
-agent x import-json ./x-items.json
-agent x recent-search "from:openai" --max-results 10
-agent x list --query agents
-agent x report --query agents
+arcwell x import-json ./x-items.json
+arcwell x rebuild-definitive-watch-sources --bookmark-days 92 --max-bookmarks 1000 --max-recent-follows 100
+arcwell x recent-search "from:openai" --max-results 10
+arcwell x list --query agents
+arcwell x report --query agents
 ```
 
 Data store:
 
 - SQLite `x_items`
 - source cards and wiki pages for imported items
+- SQLite `watch_sources` for followed-account monitor handles
 - cursor keys such as `x:recent-search:<query>`
 
 Safety:
 
 - X text is untrusted source text.
+- Definitive watch rebuild replaces the previous `x_handle` registry instead of appending to it.
+- Following imports validate handles and preserve profile descriptions as metadata only.
 - Duplicate tweet ids are skipped.
 - Unsafe URLs are rejected.
 
-## Package: `agent-edge-inbox`
+## Package: `arcwell-edge-inbox`
 
 Intent: always-on short-lived event capture.
 
@@ -289,7 +301,7 @@ Main tools:
 
 Cloudflare Worker:
 
-- `packages/agent-edge-inbox/worker`
+- `packages/arcwell-edge-inbox/worker`
 
 Worker endpoints:
 
@@ -310,7 +322,7 @@ Semantics:
 - retry/backoff
 - dead-lettering
 
-## Package: `agent-telegram`
+## Package: `arcwell-telegram`
 
 Intent: Telegram channel integration.
 
@@ -334,7 +346,7 @@ Safety:
 - Formatting should be normalized before outbound sends.
 - Ambiguous project references stop instead of guessing.
 
-## Package: `agent-projects`
+## Package: `arcwell-projects`
 
 Intent: project and thread meta-controller.
 
@@ -365,7 +377,7 @@ Future depth:
 - Claude thread/context inventory
 - status summaries from live work
 
-## Package: `agent-librarian`
+## Package: `arcwell-librarian`
 
 Intent: turn incoming source cards into useful knowledge and digest candidates.
 
@@ -395,14 +407,14 @@ Future depth:
 - model-backed synthesis
 - digest delivery
 
-## Package: `agent-ops`
+## Package: `arcwell-ops`
 
 Intent: inspect and operate the local assistant system.
 
 Main tools/resources:
 
 - `ops_snapshot`
-- `agent://ops`
+- `arcwell://ops`
 - `GET /ops`
 
 Snapshot includes:
@@ -422,15 +434,15 @@ Future depth:
 - source health
 - memory candidate review
 
-## Package: `agent-conversation-import`
+## Package: `arcwell-conversation-import`
 
 Intent: import conversation exports and propose profile/memory candidates.
 
 Current CLI:
 
 ```sh
-agent import claude ./conversations.json --dry-run
-agent import claude ./conversations.json --write-candidates
+arcwell import claude ./conversations.json --dry-run
+arcwell import claude ./conversations.json --write-candidates
 ```
 
 This is used to migrate personal context from previous assistant conversations.
@@ -442,8 +454,8 @@ The local worker drains jobs from `wiki_jobs`.
 CLI:
 
 ```sh
-agent worker run-once --max-jobs 10
-agent worker run --max-jobs-per-tick 10 --idle-sleep-ms 5000
+arcwell worker run-once --max-jobs 10
+arcwell worker run --max-jobs-per-tick 10 --idle-sleep-ms 5000
 ```
 
 Semantics:
@@ -466,9 +478,9 @@ MCP exposes set/list/delete for secret values, but no general read tool.
 CLI:
 
 ```sh
-agent secrets set-value X_BEARER_TOKEN "$X_BEARER_TOKEN" --scope x
-agent secrets list-values
-agent secrets delete-value X_BEARER_TOKEN
+arcwell secrets set-value X_BEARER_TOKEN "$X_BEARER_TOKEN" --scope x
+arcwell secrets list-values
+arcwell secrets delete-value X_BEARER_TOKEN
 ```
 
 ## Suggested Slash Commands
@@ -521,7 +533,7 @@ cargo clippy --all-targets -- -D warnings
 Cloudflare Worker:
 
 ```sh
-cd packages/agent-edge-inbox/worker
+cd packages/arcwell-edge-inbox/worker
 npm install
 npm run typecheck
 ```

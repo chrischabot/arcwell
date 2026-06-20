@@ -1,0 +1,40 @@
+{
+  "name": "arcwell-codex",
+  "version": "0.1.0",
+  "description": "Local-first personal assistant services for Codex: memory, wiki, research, X, projects, workers, and ops.",
+  "author": {
+    "name": "Chris Chabot",
+    "url": "https://github.com/chrischabot"
+  },
+  "homepage": "https://github.com/chrischabot/arcwell",
+  "repository": "https://github.com/chrischabot/arcwell",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "wiki",
+    "research",
+    "mcp",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Arcwell",
+    "shortDescription": "Memory, wiki, research, X, project, worker, and ops tools for Codex.",
+    "longDescription": "Adds local-first assistant services to Codex through MCP and skills while keeping durable state in SQLite and Markdown files.",
+    "developerName": "Chris Chabot",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/chrischabot/arcwell",
+    "defaultPrompt": [
+      "Search my wiki before answering this.",
+      "Use memory and profile for this personal task.",
+      "Create a sourced research brief."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

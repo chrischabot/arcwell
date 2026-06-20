@@ -13,7 +13,7 @@ No blocking issues remain in the implemented worker reliability surface after th
 - `run_worker_once` previously claimed only `pending` jobs and had no lease. Fixed by recording worker lease state and reclaiming expired `running` jobs.
 - Failed jobs previously stayed `failed` forever with no retry/dead-letter semantics. Fixed by adding attempts, bounded backoff through `next_run_at`, and terminal `dead_lettered` status.
 - The old schema had no room for worker diagnostics. Fixed with additive migration columns and a regression test that opens an old-style database.
-- A resident worker loop did not exist. Fixed with `agent worker run`, while keeping MCP non-blocking through `worker_run_once`.
+- A resident worker loop did not exist. Fixed with `arcwell worker run`, while keeping MCP non-blocking through `worker_run_once`.
 
 ## Attack Cases Covered By Tests
 
@@ -30,7 +30,7 @@ No blocking issues remain in the implemented worker reliability surface after th
 
 - There is not yet a manual `requeue` or `cancel` operation.
 - Backoff is fixed rather than policy-driven by job kind or error class.
-- There is no external supervisor installer for keeping `agent worker run` alive after reboot.
+- There is no external supervisor installer for keeping `arcwell worker run` alive after reboot.
 - There is no cross-process stress test with two OS processes racing on the same SQLite database yet; current severe lease tests exercise the state transition invariants inside one process.
 - Long-running adapter calls still depend on provider timeouts and rate limits.
 

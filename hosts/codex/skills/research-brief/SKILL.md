@@ -14,10 +14,10 @@ Rules:
 Typical commands:
 
 ```sh
-agent wiki search <query>
-agent research brief <query> --no-write
-agent research brief <query>
-agent research runs
+arcwell wiki search <query>
+arcwell research brief <query> --no-write
+arcwell research brief <query>
+arcwell research runs
 ```
 
 MCP tools:

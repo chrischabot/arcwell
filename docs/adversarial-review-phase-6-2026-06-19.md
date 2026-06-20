@@ -34,7 +34,7 @@ No blocking issues remain in the implemented surface after the current test pass
 
 ## Residual Risks
 
-- `agent worker run-once` is deliberately simple. It has no durable lease timeout, exponential retry, retry budget, or dead-letter table yet.
+- `arcwell worker run-once` is deliberately simple. It has no durable lease timeout, exponential retry, retry budget, or dead-letter table yet.
 - GitHub/RSS/arXiv adapters may duplicate source cards across repeated runs because provider-specific item-level cursors are not fully implemented.
 - X recent search cursoring depends on `meta.newest_id`; query edits create new cursor keys by design.
 - Passing secrets through CLI arguments may place them in shell history. Environment variables or SQLite secret set via trusted local workflows are preferable.

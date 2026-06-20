@@ -15,8 +15,8 @@ The user experiences skipped memory, skipped tools, and low-effort guessing as d
 Useful checks:
 
 ```sh
-agent profile search competence
-agent profile search communication
-agent memory search <topic>
+arcwell profile search competence
+arcwell profile search communication
+arcwell memory search <topic>
 ```
 

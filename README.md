@@ -1,8 +1,8 @@
-# agent-services
+# Arcwell
 
 Personal assistant services for Codex, Claude, and other MCP-capable agents.
 
-`agent-services` adds long-lived assistant abilities to the agent you already use. Instead of wrapping Codex inside a separate mega-agent, it gives Codex a set of local and edge services it can call: memory, a knowledge wiki, research workflows, X/Twitter ingestion, project awareness, Telegram/channel plumbing, background workers, and ops visibility.
+Arcwell adds long-lived assistant abilities to the agents you already use. Instead of wrapping Codex inside a separate mega-agent, it gives Codex, Claude, and other MCP-capable agents a shared well of local-first context: personal memory, a knowledge wiki, research workflows, X/Twitter ingestion, project awareness, Telegram/channel plumbing, background workers, and ops visibility.
 
 The idea is simple:
 
@@ -13,7 +13,7 @@ The idea is simple:
 
 ## What It Provides
 
-`agent-services` is meant to feel like a practical personal assistant layer:
+Arcwell is meant to feel like a practical personal assistant layer:
 
 - It remembers personal facts and preferences that should survive across chats.
 - It keeps a source-backed Markdown knowledge base for research, writing, launches, papers, repos, and links.
@@ -24,6 +24,10 @@ The idea is simple:
 - It exposes an ops snapshot so agents and humans can inspect jobs, queues, cursors, and recent state.
 
 The detailed package/functionality guide is in [docs/functionality-and-packages.md](docs/functionality-and-packages.md).
+
+Packaging, service supervision, auto-restart, and Codex plugin install strategy are documented in [docs/packaging-and-operations.md](docs/packaging-and-operations.md).
+
+The Codex plugin slash-command and `$skill` catalog is documented in [docs/codex-plugin-commands.md](docs/codex-plugin-commands.md).
 
 ## Current Features
 
@@ -49,7 +53,7 @@ Profile is for stable preferences and operating instructions. Memory is for pers
 
 A local Markdown knowledge base backed by SQLite metadata.
 
-The wiki can ingest local Markdown files, public URLs, source cards, RSS/Atom feeds, GitHub releases/commits, arXiv searches, X items, and research briefs. Source cards are rendered as Markdown pages with provenance and an "untrusted evidence" warning.
+The wiki can ingest local Markdown files, public URLs, source cards, RSS/Atom feeds, GitHub releases/commits, arXiv searches, X items, and research briefs. Source cards are rendered as Markdown pages with provenance and an "untrusted evidence" warning. A separate watch-source registry tracks the feeds, GitHub owners, blogs, arXiv queries, and future handles the assistant should monitor over time.
 
 ### Deep Research
 
@@ -112,8 +116,8 @@ Prerequisites:
 Clone and build:
 
 ```sh
-git clone https://github.com/chrischabot/agent-services.git
-cd agent-services
+git clone https://github.com/chrischabot/arcwell.git
+cd arcwell
 cargo build
 cargo test
 ```
@@ -121,25 +125,25 @@ cargo test
 Install the CLI locally:
 
 ```sh
-cargo install --path crates/agent-cli
+cargo install --path crates/arcwell-cli
 ```
 
 The installed command is:
 
 ```sh
-agent
+arcwell
 ```
 
 By default, local state lives in:
 
 ```text
-~/.agent-services
+~/.arcwell
 ```
 
 You can override it:
 
 ```sh
-export AGENT_SERVICES_HOME="$HOME/.agent-services"
+export ARCWELL_HOME="$HOME/.arcwell"
 ```
 
 ## Configure
@@ -157,7 +161,7 @@ X_CLIENT_ID=...
 X_CLIENT_SECRET=...
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_WEBHOOK_SECRET=...
-AGENT_EDGE_SECRET=...
+ARCWELL_EDGE_SECRET=...
 CLOUDFLARE_ACCOUNT_ID=...
 CLOUDFLARE_API_TOKEN=...
 GITHUB_TOKEN=...
@@ -166,21 +170,33 @@ GITHUB_TOKEN=...
 SQLite-backed local secrets are also supported:
 
 ```sh
-agent secrets set-value BRAVE_API_KEY "$BRAVE_API_KEY" --scope brave
-agent secrets set-value PERPLEXITY_API_KEY "$PERPLEXITY_API_KEY" --scope perplexity
-agent secrets set-value X_BEARER_TOKEN "$X_BEARER_TOKEN" --scope x
-agent secrets set-value TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN" --scope telegram
-agent secrets list-values
+arcwell secrets set-value BRAVE_API_KEY "$BRAVE_API_KEY" --scope brave
+arcwell secrets set-value PERPLEXITY_API_KEY "$PERPLEXITY_API_KEY" --scope perplexity
+arcwell secrets set-value X_BEARER_TOKEN "$X_BEARER_TOKEN" --scope x
+arcwell secrets set-value TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN" --scope telegram
+arcwell secrets list-values
 ```
 
 `list-values` shows names, scopes, and timestamps only. It does not print secret values.
 
 ## Use With Codex
 
+Recommended packaged path:
+
+```sh
+cargo install --path crates/arcwell-cli
+codex plugin marketplace add /path/to/arcwell
+codex plugin add arcwell-codex@arcwell-local
+```
+
+The repo-scoped Codex plugin lives under `plugins/arcwell-codex` and bundles MCP config plus the arcwell skills. Start a new Codex thread after installing or updating the plugin.
+
+Development-only manual MCP path:
+
 Start the MCP server:
 
 ```sh
-agent mcp
+arcwell mcp
 ```
 
 Example Codex MCP config:
@@ -188,11 +204,11 @@ Example Codex MCP config:
 ```json
 {
   "mcpServers": {
-    "agent-services": {
-      "command": "agent",
+    "arcwell": {
+      "command": "arcwell",
       "args": ["mcp"],
       "env": {
-        "AGENT_SERVICES_HOME": "/Users/chabotc/.agent-services"
+        "ARCWELL_HOME": "/Users/chabotc/.arcwell"
       }
     }
   }
@@ -203,67 +219,78 @@ The same MCP server can be configured in Claude Desktop/Code.
 
 ## Slash Commands
 
-Slash commands are the human-facing actions a chat host can expose. They map to CLI/MCP tools.
+The Codex plugin includes slash-command prompts under [plugins/arcwell-codex/commands](plugins/arcwell-codex/commands). They expose the whole MCP tool surface: memory, profile, wiki, source cards, research, watch sources, X, projects, channels, edge inbox, workers, ops, cursors, costs, backups, and secrets.
 
-Suggested commands:
+They also expose local-only maintenance CLI actions that are intentionally not MCP tools, such as memory/profile deletion, candidate rejection, manual wiki page creation, immediate adapter runs, backup status, and external secret references.
+
+Depending on the Codex surface, plugin commands may show with a namespace, such as `/arcwell-codex:remember`, or by their direct command name, such as `/remember`. Use the name displayed in the slash picker.
+
+Common commands:
 
 ```text
-/remember <fact>
-/memory search <query>
-/profile set <key> <value>
-/wiki search <query>
-/wiki ingest <path-or-url>
-/research plan <topic>
-/research brief <topic>
-/watch rss <feed-url>
-/watch github <owner/repo>
-/watch arxiv <query>
-/x search <query>
-/project create <name>
-/project status <reference>
-/telegram inbox
+/remember
+/memory-search
+/wiki-search
+/wiki-ingest
+/research-plan
+/research-brief
+/watch-rss
+/watch-github
+/watch-arxiv
+/x-search
+/x-watch-rebuild
+/project-status
+/telegram-inbox
 /ops
-/worker run-once
+/worker-run-once
 ```
+
+The complete command list is in [docs/codex-plugin-commands.md](docs/codex-plugin-commands.md).
 
 Current CLI equivalents:
 
 ```sh
-agent memory add "My cat is called Ophelia"
-agent memory search "Ophelia"
-agent profile set communication.style "Direct, sourced, warm."
-agent wiki search "agent infrastructure"
-agent wiki ingest-file ./notes.md
-agent wiki ingest-dir ./corpus
-agent research plan "Vercel Eve"
-agent research brief "Vercel Eve"
-agent wiki enqueue-rss https://example.com/feed.xml
-agent wiki enqueue-github-owner openai --limit 10
-agent wiki enqueue-github openai codex --mode releases
-agent wiki enqueue-arxiv "cat:cs.AI"
-agent x recent-search "from:openai"
-agent worker run-once
-agent serve --addr 127.0.0.1:8787
+arcwell memory add "My cat is called Ophelia"
+arcwell memory search "Ophelia"
+arcwell profile set communication.style "Direct, sourced, warm."
+arcwell wiki search "agent infrastructure"
+arcwell wiki ingest-file ./notes.md
+arcwell wiki ingest-dir ./corpus
+arcwell wiki import-codex-swift-sources /path/to/codex-swift
+arcwell wiki sources
+arcwell research plan "Vercel Eve"
+arcwell research brief "Vercel Eve"
+arcwell wiki enqueue-rss https://example.com/feed.xml
+arcwell wiki enqueue-github-owner openai --limit 10
+arcwell wiki enqueue-github openai codex --mode releases
+arcwell wiki enqueue-arxiv "cat:cs.AI"
+arcwell x rebuild-definitive-watch-sources --bookmark-days 92 --max-bookmarks 1000 --max-recent-follows 100
+arcwell x recent-search "from:openai"
+arcwell worker run-once
+arcwell serve --addr 127.0.0.1:8787
 ```
 
 ## `$commands` / Skills
 
-`$commands` are agent-side habits or skills. They tell Codex/Claude when to use the service.
+`$commands` are agent-side habits or skills. They tell Codex when to use the service and how to handle memory, source trust, research discipline, project routing, channel safety, and ops work.
 
-Suggested commands:
+Bundled skills:
 
 ```text
-$memory-review
-$wiki-research
-$deep-research
-$research-audit
-$x-research
-$ops-ui
-$project-controller
-$channel-router
+$arcwell-codex:memory-review
+$arcwell-codex:wiki-research
+$arcwell-codex:deep-research
+$arcwell-codex:research-audit
+$arcwell-codex:research-brief
+$arcwell-codex:x-research
+$arcwell-codex:project-control
+$arcwell-codex:channel-control
+$arcwell-codex:ops-control
+$arcwell-codex:worker-control
+$arcwell-codex:competence-respect
 ```
 
-The repo includes Codex skill drafts under [hosts/codex/skills](hosts/codex/skills).
+The repo includes the installed plugin skill sources under [plugins/arcwell-codex/skills](plugins/arcwell-codex/skills).
 
 Intent:
 
@@ -272,9 +299,11 @@ Intent:
 - `$deep-research`: plan, gather, audit, and brief multi-source research.
 - `$research-audit`: adversarially check sources and claims.
 - `$x-research`: import/search/report X evidence.
-- `$ops-ui`: inspect health, jobs, cursors, queues, and errors.
-- `$project-controller`: resolve and manage project context.
-- `$channel-router`: handle Telegram/future chat channels safely.
+- `$ops-control`: inspect health, jobs, cursors, queues, and errors.
+- `$project-control`: resolve and manage project context.
+- `$channel-control`: handle Telegram/future chat channels safely.
+- `$worker-control`: drain queued jobs and interpret failures.
+- `$competence-respect`: use enough reasoning, consult memory/tools, and avoid wasting the user's time.
 
 ## Live E2E Testing
 
@@ -287,17 +316,17 @@ set -a
 . ./.env
 set +a
 
-agent research search "OpenAI agent news" --provider brave --max-results 1
-agent research search "OpenAI agent news" --provider perplexity --max-results 1
-agent x recent-search "from:openai" --max-results 10
+arcwell research search "OpenAI agent news" --provider brave --max-results 1
+arcwell research search "OpenAI agent news" --provider perplexity --max-results 1
+arcwell x recent-search "from:openai" --max-results 10
 curl http://127.0.0.1:8787/ops
 ```
 
 ## Repository Layout
 
 ```text
-crates/agent-core      Rust library: storage, jobs, memory, wiki, research, X, projects, ops
-crates/agent-cli       CLI, HTTP server, and stdio MCP server
+crates/arcwell-core      Rust library: storage, jobs, memory, wiki, research, X, projects, ops
+crates/arcwell-cli       CLI, HTTP server, and stdio MCP server
 packages/              Feature packages and package-level docs
 hosts/codex/           Codex skills and MCP config
 hosts/claude/          Claude host notes

@@ -5,7 +5,7 @@ Date: 2026-06-19
 ## Implemented
 
 - Added a pending job queue path for wiki/source work.
-- Added `agent worker run-once` and MCP `worker_run_once`.
+- Added `arcwell worker run-once` and MCP `worker_run_once`.
 - Added SQLite cursor state with CLI/MCP/resource inspection.
 - Added RSS/Atom adapter that turns feed entries into source cards.
 - Added GitHub releases/commits adapter that turns API results into source cards.
@@ -19,20 +19,20 @@ Date: 2026-06-19
 ## Command Surface
 
 ```sh
-agent wiki enqueue-rss https://example.com/feed.xml
-agent wiki enqueue-github openai codex --mode releases --limit 10
-agent wiki enqueue-github openai codex --mode commits --limit 10
-agent wiki enqueue-arxiv "cat:cs.AI" --limit 10
-agent x enqueue-recent-search "from:openai" --max-results 25
-agent worker run-once --max-jobs 10
+arcwell wiki enqueue-rss https://example.com/feed.xml
+arcwell wiki enqueue-github openai codex --mode releases --limit 10
+arcwell wiki enqueue-github openai codex --mode commits --limit 10
+arcwell wiki enqueue-arxiv "cat:cs.AI" --limit 10
+arcwell x enqueue-recent-search "from:openai" --max-results 25
+arcwell worker run-once --max-jobs 10
 
-agent x oauth-url --client-id "$X_CLIENT_ID" --redirect-uri http://127.0.0.1/callback --scopes tweet.read,users.read,offline.access
-agent x oauth-exchange --client-id "$X_CLIENT_ID" --redirect-uri http://127.0.0.1/callback --code "$CODE" --code-verifier "$CODE_VERIFIER"
-agent x oauth-refresh --client-id "$X_CLIENT_ID"
-agent x recent-search "from:openai" --max-results 25
+arcwell x oauth-url --client-id "$X_CLIENT_ID" --redirect-uri http://127.0.0.1/callback --scopes tweet.read,users.read,offline.access
+arcwell x oauth-exchange --client-id "$X_CLIENT_ID" --redirect-uri http://127.0.0.1/callback --code "$CODE" --code-verifier "$CODE_VERIFIER"
+arcwell x oauth-refresh --client-id "$X_CLIENT_ID"
+arcwell x recent-search "from:openai" --max-results 25
 
-agent secrets set-value X_BEARER_TOKEN "$TOKEN" --scope x
-agent secrets list-values
+arcwell secrets set-value X_BEARER_TOKEN "$TOKEN" --scope x
+arcwell secrets list-values
 agent cursors list
 agent cursors get "x:recent-search:from:openai"
 ```
@@ -56,10 +56,10 @@ agent cursors get "x:recent-search:from:openai"
 
 Resources:
 
-- `agent://wiki-jobs`
-- `agent://cursors`
-- `agent://secret-values`
-- `agent://x-items`
+- `arcwell://wiki-jobs`
+- `arcwell://cursors`
+- `arcwell://secret-values`
+- `arcwell://x-items`
 
 ## Boundaries
 

@@ -1,14 +1,14 @@
 [workspace]
 members = [
-  "crates/agent-core",
-  "crates/agent-cli",
+  "crates/arcwell-core",
+  "crates/arcwell-cli",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/chrischabot/agent-services"
+repository = "https://github.com/chrischabot/arcwell"
 
 [workspace.dependencies]
 anyhow = "1"

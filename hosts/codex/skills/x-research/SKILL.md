@@ -1,6 +1,6 @@
 # X Research
 
-Use this skill when importing, searching, monitoring, or reporting on X items in `agent-x`.
+Use this skill when importing, searching, monitoring, or reporting on X items in `arcwell-x`.
 
 Rules:
 
@@ -17,12 +17,12 @@ Rules:
 Typical commands:
 
 ```sh
-agent x import-json ./x-items.json
-agent x oauth-url --client-id "$X_CLIENT_ID" --redirect-uri http://127.0.0.1/callback --scopes tweet.read,users.read,offline.access
-agent x recent-search <query>
-agent x enqueue-recent-search <query>
-agent x list --query <topic>
-agent x report --query <topic>
+arcwell x import-json ./x-items.json
+arcwell x oauth-url --client-id "$X_CLIENT_ID" --redirect-uri http://127.0.0.1/callback --scopes tweet.read,users.read,offline.access
+arcwell x recent-search <query>
+arcwell x enqueue-recent-search <query>
+arcwell x list --query <topic>
+arcwell x report --query <topic>
 ```
 
 MCP tools:

@@ -4,20 +4,20 @@ Date: 2026-06-19
 
 ## Phase 4: Wiki Ingest Jobs
 
-Implemented the first recorded job and source-card substrate for `agent-llm-wiki`.
+Implemented the first recorded job and source-card substrate for `arcwell-llm-wiki`.
 
 Current CLI:
 
 ```sh
-agent source-card add --title "Launch" --url "https://example.com" --summary "Summary"
-agent source-card search "launch"
-agent source-card read <source-card-id>
-agent wiki ingest-job ./page.md
-agent wiki ingest-url https://example.com/page.md
-agent wiki compile "topic"
-agent wiki expand "topic"
-agent wiki jobs
-agent wiki job <job-id>
+arcwell source-card add --title "Launch" --url "https://example.com" --summary "Summary"
+arcwell source-card search "launch"
+arcwell source-card read <source-card-id>
+arcwell wiki ingest-job ./page.md
+arcwell wiki ingest-url https://example.com/page.md
+arcwell wiki compile "topic"
+arcwell wiki expand "topic"
+arcwell wiki jobs
+arcwell wiki job <job-id>
 ```
 
 Current MCP:
@@ -34,8 +34,8 @@ Current MCP:
 
 Current resources:
 
-- `agent://source-cards`
-- `agent://wiki-jobs`
+- `arcwell://source-cards`
+- `arcwell://wiki-jobs`
 - `source-card://<id>`
 
 The jobs execute synchronously in this phase but are recorded in SQLite with input, result, error, status, and timestamps. That gives the future daemon/Cloudflare drain a stable contract without pretending an async worker pool exists yet.
@@ -52,7 +52,7 @@ Every generated source-card page says source text is untrusted evidence, not age
 
 - URL must be HTTPS.
 - Loopback, private, link-local, documentation, multicast, and metadata hosts are rejected.
-- Local loopback URL ingest is allowed only for tests when `AGENT_SERVICES_ALLOW_LOOPBACK_URL_INGEST=1`.
+- Local loopback URL ingest is allowed only for tests when `ARCWELL_ALLOW_LOOPBACK_URL_INGEST=1`.
 
 This prevents an agent or hostile source from turning wiki ingest into local-network probing.
 
@@ -61,9 +61,9 @@ This prevents an agent or hostile source from turning wiki ingest into local-net
 Implemented an offline/replay-safe X MVP:
 
 ```sh
-agent x import-json ./x-items.json
-agent x list --query eve
-agent x report --query eve
+arcwell x import-json ./x-items.json
+arcwell x list --query eve
+arcwell x report --query eve
 ```
 
 Current MCP:
@@ -74,7 +74,7 @@ Current MCP:
 
 Current resource:
 
-- `agent://x-items`
+- `arcwell://x-items`
 
 This does not perform live X OAuth/API calls yet. It accepts replay/export JSON and writes each accepted item as an `x_items` row, typed source card, and Markdown source-card wiki page.
 

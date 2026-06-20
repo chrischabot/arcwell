@@ -2,7 +2,7 @@
 
 Date: 2026-06-19
 
-This is the executable backlog for turning the local MVP into an always-on agent services system.
+This is the executable backlog for turning the local MVP into an always-on Arcwell system.
 
 ## Phase 7: Worker Daemon Reliability
 

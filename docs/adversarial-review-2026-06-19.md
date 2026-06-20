@@ -15,7 +15,7 @@ Reviewed and tested the new residual-gap work:
 
 Score: 100.
 
-Evidence: the disposable CLI smoke for `agent research search ... --write-wiki` panicked with:
+Evidence: the disposable CLI smoke for `arcwell research search ... --write-wiki` panicked with:
 
 ```text
 Cannot drop a runtime in a context where blocking is not allowed.
@@ -23,7 +23,7 @@ Cannot drop a runtime in a context where blocking is not allowed.
 
 Root cause: the CLI used `#[tokio::main]` for every command, but daemon-side web search uses `reqwest::blocking`. Dropping the blocking client inside the Tokio runtime triggered the panic.
 
-Fix: made the CLI entrypoint synchronous and construct a Tokio runtime only for `agent serve`.
+Fix: made the CLI entrypoint synchronous and construct a Tokio runtime only for `arcwell serve`.
 
 Validation: full smoke now passes for research workflow, search, wiki write-back, brief, and MCP probes.
 
@@ -33,7 +33,7 @@ Score: 75.
 
 Evidence: inspection showed MCP/CLI callers could provide any HTTPS search endpoint. That is unnecessary for normal provider use and creates an avoidable SSRF-shaped egress path.
 
-Fix: custom endpoints are now limited to official provider origins or loopback test endpoints unless `AGENT_SERVICES_ALLOW_CUSTOM_SEARCH_ENDPOINTS=1` is explicitly set.
+Fix: custom endpoints are now limited to official provider origins or loopback test endpoints unless `ARCWELL_ALLOW_CUSTOM_SEARCH_ENDPOINTS=1` is explicitly set.
 
 Validation: severe tests reject non-HTTPS non-loopback endpoints and custom HTTPS endpoints by default.
 
@@ -65,7 +65,7 @@ Runtime smoke:
 - CLI Brave-compatible search against loopback mock server with wiki write-back.
 - MCP initialize/ping/workflow/web-search-error/templates-list.
 - MCP Inspector `tools/list`.
-- MCP Inspector `tools/call agent_health`.
+- MCP Inspector `tools/call arcwell_health`.
 - Isolated Codex `mcp add` and `mcp get --json`.
 
 ## Remaining Risk

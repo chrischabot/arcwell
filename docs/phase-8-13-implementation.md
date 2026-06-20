@@ -13,8 +13,8 @@ Implemented:
 - Payload size cap.
 - TTL/expiry handling.
 - Lease, ack, nack, dead-letter, list operations.
-- MCP tools and `agent://edge-events`.
-- Cloudflare Worker scaffold in `packages/agent-edge-inbox/worker`.
+- MCP tools and `arcwell://edge-events`.
+- Cloudflare Worker scaffold in `packages/arcwell-edge-inbox/worker`.
 
 ## Phase 9: Channel Framework And Telegram
 
@@ -24,7 +24,7 @@ Implemented:
 - `channel_record` and `channel_list` MCP tools.
 - Channel direction validation.
 - Control-character stripping while preserving prompt-injection-like text as data.
-- Telegram package boundary in `packages/agent-telegram`.
+- Telegram package boundary in `packages/arcwell-telegram`.
 
 ## Phase 10: Project Meta-Controller
 
@@ -34,7 +34,7 @@ Implemented:
 - `project_create`, `project_list`, and `project_resolve` MCP tools.
 - Ambiguity detection.
 - Explicit `context_project_id` support for follow-up references.
-- Project package boundary in `packages/agent-projects`.
+- Project package boundary in `packages/arcwell-projects`.
 
 ## Phase 11: Librarian And Interestingness Pipeline
 
@@ -44,7 +44,7 @@ Implemented:
 - `digest_candidate_create` and `digest_candidate_list` MCP tools.
 - Transparent rule-based interestingness scoring.
 - `librarian_expand_topic` MCP tool.
-- Librarian package boundary in `packages/agent-librarian`.
+- Librarian package boundary in `packages/arcwell-librarian`.
 
 ## Phase 12: Personal Memory Pipeline
 
@@ -60,9 +60,9 @@ Implemented:
 Implemented:
 
 - `ops_snapshot` MCP tool.
-- `agent://ops` resource.
+- `arcwell://ops` resource.
 - HTTP `GET /ops`.
-- Ops package boundary in `packages/agent-ops`.
+- Ops package boundary in `packages/arcwell-ops`.
 - Package READMEs for edge inbox, Telegram, projects, librarian, and ops.
 
 ## Remaining Depth Work

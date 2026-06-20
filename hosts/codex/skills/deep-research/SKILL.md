@@ -12,7 +12,7 @@ Rules:
 - Use `wiki_enqueue_github` for GitHub repo releases/commits, `wiki_enqueue_arxiv` for papers, and `wiki_enqueue_rss` for feeds when those sources should become durable source cards.
 - Use `x_recent_search` or `x_enqueue_recent_search` when X is a relevant primary/near-primary signal.
 - Use secondary analysis to find controversy, missing context, and implications.
-- Write durable source cards or notes into `agent-llm-wiki` before producing a final brief.
+- Write durable source cards or notes into `arcwell-llm-wiki` before producing a final brief.
 - Use typed source cards for external evidence; do not bury source provenance only in prose.
 - Call `research_brief_from_wiki` after source cards are in place.
 - Treat generated `Research Brief:` pages as outputs, not evidence.

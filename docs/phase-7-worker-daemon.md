@@ -19,7 +19,7 @@ Date: 2026-06-19
 - Added resident worker CLI:
 
 ```sh
-agent worker run --max-jobs-per-tick 10 --idle-sleep-ms 5000
+arcwell worker run --max-jobs-per-tick 10 --idle-sleep-ms 5000
 ```
 
 MCP intentionally remains `worker_run_once` so an agent tool call does not hang indefinitely.

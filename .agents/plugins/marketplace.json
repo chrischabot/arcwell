@@ -1,0 +1,20 @@
+{
+  "name": "arcwell-local",
+  "interface": {
+    "displayName": "Arcwell Local"
+  },
+  "plugins": [
+    {
+      "name": "arcwell-codex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/arcwell-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

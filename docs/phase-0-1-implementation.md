@@ -6,23 +6,23 @@ Date: 2026-06-19
 
 This repo now has the first runnable slice of the Phase 0/1 architecture:
 
-- Rust workspace with `crates/agent-core` and `crates/agent-cli`.
-- SQLite-backed local store under `AGENT_SERVICES_HOME` or `~/.agent-services`.
-- CLI binary named `agent`.
-- Lightweight local HTTP daemon via `agent serve`.
-- Stdio MCP server via `agent mcp`.
+- Rust workspace with `crates/arcwell-core` and `crates/arcwell-cli`.
+- SQLite-backed local store under `ARCWELL_HOME` or `~/.arcwell`.
+- CLI binary named `arcwell`.
+- Lightweight local HTTP daemon via `arcwell serve`.
+- Stdio MCP server via `arcwell mcp`.
 - Phase 1 primitives for:
-  - `agent-profile`: set/get/list/search/delete profile items.
-  - `agent-memory`: add/list/search/delete simple memories.
-  - `agent-conversation-import`: Claude export dry-run and candidate generation.
+  - `arcwell-profile`: set/get/list/search/delete profile items.
+  - `arcwell-memory`: add/list/search/delete simple memories.
+  - `arcwell-conversation-import`: Claude export dry-run and candidate generation.
   - candidate review/apply/reject flow.
-  - `agent-backup`: local snapshot with manifest and checksum.
-  - `agent-secrets`: secret reference metadata, not secret values.
-  - `agent-cost`: simple cost ledger and summary.
+  - `arcwell-backup`: local snapshot with manifest and checksum.
+  - `arcwell-secrets`: secret reference metadata, not secret values.
+  - `arcwell-cost`: simple cost ledger and summary.
 - Phase 2 primitives for:
-  - `agent-llm-wiki`: Markdown file ingest, SQLite metadata, search, list, and read.
+  - `arcwell-llm-wiki`: Markdown file ingest, SQLite metadata, search, list, and read.
 - Phase 3 primitives for:
-  - `agent-deep-research`: local research run ledger, wiki-grounded planning, wiki brief write-back, and MCP tools/resources.
+  - `arcwell-deep-research`: local research run ledger, wiki-grounded planning, wiki brief write-back, and MCP tools/resources.
 
 ## Current Commands
 
@@ -46,7 +46,7 @@ cargo run -q -- research brief "deep research architecture"
 cargo run -q -- research brief "deep research architecture" --no-write
 cargo run -q -- research runs
 cargo run -q -- secrets set-ref OPENAI_API_KEY env:OPENAI_API_KEY model-calls
-cargo run -q -- cost add agent-memory job-1 openai gpt-5.5 --estimated-usd 0.01 --actual-usd 0.008
+cargo run -q -- cost add arcwell-memory job-1 openai gpt-5.5 --estimated-usd 0.01 --actual-usd 0.008
 cargo run -q -- mcp
 cargo run -q -- serve --addr 127.0.0.1:8787
 ```
@@ -61,7 +61,7 @@ HTTP endpoints:
 
 MCP:
 
-- `agent mcp` speaks line-delimited JSON-RPC over stdio.
+- `arcwell mcp` speaks line-delimited JSON-RPC over stdio.
 - Implemented methods: `initialize`, `tools/list`, `tools/call`, `resources/list`, and `resources/read`.
 - Current tools include health, profile, memory, candidate review, backup create/verify, cost summary, wiki ingest/search/read, and research plan/brief/runs.
 
@@ -74,13 +74,13 @@ MCP:
 
 ## Deliberate Gaps
 
-- `agent-memory` is mem0-shaped in lifecycle vocabulary, but not yet powered by `mem0-rs` extraction/reconciliation.
+- `arcwell-memory` is mem0-shaped in lifecycle vocabulary, but not yet powered by `mem0-rs` extraction/reconciliation.
 - The MCP server is intentionally hand-rolled and minimal. Next step is to validate it against Codex/Claude MCP clients, then decide whether to keep it or move to the official Rust SDK.
-- `agent-deep-research` remains host-native-search first, but now has optional daemon-side Brave/OpenAI/Perplexity search adapters with guarded provider endpoints.
+- `arcwell-deep-research` remains host-native-search first, but now has optional daemon-side Brave/OpenAI/Perplexity search adapters with guarded provider endpoints.
 - No encryption for backups yet.
-- `agent-secrets` stores only references/metadata, not secret values. Actual secret storage should use OS keychain or explicit 0600 files.
+- `arcwell-secrets` stores only references/metadata, not secret values. Actual secret storage should use OS keychain or explicit 0600 files.
 - Claude import heuristics are intentionally conservative and crude. The next version should use a model-backed extractor with redaction, sensitivity labels, and a review UI.
-- `agent-quality-kit` is represented by docs/skills next; no automated competence fixtures yet beyond planned tests.
+- `arcwell-quality-kit` is represented by docs/skills next; no automated competence fixtures yet beyond planned tests.
 
 ## Validation Run
 
@@ -92,7 +92,7 @@ Completed:
 - CLI smoke test for wiki ingest/search.
 - CLI smoke test for research plan/brief/runs.
 - MCP smoke test for initialize/tools/list/memory/wiki.
-- MCP smoke test for research plan/brief/runs and `agent://research`.
+- MCP smoke test for research plan/brief/runs and `arcwell://research`.
 - HTTP smoke test for `/health`, `/profile`, and `/memory`.
 - Severe tests for invalid profile keys, SQL-shaped input, invalid candidate targets, wiki path traversal, backup coverage/tamper detection, generated research self-citation, invalid research queries, and MCP misuse.
 

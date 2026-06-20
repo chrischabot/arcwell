@@ -49,7 +49,7 @@ cargo clippy --all-targets -- -D warnings
 Cloudflare worker validation:
 
 ```sh
-cd packages/agent-edge-inbox/worker
+cd packages/arcwell-edge-inbox/worker
 npm install
 npm run typecheck
 ```
