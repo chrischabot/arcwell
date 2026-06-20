@@ -1,0 +1,8 @@
+{
+  "name": "agent-edge-inbox",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-19",
+  "vars": {
+    "MAX_PAYLOAD_BYTES": "64000"
+  }
+}

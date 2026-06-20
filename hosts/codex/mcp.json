@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "agent-services": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "-q",
+        "--manifest-path",
+        "/Users/chabotc/Projects/agent-services/Cargo.toml",
+        "--",
+        "mcp"
+      ],
+      "env": {
+        "AGENT_SERVICES_HOME": "/Users/chabotc/.agent-services"
+      }
+    }
+  }
+}
+
