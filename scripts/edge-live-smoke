@@ -287,4 +287,6 @@ if [[ "$rate_limited" != "1" ]]; then
   exit 1
 fi
 
+clear_leading_smoke_backlog "rate-limit smoke cleanup"
+
 echo "edge live smoke passed with temp ARCWELL_HOME=$WORK_HOME"
