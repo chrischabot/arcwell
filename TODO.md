@@ -423,7 +423,7 @@ separate quick/surface mode. See `docs/deep-research-system-design.md`.
 - [ ] Add page expansion that actively gathers related docs/blogs/repos/social
       sources before writing a topic page.
 - [ ] Add native host-search pathway for Codex/OpenAI and Claude where available.
-- [ ] Add Codex-native subagent prompts/configs for scout, corpus builder,
+- [x] Add Codex-native subagent prompts/configs for scout, corpus builder,
       extractor, skeptic, synthesizer, and auditor roles.
 - [x] Add mandatory skeptic/refutation passes for important claims before final
       synthesis.
@@ -448,10 +448,14 @@ reliability score, provenance strength, inferred source owner, crawl-rate
 policy, extracted dates/entities, and audit flags. `research_audit_run` includes
 run-linked source cards even when literal query search misses them. Reports
 exclude generated/model-answer, untrusted, and low-reliability source cards from
-primary evidence and are marked incomplete when skeptic/audit checks fail. The
-deep-only target still needs Codex-native subagent orchestration, real
-host-native search proof, large-corpus source-count/saturation evidence, and
-live runs on the three reference topics.
+primary evidence and are marked incomplete when skeptic/audit checks fail.
+Codex-native role prompts/config guidance now covers scout, corpus builder,
+extractor, skeptic, synthesizer, and auditor handoffs with read-heavy subagent
+defaults, adversarial evidence rules, generated-output recursion checks,
+uncertainty preservation, and coverage/saturation reporting. The deep-only
+target still needs a fresh Codex-thread subagent smoke with Arcwell MCP tools,
+real host-native search proof, large-corpus source-count/saturation evidence,
+and live runs on the three reference topics.
 
 How to test:
 - Source-card schema validation tests.
