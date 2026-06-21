@@ -17,20 +17,24 @@ if ! command -v node >/dev/null 2>&1; then
   exit 2
 fi
 
-tmp="$(mktemp -d)"
-cleanup() {
-  rm -rf "$tmp"
-}
-trap cleanup EXIT
-
-export ARCWELL_HOME="${ARCWELL_SMOKE_HOME:-$tmp/arcwell-home}"
+RUN_ID="telegram-live-smoke-$(date +%Y%m%dT%H%M%S)-$$"
+export ARCWELL_HOME="${ARCWELL_SMOKE_HOME:-$REPO_ROOT/.arcwell/smoke/telegram-live-home}"
 mkdir -p "$ARCWELL_HOME"
+ARTIFACT_DIR="${ARCWELL_SMOKE_ARTIFACT_DIR:-$ARCWELL_HOME/artifacts/$RUN_ID}"
+mkdir -p "$ARTIFACT_DIR"
+tmp="$ARTIFACT_DIR"
 
 CHAT_ID="${TELEGRAM_TEST_CHAT_ID:-123456789}"
-RUN_ID="telegram-live-smoke-$(date +%Y%m%dT%H%M%S)-$$"
+LOCAL_CHAT_ID="${TELEGRAM_LOCAL_SMOKE_CHAT_ID:-local-$RUN_ID}"
 OUTGOING_TEXT="Arcwell Telegram outgoing smoke $RUN_ID"
 INCOMING_TEXT="${TELEGRAM_SMOKE_EXPECT_TEXT:-Arcwell Telegram incoming smoke $RUN_ID}"
 WAIT_SECONDS="${TELEGRAM_SMOKE_WAIT_SECONDS:-90}"
+
+redact() {
+  sed -E \
+    -e 's#/bot[0-9]+:[A-Za-z0-9_-]+#/bot[REDACTED]#g' \
+    -e 's/[A-Za-z0-9_.=-]{40,}/[REDACTED]/g'
+}
 
 write_ops_snapshot() {
   local out="$1"
@@ -54,10 +58,52 @@ fs.writeFileSync(output, text);
 NODE
 }
 
-echo "Arcwell home: $ARCWELL_HOME"
-echo "Running local send-authorization smoke against disposable chat id: $CHAT_ID"
+write_incoming_diagnostic() {
+  local ops_path="$1"
+  local diag_path="$2"
+  node - "$ops_path" "$INCOMING_TEXT" "$diag_path" <<'NODE'
+const fs = require("fs");
+const [opsPath, needle, diagPath] = process.argv.slice(2);
+const doc = JSON.parse(fs.readFileSync(opsPath, "utf8"));
+const incoming = (doc.channel_messages || [])
+  .filter((message) => message.channel === "telegram" && message.direction === "incoming");
+const exact = incoming.filter((message) => message.body === needle);
+const mismatches = incoming
+  .filter((message) => message.body !== needle)
+  .slice(0, 8)
+  .map((message) => ({
+    id: message.id,
+    sender: message.sender,
+    source_event_id: message.source_event_id,
+    status: message.status,
+    created_at: message.created_at,
+    body_preview: String(message.body || "").slice(0, 160)
+  }));
+const diagnostic = {
+  expected_text: needle,
+  telegram_incoming_count: incoming.length,
+  exact_match_count: exact.length,
+  exact_matches: exact.map((message) => ({
+    id: message.id,
+    sender: message.sender,
+    source_event_id: message.source_event_id,
+    status: message.status,
+    created_at: message.created_at
+  })),
+  recent_mismatches: mismatches
+};
+fs.writeFileSync(diagPath, `${JSON.stringify(diagnostic, null, 2)}\n`);
+if (exact.length === 1) process.exit(0);
+if (exact.length > 1) process.exit(3);
+process.exit(1);
+NODE
+}
 
-if "$ARCWELL_BIN" telegram send "$CHAT_ID" "unauthorized local smoke" \
+echo "Arcwell home: $ARCWELL_HOME"
+echo "Smoke artifacts: $ARTIFACT_DIR"
+echo "Running local send-authorization smoke against isolated chat id: $LOCAL_CHAT_ID"
+
+if "$ARCWELL_BIN" telegram send "$LOCAL_CHAT_ID" "unauthorized local smoke" \
   --bot-token "fake-token" \
   --api-base "http://127.0.0.1:9" >"$tmp/unauthorized-send.json" 2>"$tmp/unauthorized-send.err"; then
   echo "FAIL: unauthorized Telegram send unexpectedly succeeded." >&2
@@ -65,14 +111,14 @@ if "$ARCWELL_BIN" telegram send "$CHAT_ID" "unauthorized local smoke" \
 fi
 if ! grep -q "not authorized to send" "$tmp/unauthorized-send.err"; then
   echo "FAIL: unauthorized send failed for the wrong reason:" >&2
-  cat "$tmp/unauthorized-send.err" >&2
+  redact <"$tmp/unauthorized-send.err" >&2
   exit 1
 fi
 
-"$ARCWELL_BIN" telegram authorize "telegram:chat:$CHAT_ID" \
+"$ARCWELL_BIN" telegram authorize "telegram:chat:$LOCAL_CHAT_ID" \
   --read-projects \
   --write-projects >"$tmp/read-write-auth.json"
-if "$ARCWELL_BIN" telegram send "$CHAT_ID" "read/write is not send" \
+if "$ARCWELL_BIN" telegram send "$LOCAL_CHAT_ID" "read/write is not send" \
   --bot-token "fake-token" \
   --api-base "http://127.0.0.1:9" >"$tmp/read-write-send.json" 2>"$tmp/read-write-send.err"; then
   echo "FAIL: read/write-only Telegram chat was allowed to send." >&2
@@ -80,7 +126,7 @@ if "$ARCWELL_BIN" telegram send "$CHAT_ID" "read/write is not send" \
 fi
 if ! grep -q "not authorized to send" "$tmp/read-write-send.err"; then
   echo "FAIL: read/write-only send failed for the wrong reason:" >&2
-  cat "$tmp/read-write-send.err" >&2
+  redact <"$tmp/read-write-send.err" >&2
   exit 1
 fi
 
@@ -190,10 +236,13 @@ NODE
 
 echo "Send this exact message to the disposable Telegram chat now:"
 echo "$INCOMING_TEXT"
+echo "Re-run prompt if this times out:"
+printf 'TELEGRAM_SMOKE_EXPECT_TEXT=%q ARCWELL_SMOKE_HOME=%q ARCWELL_TELEGRAM_LIVE_CONFIRM=disposable scripts/telegram-live-smoke\n' "$INCOMING_TEXT" "$ARCWELL_HOME"
 echo "Waiting up to ${WAIT_SECONDS}s for webhook -> edge -> local drain -> channel record."
 
 deadline=$((SECONDS + WAIT_SECONDS))
 found=0
+duplicate=0
 while [ "$SECONDS" -lt "$deadline" ]; do
   "$ARCWELL_BIN" edge drain-remote \
     --url "$ARCWELL_EDGE_URL" \
@@ -201,27 +250,31 @@ while [ "$SECONDS" -lt "$deadline" ]; do
     --max-events 10 >"$tmp/edge-drain.json" || true
   "$ARCWELL_BIN" telegram drain --max-events 10 >"$tmp/telegram-drain.json" || true
   write_ops_snapshot "$tmp/ops.json"
-  if node - "$tmp/ops.json" "$INCOMING_TEXT" <<'NODE'
-const fs = require("fs");
-const doc = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-const needle = process.argv[3];
-const matches = (doc.channel_messages || []).filter((message) =>
-  message.channel === "telegram" &&
-  message.direction === "incoming" &&
-  message.body === needle
-);
-process.exit(matches.length === 1 ? 0 : 1);
-NODE
-  then
+  set +e
+  write_incoming_diagnostic "$tmp/ops.json" "$tmp/incoming-diagnostic.json"
+  diagnostic_status=$?
+  set -e
+  if [ "$diagnostic_status" -eq 0 ]; then
     found=1
+    break
+  elif [ "$diagnostic_status" -eq 3 ]; then
+    duplicate=1
     break
   fi
   sleep 3
 done
 
+if [ "$duplicate" -eq 1 ]; then
+  echo "FAIL: incoming Telegram phrase was recorded more than once; duplicate diagnostics: $tmp/incoming-diagnostic.json"
+  exit 1
+fi
+
 if [ "$found" -ne 1 ]; then
   echo "BLOCKED: incoming Telegram webhook was not observed exactly once before timeout."
-  echo "Checked edge drain and local telegram drain repeatedly; inspect $ARCWELL_HOME and Cloudflare logs."
+  echo "Checked edge drain and local telegram drain repeatedly."
+  echo "Diagnostics: $tmp/incoming-diagnostic.json"
+  echo "Preserved Arcwell home: $ARCWELL_HOME"
+  echo "If the chat message differed, send the exact phrase printed above and re-run the command shown above."
   exit 2
 fi
 
@@ -231,19 +284,14 @@ fi
   --max-events 10 >"$tmp/edge-drain-after.json" || true
 "$ARCWELL_BIN" telegram drain --max-events 10 >"$tmp/telegram-drain-after.json" || true
 write_ops_snapshot "$tmp/ops-after.json"
-node - "$tmp/ops-after.json" "$INCOMING_TEXT" <<'NODE'
-const fs = require("fs");
-const doc = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-const needle = process.argv[3];
-const matches = (doc.channel_messages || []).filter((message) =>
-  message.channel === "telegram" &&
-  message.direction === "incoming" &&
-  message.body === needle
-);
-if (matches.length !== 1) {
-  console.error(`FAIL: expected exactly one incoming channel record after second drain, found ${matches.length}.`);
-  process.exit(1);
-}
-NODE
+set +e
+write_incoming_diagnostic "$tmp/ops-after.json" "$tmp/incoming-diagnostic-after.json"
+diagnostic_status=$?
+set -e
+if [ "$diagnostic_status" -ne 0 ]; then
+  echo "FAIL: expected exactly one incoming channel record after second drain; diagnostics: $tmp/incoming-diagnostic-after.json" >&2
+  exit 1
+fi
 
 echo "PASS: real Telegram webhook drained exactly once and outgoing delivery was recorded."
+echo "Artifacts preserved at: $ARTIFACT_DIR"

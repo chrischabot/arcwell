@@ -20,3 +20,5 @@ Then call `project_status_get` for the resolved project id and summarize:
 Do not imply live Codex or Claude state exists when `live_state.available` is
 false. If the user asks about "the other project" or another ambiguous
 follow-up, ask them to choose a project instead of reusing context as a guess.
+When `live_state.source` is `stale-verified-sync`, say that a previous explicit
+host sync expired and must be refreshed before treating thread state as live.

@@ -54,6 +54,13 @@ arcwell memory tombstones --limit 20
 arcwell memory eval-corpus
 ```
 
+Local hook and eval scaffolds:
+
+```sh
+scripts/codex-hook-smoke --arcwell-bin target/debug/arcwell
+scripts/memory-model-eval-gate --arcwell-bin target/debug/arcwell
+```
+
 ### MCP Tools
 
 - `mem0_add`
@@ -89,12 +96,16 @@ The plugin includes `plugins/arcwell-codex/hooks/hooks.json`:
 - `Stop`: capture reviewable memory candidates after a response.
 
 Hook capture defaults to review mode. Non-sensitive auto-apply is only enabled
-when `ARCWELL_MEMORY_HOOK_AUTO_APPLY=1` or a command explicitly opts in. Direct
-provider inference during hooks is gated by `ARCWELL_MEMORY_HOOK_INFER=1`.
+when `ARCWELL_MEMORY_HOOK_AUTO_APPLY=1` or a command explicitly opts in.
+`ARCWELL_MEMORY_HOOK_INFER=1` records that inference was requested, but capture
+does not directly write raw provider-inferred text. Model-backed capture quality
+is unclaimed until an explicit provider/cost-gated eval with a reviewed
+candidate oracle exists.
 
-Live Codex hook execution still needs an end-to-end plugin smoke test; the hook
-configuration and commands are present, but this repository should not claim the
-installed host has accepted and run them until that smoke is recorded.
+`scripts/codex-hook-smoke` proves the hook config and commands against a
+disposable local process. Live Codex hook execution still needs an end-to-end
+fresh-thread plugin smoke test; this repository should not claim the installed
+host has accepted and run hooks until that smoke is recorded.
 
 ## Candidate Lifecycle
 
@@ -167,13 +178,16 @@ or agent can inspect what would be removed before applying it.
 ## Still Not Complete
 
 - Live model-backed extraction quality is not proven; current eval coverage is
-  deterministic and local.
+  deterministic and local. `scripts/memory-model-eval-gate` blocks live quality
+  claims behind explicit provider/cost gates and currently reports the model
+  candidate oracle as missing.
 - Model-backed dream synthesis, confidence aging, stale preference review, and
   procedural-memory creation are not complete.
 - Historical backup snapshots are not rewritten by forget. Forget now writes an
   explicit tombstone, but privacy erasure across retained backup snapshots
   remains unclaimed until backup retention/encryption/rotation is implemented.
 - Live Codex and Claude host behavior is not proven in this audit. Local hook
-  commands are covered by `scripts/arcwell-dev smoke`; fresh-thread Codex and
-  Claude Desktop/Code validation remain live host smokes.
+  commands are covered by `scripts/codex-hook-smoke` and
+  `scripts/arcwell-dev smoke`; fresh-thread Codex and Claude Desktop/Code
+  validation remain live host smokes.
 - There is no human UI for reviewing memory candidates or lifecycle events yet.

@@ -1,9 +1,11 @@
 # arcwell-email
 
-**Status:** Scaffold/Partial. The package defines the email channel boundary and
-ships a tested local mapper for normalized inbound email metadata. It does not
-fetch mail, run a live Cloudflare Email Routing Worker, call Gmail, send email,
-or persist source cards/channel messages yet.
+**Status:** Partial/Risk. The package defines the email channel boundary and
+ships a tested local mapper for normalized inbound email metadata. The edge
+inbox Worker now has a bounded Cloudflare Email Routing handler that normalizes
+raw MIME into durable `email` edge events under configured route/sender policy.
+It does not run a live email route yet, call Gmail, send email, or drain email
+edge events into local source cards/channel messages.
 
 Email channel and ingestion package.
 
@@ -73,8 +75,18 @@ Current local mapper behavior:
 - rejects attachment-count and attachment-size bombs,
 - rejects auto-responder/list-loop hazards.
 
-Future live adapters must keep raw MIME parsing in a bounded, disposable path
-before enqueueing sanitized metadata into `arcwell-edge-inbox`.
+The current Cloudflare Email Routing handler keeps raw MIME parsing bounded
+before enqueueing sanitized metadata into `arcwell-edge-inbox`. It rejects
+oversized raw messages, missing routes, unauthorized envelope senders, missing
+`Message-ID`, and failing DMARC by default.
+
+Worker configuration:
+
+- `EMAIL_ROUTES_JSON`: JSON array of `{ "id", "recipient", "projectId", "allowedSenders" }`.
+- `EMAIL_ALLOWED_SENDERS_JSON`: optional global sender/domain allowlist used when a route does not define `allowedSenders`.
+- `EMAIL_MAX_RAW_BYTES`: raw MIME byte cap, defaulting to the Worker payload cap.
+- `EMAIL_MAX_PREVIEW_CHARS`: sanitized text preview cap.
+- `EMAIL_REQUIRE_DMARC_PASS`: defaults to true; set to `false` only for controlled tests.
 
 ## Digest Delivery Boundary
 
@@ -96,9 +108,13 @@ live capability.
 ```sh
 cd packages/arcwell-email
 npm test
+cd ../arcwell-edge-inbox/worker
+npm test
 ```
 
 The fixture-backed tests try to refute the mapper with spoofed `From:` headers,
 malicious HTML/script/CSS, markdown prompt injection, attachment bombs, tracking
 links, duplicate `Message-ID`, oversized bodies, auto-responders, and
-unauthorized routing.
+unauthorized routing. Worker tests additionally prove Email Routing MIME
+normalization, duplicate idempotency, route/sender rejection, raw-size rejection,
+and durable edge enqueue behavior.

@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-arcwell}"
+REQUIRE_LIVE=0
+KEEP_HOME=0
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/memory-model-eval-gate [options]
+
+Runs the always-on deterministic personal-memory eval corpus. Live/model-backed
+quality evaluation is intentionally gated behind explicit provider and cost
+configuration; this script refuses to claim live model quality without those
+gates and an implemented model-candidate oracle.
+
+Options:
+  --arcwell-bin <path>  arcwell binary to run. Default: arcwell on PATH.
+  --require-live       Exit non-zero unless live/model eval gates are enabled
+                       and the live eval surface is implemented.
+  --keep-home          Keep the disposable ARCWELL_HOME and print its path.
+  -h, --help           Show this help.
+
+Live gates:
+  ARCWELL_MEMORY_MODEL_EVAL=1
+  ARCWELL_MEMORY_MODEL_EVAL_ALLOW_COST=1
+  ARCWELL_MEMORY_PROVIDER=<non-mock provider>
+
+Current status: deterministic eval is implemented; model-backed capture-quality
+eval remains blocked because capture does not yet expose a reviewed model
+candidate extractor with an independent oracle.
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --arcwell-bin)
+      ARCWELL_BIN="${2:?missing value for --arcwell-bin}"
+      shift 2
+      ;;
+    --require-live)
+      REQUIRE_LIVE=1
+      shift
+      ;;
+    --keep-home)
+      KEEP_HOME=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ "$ARCWELL_BIN" = "arcwell" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+  if [ -z "$ARCWELL_BIN" ]; then
+    echo "arcwell not found on PATH; pass --arcwell-bin <path>" >&2
+    exit 127
+  fi
+elif [[ "$ARCWELL_BIN" != /* ]]; then
+  ARCWELL_BIN="$(cd "$(dirname "$ARCWELL_BIN")" && pwd)/$(basename "$ARCWELL_BIN")"
+fi
+
+if [ ! -x "$ARCWELL_BIN" ]; then
+  echo "arcwell binary is not executable: $ARCWELL_BIN" >&2
+  exit 126
+fi
+
+WORK_DIR="$(mktemp -d)"
+SMOKE_HOME="$WORK_DIR/home"
+OUT_DIR="$WORK_DIR/out"
+mkdir -p "$SMOKE_HOME" "$OUT_DIR"
+CONFIGURED_PROVIDER="${ARCWELL_MEMORY_PROVIDER:-}"
+
+cleanup() {
+  if [ "$KEEP_HOME" -eq 1 ]; then
+    echo "kept eval workspace: $WORK_DIR"
+    echo "kept ARCWELL_HOME: $SMOKE_HOME"
+  else
+    rm -rf "$WORK_DIR"
+  fi
+}
+trap cleanup EXIT
+
+export ARCWELL_HOME="$SMOKE_HOME"
+export ARCWELL_MEMORY_PROVIDER=mock
+
+"$ARCWELL_BIN" memory eval-corpus >"$OUT_DIR/eval-corpus.json"
+node - "$OUT_DIR/eval-corpus.json" <<'NODE'
+const fs = require("fs");
+const report = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (report.ok !== true) {
+  throw new Error(`deterministic memory eval failed: ${report.failed}/${report.total} cases failed`);
+}
+for (const name of ["prompt-injection-secret", "pr-implementation-noise", "transient-preference-noise"]) {
+  const test = report.cases.find((entry) => entry.name === name);
+  if (!test || test.passed !== true) throw new Error(`required eval case did not pass: ${name}`);
+}
+NODE
+
+live_requested="${ARCWELL_MEMORY_MODEL_EVAL:-0}"
+cost_allowed="${ARCWELL_MEMORY_MODEL_EVAL_ALLOW_COST:-0}"
+provider="${ARCWELL_MEMORY_PROVIDER_LIVE:-$CONFIGURED_PROVIDER}"
+
+if [ "$live_requested" != "1" ]; then
+  echo "memory deterministic eval passed"
+  echo "model-backed eval skipped: set ARCWELL_MEMORY_MODEL_EVAL=1 plus cost/provider gates to request it"
+  if [ "$REQUIRE_LIVE" -eq 1 ]; then
+    echo "required live eval was not requested" >&2
+    exit 3
+  fi
+  exit 0
+fi
+
+if [ "$cost_allowed" != "1" ]; then
+  echo "memory deterministic eval passed"
+  echo "model-backed eval blocked: set ARCWELL_MEMORY_MODEL_EVAL_ALLOW_COST=1 to acknowledge provider cost" >&2
+  exit 3
+fi
+
+if [ -z "$provider" ] || [ "$provider" = "mock" ]; then
+  echo "memory deterministic eval passed"
+  echo "model-backed eval blocked: set ARCWELL_MEMORY_PROVIDER_LIVE to a non-mock provider name" >&2
+  exit 3
+fi
+
+echo "memory deterministic eval passed"
+echo "model-backed eval blocked: capture has no reviewed model-candidate oracle yet, so no live quality proof is claimed" >&2
+exit 4

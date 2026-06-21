@@ -125,11 +125,13 @@ These can be CLI subcommands later; initially they can be shell scripts generate
 
 ## Linux systemd
 
-Linux systemd user-service support is explicitly deferred, not implemented. The
+Linux systemd user-service support now has repo-owned templates and a cautious
+installer scaffold, but live user-service behavior is still unproven. The
 reason is verification: this wave ran on macOS and cannot honestly prove
 `systemctl --user` availability, lingering behavior after logout, journal log
 paths, restart semantics, or uninstall cleanup on a Linux user session. Until a
-Linux CI/staging host is available, Arcwell should not claim systemd install
+Linux CI/staging host is available, Arcwell should claim only rendered unit
+files and disposable-path installer validation, not running Linux service
 support.
 
 The target design remains user services:
@@ -152,6 +154,21 @@ Installers should run:
 systemctl --user daemon-reload
 systemctl --user enable --now arcwell-worker.service
 ```
+
+Current scaffold:
+
+```text
+packaging/systemd/arcwell-worker.service.in
+packaging/systemd/arcwell-http.service.in
+scripts/install-systemd-user
+```
+
+`scripts/install-systemd-user install --no-systemctl --unit-dir <temp-dir>`
+renders worker and optional HTTP units into a caller-provided directory without
+starting services. It requires absolute paths, quotes/escapes systemd-sensitive
+characters in rendered paths, creates `ARCWELL_HOME/logs`, and never removes
+`ARCWELL_HOME`. It only runs `systemctl --user enable --now` when
+`--enable-now` is explicitly supplied.
 
 Done criteria for implementing systemd later:
 
@@ -198,6 +215,24 @@ cargo install --git https://github.com/chrischabot/arcwell arcwell
 
 The package should install one binary named `arcwell`.
 
+Current release scaffolds:
+
+```text
+packaging/homebrew/arcwell.rb.template
+packaging/install.sh
+scripts/verify-packaging-artifacts
+```
+
+`packaging/homebrew/arcwell.rb.template` is a tap-ready formula template with
+per-target URL and SHA-256 placeholders. It is not a published formula and must
+be rendered with real release archive URLs and checksums before use.
+
+`packaging/install.sh` installs from either a local archive plus explicit
+SHA-256 or a release URL plus `checksums.txt`. It verifies the SHA-256 before
+extracting, rejects absolute paths, `..` tar members, and non-regular
+symlink/hardlink-style archive members, installs only the `arcwell` binary into
+`<prefix>/bin`, and does not install or start services.
+
 ## Release Readiness Checklist
 
 Assumptions for the current local release gate:
@@ -226,6 +261,7 @@ Run this before claiming release readiness:
 cargo build --release -p arcwell
 scripts/release-readiness-smoke
 scripts/service-live-smoke --no-live
+scripts/verify-packaging-artifacts
 scripts/verify-codex-plugin-docs
 ```
 
@@ -241,6 +277,13 @@ For Codex plugin/dev-loop packaging changes, also run:
 ```sh
 scripts/arcwell-dev smoke
 scripts/arcwell-dev sync
+```
+
+For release artifact/template changes, also run the local adversarial fixture
+test:
+
+```sh
+scripts/verify-packaging-artifacts --self-test
 ```
 
 `scripts/release-readiness-smoke` uses disposable install, `HOME`, and
@@ -264,10 +307,13 @@ checks:
 
 Publication blockers:
 
-- No Homebrew tap/formula exists in this repository yet.
+- No published Homebrew tap/formula exists yet; the repository contains only a
+  formula template.
 - No GitHub Actions release workflow creates signed or checksummed archives.
-- No install script downloads a release archive and verifies its checksum.
-- Linux systemd user-service behavior is not implemented or live-smoked.
+- The install script has local checksum/path-traversal fixture coverage, but no
+  real GitHub release archive has been installed through it.
+- Linux systemd templates and installer rendering exist, but live
+  `systemctl --user` behavior is not run or proven.
 - Fresh-thread Codex app command/hook smoke is still not recorded.
 
 Ready inputs for a Homebrew formula once a tap exists:
@@ -280,6 +326,9 @@ Ready inputs for a Homebrew formula once a tap exists:
   run `profile set`, `backup create`, and `backup verify`;
 - post-install guidance: run `arcwell service install` on macOS only when the
   user wants the worker LaunchAgent.
+- render `packaging/homebrew/arcwell.rb.template` with real per-target archive
+  URLs and SHA-256 values; do not publish if any `__ARCWELL_...__` placeholder
+  remains.
 
 Ready inputs for GitHub Releases once CI exists:
 
@@ -414,15 +463,17 @@ returned by `which arcwell`. The development checkout can be inspected with:
 
 ```sh
 cargo build -p arcwell
-ARCWELL_HOME="$(mktemp -d)" npx -y @modelcontextprotocol/inspector \
-  /Users/chabotc/Projects/arcwell/target/debug/arcwell mcp
+scripts/mcp-inspector
 scripts/claude-mcp-smoke
 ```
 
 `scripts/claude-mcp-smoke` is the repeatable local validation for Claude-shaped
 stdio behavior. It does not claim that an authenticated Claude Desktop/Code UI
-session has loaded Arcwell; use `scripts/claude-mcp-smoke --require-host-config`
-plus a real Claude Desktop/Code session for that host-level proof.
+session has loaded Arcwell. `scripts/mcp-inspector` launches the official
+`@modelcontextprotocol/inspector` package for interactive protocol inspection;
+it is not a replacement for the automated smoke. Use
+`scripts/claude-mcp-smoke --require-host-config` plus a real Claude
+Desktop/Code session for host-level proof.
 
 ## Skills Versus Services
 

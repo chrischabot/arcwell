@@ -1,6 +1,6 @@
 # Arcwell Implementation Plan
 
-Last updated: 2026-06-20
+Last updated: 2026-06-21
 
 This is the execution plan derived from `STATUS.md`. It is a checklist, not a
 vision document. Do not mark an item complete because a command, README, prompt,
@@ -227,7 +227,7 @@ Adversarial/severe gate:
 - [x] Store Telegram transport failures as classified retryable errors instead
       of raw provider URLs that can contain bot tokens.
 - [x] Add slash/MCP docs that say what is automatic vs manual.
-- [x] Add a repeatable `scripts/telegram-live-smoke` runner for disposable
+- [x] Add a repeatable `scripts/telegram-live-smoke` runner for preserved-home
       local authorization checks and optional live Telegram/edge proof.
 - [ ] Live-smoke real Telegram webhook -> Cloudflare -> local drain ->
       `channel_messages`.
@@ -241,11 +241,12 @@ Description:
 Telegram has real webhook normalization, local drain, outgoing send with
 explicit send authorization, MarkdownV2 escaping, delivery attempts, retry
 helpers, retryable transport-error classification, authorization, conservative
-project binding, and a repeatable disposable live-smoke script. The live smoke
-now proves Telegram `getMe`, webhook setup to the Arcwell edge worker, outgoing
-provider send, and one real Telegram webhook reaching the edge. It is not
-product-complete until a known exact incoming chat message is recorded once in
-local `channel_messages` and follow-up context is proven.
+project binding, and a repeatable preserved-home live-smoke script. The live
+smoke previously proved Telegram `getMe`, webhook setup to the Arcwell edge
+worker, outgoing provider send, and one real Telegram webhook reaching the edge.
+It is not product-complete until the user sends the exact printed phrase and
+the script records exactly one matching local `channel_messages` row after a
+second drain.
 
 How to test:
 - Unit-test Telegram update parsing for text, edited message, missing fields,
@@ -256,8 +257,9 @@ How to test:
 - Run `scripts/telegram-live-smoke` with `TELEGRAM_BOT_TOKEN`,
   `TELEGRAM_TEST_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET`, `ARCWELL_EDGE_SECRET`,
   `ARCWELL_EDGE_URL`, and `ARCWELL_TELEGRAM_LIVE_CONFIRM=disposable` against a
-  disposable test chat. Preserve the disposable `ARCWELL_HOME` on failures if
-  the exact incoming-message assertion needs inspection.
+  disposable test chat. Send the exact phrase printed by the script; on timeout,
+  re-run the printed `TELEGRAM_SMOKE_EXPECT_TEXT=... ARCWELL_SMOKE_HOME=...`
+  command and inspect the preserved mismatch/duplicate diagnostics.
 
 Success looks like:
 - A real Telegram message appears in `channel_messages` once.
@@ -273,8 +275,14 @@ Adversarial/severe gate:
 
 - [x] Define project status data model separate from static project summary.
 - [x] Add project status events or snapshots.
-- [ ] Add a host adapter for Codex thread inventory if available.
+- [x] Check whether this local Codex environment exposes usable thread
+      inventory/read tools to Arcwell; tool discovery did not expose Codex
+      `list_threads`/`read_thread`.
+- [ ] Add a native host adapter for Codex thread inventory if a stable API
+      becomes available.
 - [x] Add a degraded manual sync path when live host APIs are unavailable.
+- [x] Add an explicit verified host-sync protocol with a freshness marker so
+      manual or stale snapshots cannot masquerade as live thread state.
 - [x] Add Claude capability matrix: what can be read, manually updated, or not
       accessed.
 - [x] Make `project_resolve` return static match and live-state availability.
@@ -284,11 +292,13 @@ Adversarial/severe gate:
 - [x] Add status provenance: host, thread id, timestamp, summary source.
 
 Description:
-Project records, status snapshots, and work-run evidence consolidation exist.
-The system still does not know what Codex or Claude are currently doing, and now
-`project_resolve`/`project_status_get` say that explicitly with live-state
-availability, provenance, and a degraded host capability matrix. This prevents
-"how is that going?" from becoming a fake answer over stale summaries.
+Project records, status snapshots, explicit verified host-sync snapshots, and
+work-run evidence consolidation exist. Tool discovery in the 2026-06-21 Codex
+thread did not expose usable Codex thread inventory/read APIs to Arcwell, so
+there is no native adapter yet. `project_resolve`/`project_status_get` say that
+explicitly with live-state availability, provenance, freshness expiry, and a
+degraded host capability matrix. This prevents "how is that going?" from
+becoming a fake answer over stale summaries.
 
 How to test:
 - Unit-test ambiguous aliases, follow-up context, stale status, missing host
@@ -299,6 +309,8 @@ How to test:
 Success looks like:
 - Project status answers include timestamp, source, and confidence.
 - When live state is unavailable, the tool says so explicitly.
+- Fresh explicit host sync is marked available only until its freshness window
+  expires.
 - Telegram/project follow-ups can carry context without guessing.
 - Work-memory graph consolidation can propose project status snapshots from
   trace evidence rather than only manual summaries.
@@ -306,7 +318,8 @@ Success looks like:
 Adversarial/severe gate:
 - Test forged channel sender, stale status masquerading as live status, ambiguous
   "the other project", direct project id access without permission, deleted
-  thread reference, and injected instructions inside status text.
+  thread reference, forged host-live source labels, expired verified sync, and
+  injected instructions inside status text.
 
 ## P1 Core Product Capabilities
 
@@ -336,6 +349,10 @@ Adversarial/severe gate:
       Arcwell Memory search.
 - [x] Add manual and hook-oriented capture flow that never silently stores
       sensitive facts without review policy.
+- [x] Add process-level Codex hook smoke scaffold that executes plugin
+      `hooks/hooks.json` commands in a disposable home.
+- [x] Add deterministic eval gate script that refuses live/model quality claims
+      without explicit provider/cost opt-in and a model-candidate oracle.
 - [ ] Live-smoke Codex plugin hooks and Claude degraded memory workflow.
 - [x] Add personal-memory eval corpus.
 
@@ -343,9 +360,11 @@ Description:
 Arcwell Memory now has a product-complete local lifecycle for the current scope:
 provider CRUD/history/forget, reviewed ADD/UPDATE/DELETE/NONE candidates,
 confidence/reason decision ledger, deterministic personal-memory eval corpus,
-active-store forget cascade, and explicit backup tombstones. Live model-backed
-quality, human review UI, and fresh Codex/Claude host execution are still
-separate proof items.
+active-store forget cascade, process-level Codex hook command smoke, and
+explicit backup tombstones. Capture inference no longer directly writes raw
+provider-inferred text when the deterministic extractor finds no candidate.
+Live model-backed quality, human review UI, and fresh Codex/Claude host
+execution are still separate proof items.
 
 How to test:
 - Tests for each operation type: ADD, UPDATE, DELETE, NONE.
@@ -356,6 +375,10 @@ How to test:
 - Keep backup tombstone tests explicit and do not claim forgotten memory data is
   erased from retained historical snapshots.
 - Run severe eval corpus and report precision/recall tradeoffs.
+- Run `scripts/codex-hook-smoke --arcwell-bin target/debug/arcwell` for local
+  hook contract proof.
+- Run `scripts/memory-model-eval-gate --arcwell-bin target/debug/arcwell`; use
+  `--require-live` only when explicit provider and cost gates are configured.
 
 Success looks like:
 - Personal facts like "my cat is called Ophelia" are stored cleanly.
@@ -369,16 +392,17 @@ Success looks like:
 Adversarial/severe gate:
 - Test prompt-injection text asking the agent to store secrets, malicious
   transcript content, contradictory identity facts, mass duplicate memories,
-  deletion resurrection, stale history leakage, and private data leakage through
-  list/search/errors.
+  task-local prose under infer+auto-apply, deletion resurrection, stale history
+  leakage, and private data leakage through list/search/errors.
 
 ### 7. Research And Librarian Synthesis
 
 - [x] Define a typed source-card schema with versioning.
 - [ ] Add model-backed source extraction into claims, entities, dates, and links.
 - [ ] Add librarian clustering across RSS, GitHub, arXiv, X, and web search.
-- [x] Add deterministic contradiction, staleness, untrusted-source, and
-      uncertainty audit detection for source cards.
+- [x] Add deterministic contradiction, staleness, untrusted-source,
+      low-reliability, robots/noindex, and uncertainty audit detection for
+      source cards.
 - [ ] Add page expansion that actively gathers related docs/blogs/repos/social
       sources before writing a topic page.
 - [ ] Add native host-search pathway for Codex/OpenAI and Claude where available.
@@ -388,14 +412,16 @@ Adversarial/severe gate:
 
 Description:
 The current research and librarian flows remain deterministic and local, but
-source cards now carry schema version, evidence role, trust level, extracted
+source cards now carry schema version, evidence role, trust level, reliability
+score, provenance strength, inferred source owner, crawl-rate policy, extracted
 dates/entities, and audit flags. `research_audit` surfaces generated-page
 recursion, uncited model answers, stale retrieval dates, prompt-injection/SEO
-spam evidence, low-confidence claims, and conflicting launch dates. Research
-briefs and librarian expanded pages exclude generated/model-answer source cards
-from primary evidence and include an evidence audit section. Model-backed
-synthesis, live host-native search wiring, clustering, and richer contradiction
-review remain future work.
+spam evidence, low-reliability sources, robots/noindex metadata,
+low-confidence claims, and conflicting launch dates. Research briefs and
+librarian expanded pages exclude generated/model-answer, untrusted, and
+low-reliability source cards from primary evidence and include an evidence
+audit section. Model-backed synthesis, live host-native search wiring,
+clustering, and richer contradiction review remain future work.
 
 How to test:
 - Source-card schema validation tests.
@@ -535,8 +561,11 @@ Adversarial/severe gate:
       overlap/clipping before marking Wave 3 P1.10 complete.
 - [ ] Decide whether to keep server-rendered HTML or split out a small frontend
       package before adding richer controls.
-- [ ] Add filters, sorting, search, and detail drawers.
-- [ ] Add manual requeue/cancel/dead-letter controls with confirmation policy.
+- [x] Add filters, sorting, search, and detail views.
+- [x] Add a narrow authenticated edge-event dead-letter control with policy,
+      CSRF, idempotency, and replay tests.
+- [ ] Add manual job requeue/cancel controls only after safe public core APIs
+      exist; do not fake unsupported remediation.
 - [ ] Add safe controls for retry delivery, apply/reject candidate, run doctor,
       create/verify backup, drain once, and inspect policy denial reasons.
 - [x] Add source health and last-success/last-failure view.
@@ -546,12 +575,14 @@ Adversarial/severe gate:
       authoring unless needed.
 
 Description:
-Ops is no longer only JSON: a read-only `/ops/ui` page shows the current
-durable ops snapshot across health, queues, sources, secrets, costs, projects,
-channels, memory/procedure review, work runs, policy, Telegram failures, and
-project status. It is not yet a product-grade control surface. The remaining
-work is filtering, search, detail drawers, and carefully authenticated mutating
-controls.
+Ops is no longer only JSON: `/ops/ui` shows the current durable ops snapshot
+across health, queues, sources, secrets, costs, projects, channels,
+memory/procedure review, work runs, policy, Telegram failures, and project
+status. It now includes filters/search/sorting, detail views, health scoring,
+queue/source/credential summaries, and one carefully authenticated
+policy-checked edge-event dead-letter control. It is not yet a product-grade
+control surface. The remaining work is broader charts/browser validation and
+only those mutating controls backed by safe core APIs.
 
 How to test:
 - Unit-test ops snapshot shape.
@@ -559,19 +590,21 @@ How to test:
   procedure/work/policy/error text.
 - Browser test for loading UI and rendering empty/healthy/failing states on
   desktop and mobile.
-- API tests for requeue/cancel permissions and failure paths.
+- API tests for requeue/cancel permissions and failure paths once those safe
+  APIs exist.
 
 Success looks like:
 - A human can open one local page and see what is broken, stale, queued, or
   waiting for review.
-- Dangerous controls require confirmation and leave audit records.
+- Dangerous controls require auth, CSRF, idempotency, policy checks, and audit
+  records.
 - Untrusted channel/source/project/procedure/work/policy/error text is escaped
   in the rendered UI.
 
 Adversarial/severe gate:
 - Test hostile job errors containing HTML/Markdown/script text, huge error
-  payloads, stale state, double-click requeue, unauthorized cross-origin writes,
-  and keyboard-only navigation for critical controls.
+  payloads, stale state, repeated submissions, unauthorized cross-origin writes,
+  policy denial, and keyboard-only navigation for critical controls.
 
 ### 11. Cost Controls And Kill Switch
 
@@ -630,9 +663,11 @@ Adversarial/severe gate:
       broader policy model without weakening current checks.
 - [ ] Apply policy checks before web/research provider calls, X calls, source
       ingestion, memory capture/apply, procedure apply, Telegram send, project
-      writes, secret access, and worker jobs.
-- [ ] Add CLI/MCP tools for policy check, explain, list, override, approvals,
-      and decision history.
+      writes, secret access, and worker jobs. Secret value/ref admin through
+      CLI/MCP is now guarded; provider-internal secret writes and other secret
+      reads still need inventory.
+- [x] Add CLI/MCP tools for policy check, explain, list, override, approvals,
+      approve, reject, and decision history.
 - [x] Add ops visibility for denied actions, pending approvals, and matching
       rules.
 - [x] Document the boundary between Arcwell policy enforcement and host/OS
@@ -646,11 +681,14 @@ kernel-level isolation. The first implemented slice loads
 `ARCWELL_HOME/arcwell-policy.toml` with `[[rules]]`, evaluates allow/deny/
 require_approval/defer decisions, writes SQLite decision and approval audit
 records, and exposes recent policy state through the ops snapshot. Deny/
-approval checks are wired before X recent search, daemon web search, memory
-candidate apply, Telegram send/retry, and local project writes. Existing cost
-policies still run after policy allows provider network actions and before
-credentials/network calls; existing Telegram/project channel authorization is
-not weakened or replaced.
+approval checks are wired before X recent search, X monitor, daemon web search,
+memory candidate apply, procedure candidate apply, Telegram send/retry, local
+project writes, and CLI/MCP secret value/ref admin. Existing cost policies still
+run after policy allows provider network actions and before credentials/network
+calls; existing Telegram/project channel authorization is not weakened or
+replaced. CLI/MCP policy administration can check, explain, list rules and
+decisions, create temporary allow overrides, list approvals, and mark approvals
+approved or rejected.
 
 How to test:
 - Unit-test policy parsing, rule priority, malformed policies, allow/deny,
@@ -662,14 +700,15 @@ Success looks like:
 - Denied wired actions do not read credentials, make provider calls, send
   messages, or mutate local state.
 - Required-approval actions create pending approval records.
-- Policy decisions are inspectable through ops snapshot data and explain the
-  matching rule. CLI/MCP policy administration remains future work.
+- Policy decisions are inspectable through ops snapshot data and CLI/MCP
+  commands explain the matching rule.
 
 Adversarial/severe gate:
 - Test prompt attempts to bypass policy, concurrent budget/policy decisions,
   malformed policy files, stale overrides, broad wildcard rules, denied network
-  paths before credential lookup, and policy-denial text containing untrusted
-  payload snippets.
+  and approval-gated provider paths before credential lookup, guarded secret
+  admin access/mutation, and policy-denial text containing untrusted payload
+  snippets.
 
 ### 13. HTTP Hardening
 
@@ -709,20 +748,22 @@ Adversarial/severe gate:
 
 ### 14. Wiki Ingestion Quality
 
-- [ ] Add browser/readability extraction for HTML pages.
+- [x] Add deterministic readability-like extraction for HTML pages.
 - [x] Preserve fetch provenance, escaped source excerpt, and cleaned readable text separately.
 - [x] Add canonical URL and duplicate detection.
 - [x] Add content-type and size policy.
-- [ ] Add robots/crawl-rate policy notes.
-- [ ] Add source reliability fields.
-- [ ] Add incremental local Markdown sync and deleted-file handling.
+- [x] Add robots/crawl-rate policy notes.
+- [x] Add source reliability fields.
+- [x] Add incremental local Markdown sync and deleted-file handling.
+- [ ] Add browser-rendered JavaScript readability extraction for pages that require rendering.
 
 Description:
 URL ingest now writes an untrusted Markdown artifact with provenance, canonical
 URL, cleaned readable text, escaped source excerpt, content-type checks, bounded
-body reads, and redirect validation. It is still not browser-rendered
-readability extraction and does not yet implement robots/crawl-rate or source
-reliability scoring.
+body reads, redirect validation, deterministic article/main/body extraction,
+robots metadata, crawl-rate policy notes, and source reliability fields. It is
+still not browser-rendered JavaScript extraction and does not claim
+model-backed source extraction.
 
 How to test:
 - Fixtures for HTML, Markdown, wrong content type, redirect, huge response,
@@ -733,24 +774,29 @@ Success looks like:
 - Wiki pages are readable, source-backed, deduped, and preserve provenance.
 
 Adversarial/severe gate:
-- Test metadata IPs, redirect to private IP, HTML script injection, canonical URL
-  collision, enormous page, binary response, slow response, and prompt injection.
+- Test metadata IPs, redirect to private IP, HTML script injection, boilerplate
+  extraction, robots/noindex metadata, canonical URL collision, enormous page,
+  binary response, slow response, deleted Markdown source files, and prompt
+  injection.
 
 ### 15. Adapter Cursoring And Source Health
 
 - [x] Add item-level cursor semantics for RSS, GitHub, arXiv, and X.
 - [x] Track last success, last failure, last item id/date, and next run.
 - [x] Add duplicate policy per adapter.
-- [ ] Add provider rate-limit handling.
+- [x] Add provider rate-limit handling.
 - [x] Add source health in ops snapshot.
 - [ ] Add source health UI.
-- [ ] Add scheduled polling through worker service.
+- [x] Add scheduled polling enqueue hooks.
+- [ ] Add full resident scheduled polling through worker service.
 
 Description:
 Adapters now update source cards with canonical duplicate suppression, expose
 SQLite source-health records, and advance cursor/source-success state only after
-durable writes complete. Provider-specific pagination/ETag/rate-limit handling
-and scheduled polling are still future work.
+durable writes complete. Rate-limit/quota errors are classified as
+`rate_limited` with longer backoff, and due active watch sources can be enqueued
+while respecting source-health `next_run_at`. Provider-specific pagination/ETag
+handling and a full resident scheduled polling loop are still future work.
 
 How to test:
 - Mock feeds/repos/searches with reordered, duplicated, deleted, and stale items.
@@ -767,8 +813,8 @@ Adversarial/severe gate:
 
 ### 16. X Production Monitoring
 
-- [ ] Live-test OAuth user-context token refresh with current credentials.
-- [ ] Live-test definitive watch rebuild from bookmarks and recent follows with
+- [x] Live-test OAuth user-context token refresh with current credentials.
+- [x] Live-test definitive watch rebuild from bookmarks and recent follows with
       OAuth user-context auth.
 - [x] Add watch-list audit output with counts and provenance.
 - [x] Add rate-limit and tier-aware failures.
@@ -781,17 +827,17 @@ X production monitoring now has local/mock-proven credential health, definitive
 watch rebuild audit counts, API tier/rate/quota failure classification, a
 watch-source monitor path that ingests accepted watched-source tweets into
 source cards/wiki pages and digest candidates, and cursor/source-health safety
-under malformed, blocked, duplicate, and quota responses. The live recent-search
-portion of `scripts/x-live-smoke` reached X with the available bearer token.
-Bookmarks/follows watch rebuild is still blocked because the available bearer
-token is application-only; X requires OAuth 1.0a User Context or OAuth 2.0 User
-Context for those account-data endpoints.
+under malformed, blocked, duplicate, and quota responses. The copied-home
+`scripts/x-live-smoke` path reached X with OAuth 2.0 User Context after a real
+local OAuth refresh, then passed live recent search, bookmark/recent-follow
+watch rebuild, and watch-source monitor without writing to the real Arcwell
+home.
 
 How to test:
 - Mock tests for token expiry, refresh failure, 429, malformed tweet, duplicate
   item, unsafe URL, huge text, and cursor behavior.
-- Live smoke with imported user-context credentials, recording counts only, not
-  tokens: `X_BEARER_TOKEN=... scripts/x-live-smoke`.
+- Live smoke with copied user-context credentials, recording counts only, not
+  tokens: `X_USER_CONTEXT_SOURCE_HOME="$ARCWELL_HOME" scripts/x-live-smoke`.
 
 Success looks like:
 - The definitive watch list is small, explainable, and reproducible.
@@ -809,13 +855,15 @@ Adversarial/severe gate:
 - [x] Add command inventory check: plugin prompts vs MCP tools vs CLI-only
       commands.
 - [x] Add stale command detection.
-- [ ] Add plugin install smoke test or documented manual test.
+- [x] Add plugin install smoke test or documented manual test.
 - [x] Add status wording to commands that wrap partial/scaffold features.
 - [x] Verify `$skills` point to correct tools and safety rules.
 
 Description:
 The plugin surface is broad. It needs verification so commands do not imply that
-unfinished services are complete.
+unfinished services are complete. `docs/codex-plugin-commands.md` now includes
+a fresh-thread manual smoke matrix, but no in-app smoke has been recorded as
+passed yet.
 
 How to test:
 - `scripts/verify-codex-plugin-docs` compares command files to the catalog,
@@ -824,7 +872,8 @@ How to test:
 - `scripts/verify-codex-plugin-docs --self-test` proves the checker fails on a
   missing MCP tool, undocumented command, unsafe channel prompt, and README
   overclaim.
-- Manual install smoke in a fresh Codex thread.
+- Manual install smoke in a fresh Codex thread using the matrix in
+  `docs/codex-plugin-commands.md`.
 - MCP call smoke for representative commands.
 
 Success looks like:
@@ -838,7 +887,8 @@ Adversarial/severe gate:
 ### 18. Claude MCP Validation
 
 - [x] Add repeatable local Claude-style stdio MCP smoke for `arcwell mcp`.
-- [ ] Run official MCP Inspector against `arcwell mcp`.
+- [x] Add official MCP Inspector wrapper and package-availability preflight.
+- [ ] Record an interactive MCP Inspector run against `arcwell mcp`.
 - [ ] Validate Claude Desktop/Code config in an authenticated local profile.
 - [x] Document exactly which features degrade without Codex hooks/skills.
 - [x] Add examples for manual memory/profile/wiki use from Claude.
@@ -853,7 +903,10 @@ has an `arcwell` MCP server configured.
 
 How to test:
 - Local process-level JSON-RPC smoke: `scripts/claude-mcp-smoke`.
-- Inspector protocol test.
+- Inspector package preflight: `scripts/mcp-inspector --check-only`.
+- Inspector protocol test: `scripts/mcp-inspector`, then manually exercise
+  capability negotiation, tool schemas, representative tool calls, and resource
+  errors in the Inspector UI.
 - Real Claude MCP connection smoke.
 - Manual tool calls: profile list, memory search, wiki search, ops snapshot.
 
@@ -870,7 +923,9 @@ Adversarial/severe gate:
 ### 19. Packaging And Release
 
 - [x] Add release build instructions.
-- [x] Add Homebrew formula or local tap plan.
+- [x] Add Homebrew formula template or local tap plan.
+- [x] Add checksum-verifying installer scaffold.
+- [x] Add Linux systemd unit templates and non-destructive renderer.
 - [x] Ensure packaged stable plugin invokes installed `arcwell`, not `cargo run`.
 - [x] Add generated Codex dev plugin workflow that invokes the local debug
       binary wrapper and syncs into the installed plugin cache.
@@ -887,13 +942,22 @@ install/home paths, including stale `PATH`, interrupted upgrade, backup/restore,
 old schema, duplicate service install, bad permissions, and uninstall cleanup.
 Homebrew/GitHub publication remains planned, not shipped; the exact blockers and
 formula/release inputs are documented in `docs/packaging-and-operations.md`.
+`packaging/homebrew/arcwell.rb.template`, `packaging/install.sh`,
+`packaging/systemd/*.service.in`, and `scripts/install-systemd-user` are local
+scaffolds with fixture verification, not public package proof.
 
 How to test:
 - Fresh temp home install smoke: `cargo build --release -p arcwell`, then
   `scripts/release-readiness-smoke`.
+- Release artifact/template smoke: `scripts/verify-packaging-artifacts` and
+  `scripts/verify-packaging-artifacts --self-test`.
 - macOS service smoke: `scripts/service-live-smoke --no-live`, and
   `scripts/service-live-smoke --live` when no real `com.arcwell.worker` service
   is already loaded.
+- Linux rendering smoke: `scripts/install-systemd-user install --no-systemctl
+  --unit-dir <temp-dir> --arcwell-bin <absolute-test-bin> --arcwell-home
+  <temp-home>`. Full Linux service proof still needs a real
+  `systemctl --user` session.
 - Plugin/dev-loop packaging: `scripts/verify-codex-plugin-docs`,
   `scripts/arcwell-dev smoke`, and `scripts/arcwell-dev sync` when plugin or
   dev-loop docs/scripts change.
@@ -903,13 +967,14 @@ Success looks like:
   and strict doctor behavior working from a disposable install prefix.
 - The stable plugin reaches the installed `arcwell` through `PATH`, and stale
   binary ordering is caught before release.
-- Publication docs name the missing Homebrew/GitHub/checksum/Linux/Codex
-  fresh-thread blockers instead of implying a public package exists.
+- Publication docs name the missing Homebrew/GitHub signed-checksum/Linux-live
+  and Codex fresh-thread blockers instead of implying a public package exists.
 
 Adversarial/severe gate:
 - Test paths with spaces, missing permissions, old DB version, interrupted
-  upgrade, duplicate service install, uninstall cleanup, and plugin pointing to a
-  stale binary.
+  upgrade, duplicate service install, tar path traversal, checksum mismatch,
+  systemd path escaping, uninstall cleanup, and plugin pointing to a stale
+  binary.
 
 ### 20. Documentation Honesty Pass
 
@@ -944,6 +1009,8 @@ Adversarial/severe gate:
 - [x] Add Arcwell package README and status badge.
 - [x] Add MCP/host docs for outfit planning with weather/profile/style context.
 - [x] Decide what data, if any, should sync into Arcwell memory/profile/wiki.
+- [x] Add guarded read-only live smoke script that refuses to run without an
+      explicit base URL and readonly confirmation.
 
 Description:
 Garderobe is a working adjacent personal-domain MCP app. It should become a
@@ -951,6 +1018,8 @@ first-class Arcwell package without muddying memory/wiki boundaries.
 
 How to test:
 - `cd packages/arcwell-garderobe && npm run typecheck && npm test`.
+- `GARDEROBE_READONLY_CONFIRM=readonly GARDEROBE_BASE_URL=https://... scripts/garderobe-readonly-smoke`
+  for unauthenticated GET-only surface proof.
 - Existing adjacent Garderobe live severe tests were reviewed but not copied or
   run from Arcwell because they target the live deployment and depend on
   `.dev.vars`.
@@ -1003,18 +1072,27 @@ Adversarial/severe gate:
 - [x] Add source-card and channel-message mapping.
 - [x] Add sender authorization and routing rules.
 - [x] Add digest delivery option boundary for librarian alerts.
+- [x] Add bounded Cloudflare Email Routing Worker handler and severe enqueue
+      tests.
+- [ ] Add local Rust drain/persistence from email edge events into durable
+      channel messages/source cards.
+- [ ] Add ops visibility for email edge/channel state.
+- [ ] Run disposable live Cloudflare Email Routing smoke.
 
 Description:
 Email is part of the desired proactive assistant loop. The current slice is a
-bounded `arcwell-email` package with a tested normalized mapper and explicit
-live blockers. Inbound capture should use Cloudflare Email Routing for
-Arcwell-owned proactive addresses; Gmail remains host-native first for
-interactive selected-thread work. Live capture, MIME parsing, Rust drain,
-SQLite persistence, and outbound digest delivery are not implemented.
+bounded `arcwell-email` package with a tested normalized mapper, explicit live
+blockers, and an edge inbox Email Routing handler that parses bounded raw MIME
+into durable email edge events under configured route/sender policy. Gmail
+remains host-native first for interactive selected-thread work. Live Email
+Routing, Rust drain, SQLite channel/source-card persistence, and outbound
+digest delivery are not implemented.
 
 How to test:
 - Package-local severe fixtures:
   `cd packages/arcwell-email && npm test`.
+- Worker severe tests:
+  `cd packages/arcwell-edge-inbox/worker && npm test`.
 - Future live smoke only with a disposable Cloudflare Email Routing test
   address or a narrow test label after a live adapter exists.
 
@@ -1027,6 +1105,8 @@ Adversarial/severe gate:
 - Local fixtures test spoofed From, malicious HTML, attachment bombs, tracking
   links, prompt injection, duplicate Message-ID, oversized bodies,
   auto-responder loops, and unauthorized routing.
+- Worker tests prove MIME normalization, duplicate idempotency, route/sender
+  rejection, raw-size rejection, and durable edge enqueue.
 
 ## Cross-Cutting Required Work
 

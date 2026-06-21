@@ -84,17 +84,34 @@ X_BEARER_TOKEN=... scripts/x-live-smoke
 ```
 
 The script uses a disposable `ARCWELL_HOME`, runs a local replay/source-card
-smoke even without credentials, and only runs live recent search, definitive
-watch rebuild, and watch-source monitor when `X_BEARER_TOKEN` or
-`TWITTER_BEARER_TOKEN` is set. It prints counts and sanitized failures, never
-token values.
+smoke even without credentials, and runs live recent search when
+`X_BEARER_TOKEN`, `TWITTER_BEARER_TOKEN`, or copied local X secret metadata is
+available. For bookmarks/follows user-context proof, prefer a copied source
+home so the real watch list is not rewritten:
+
+```sh
+set -a
+. ./.env
+set +a
+X_USER_CONTEXT_SOURCE_HOME="$ARCWELL_HOME" scripts/x-live-smoke
+```
+
+When `X_USER_CONTEXT_SOURCE_HOME` contains `X_BEARER_TOKEN` and
+`X_REFRESH_TOKEN`, the script copies that home into a temporary smoke home and
+unsets env bearer tokens for provider calls so an application-only bearer cannot
+mask the user-context proof. If the copied access token has expired, refresh the
+real OAuth token first with `arcwell x oauth-refresh --client-id "$X_CLIENT_ID"`,
+then rerun the copied-home smoke. The refresh output records stored secret
+names and expiry metadata only, not token values.
 
 Current live result:
 
-- The available bearer token can run the live recent-search portion.
-- The definitive watch rebuild is blocked by X `403 Unsupported
-  Authentication`: bookmarks/follows account-data endpoints require OAuth 1.0a
-  User Context or OAuth 2.0 User Context, not application-only bearer auth.
+- Application-only bearer tokens can run live recent search but cannot prove
+  bookmarks/follows.
+- A copied-home OAuth 2.0 User Context smoke passed after refreshing the real
+  local OAuth token: local replay, live recent search, definitive watch rebuild
+  from bookmarks/recent follows, and watch-source monitor all completed without
+  writing to the real Arcwell home.
 
 Future work:
 

@@ -65,16 +65,19 @@ Boundary:
 - SQLite stores metadata and checksums.
 - SQLite FTS indexes wiki page title/body content for local search; each page write updates the index.
 - Source cards are structured records plus Markdown wiki pages with schema version metadata, evidence role, trust level, extracted dates/entities, and deterministic audit flags.
+- Source cards also carry deterministic reliability metadata: reliability score, provenance strength, inferred source owner, crawl-rate policy, and robots metadata when available from URL ingest. These are quality gates, not a model-backed credibility verdict.
 - Watch sources are durable monitor configuration in SQLite, separate from source-card evidence.
 - `arcwell wiki import-codex-swift-sources` imports the old Codex Swift seed registry from `llm-wiki.md` and `scripts/wiki-sources-restore.sh`, merging duplicate sources idempotently.
 - Wiki jobs can be queued as `pending` and drained by `arcwell worker run-once`, the resident `arcwell worker run` loop, or the MCP `worker_run_once` tool.
 - Worker claims use leases. Failed jobs retry with bounded backoff and become `dead_lettered` after their attempt budget is exhausted.
 - RSS/Atom, GitHub owner/repo, GitHub releases/commits, and arXiv search adapters write source cards rather than directly rewriting topic pages.
 - Adapter cursor state lives in SQLite and is exposed through cursor CLI/MCP reads for debugging.
-- Source-health state records last success, last failure, last item id/date, cursor key/value, and next run hints for RSS, GitHub, arXiv, and X recent search.
+- Source-health state records last success, last failure, last item id/date, cursor key/value, and next run hints for RSS, GitHub, arXiv, and X recent search. Rate-limit/quota failures are classified as `rate_limited` with longer backoff instead of generic failure.
+- Scheduled polling hooks can enqueue due active watch sources while respecting source-health `next_run_at`; the local worker still has to drain the queued jobs.
 - Source cards are keyed by canonical URL/provider/type so repeated adapter runs update existing cards instead of flooding source-card rows or wiki artifacts.
-- Current search uses a local SQLite FTS title/body index. Hybrid/vector search comes later.
-- URL ingest is HTTPS-only, rejects local/private/metadata hosts, validates redirects, enforces content type and size bounds, and writes provenance separately from cleaned readable text.
+- `sync_wiki_dir` performs incremental Markdown sync and tombstones pages whose source Markdown file disappeared so deleted local files stop appearing in list/search evidence.
+- Current search uses a local SQLite FTS title/body index over active pages. Hybrid/vector search comes later.
+- URL ingest is HTTPS-only, rejects local/private/metadata hosts, validates redirects, enforces content type and size bounds, and writes provenance separately from cleaned readable text. HTML extraction is deterministic/readability-like (`article`/`main`/`body` preference plus boilerplate removal), not browser-rendered or model-backed.
 - External source text is treated as evidence, not instructions; generated source-card pages include an untrusted-source warning and are excluded from local-source evidence for later research briefs.
 
 Cloudflare boundary:

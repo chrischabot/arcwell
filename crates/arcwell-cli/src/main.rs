@@ -1,23 +1,28 @@
 use anyhow::{Context, Result, bail};
 use arcwell_core::{
-    AppPaths, DoctorOptions, OpsSnapshot, ProcedureCandidateInput, SourceCardInput, Store,
-    WebSearchConfig, personal_memory_eval_corpus,
+    AppPaths, DoctorOptions, OpsSnapshot, PolicyRequest, ProcedureCandidateInput, SourceCardInput,
+    Store, WebSearchConfig, personal_memory_eval_corpus,
 };
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{Query, State, rejection::QueryRejection},
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use clap::{Args, Parser, Subcommand};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
+use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 #[derive(Parser)]
 #[command(name = "arcwell")]
@@ -32,6 +37,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    Health,
+    Ops,
     Doctor(DoctorArgs),
     Service(ServiceCommand),
     Serve(ServeArgs),
@@ -52,6 +59,7 @@ enum Command {
     Candidate(CandidateCommand),
     Backup(BackupCommand),
     Cost(CostCommand),
+    Policy(PolicyCommand),
     Secrets(SecretsCommand),
     Cursors(CursorCommand),
 }
@@ -376,6 +384,15 @@ enum ProcedureSubcommand {
     Read {
         id: String,
     },
+    RetrievalContext {
+        query: String,
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+    },
+    ExportSkill {
+        id: String,
+        skill_name: String,
+    },
     Curate,
 }
 
@@ -441,6 +458,69 @@ enum CostSubcommand {
 }
 
 #[derive(Args)]
+struct PolicyCommand {
+    #[command(subcommand)]
+    command: PolicySubcommand,
+}
+
+#[derive(Subcommand)]
+enum PolicySubcommand {
+    Check(PolicyRequestArgs),
+    Explain(PolicyRequestArgs),
+    List {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    Rules,
+    Override {
+        #[command(flatten)]
+        request: PolicyRequestArgs,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        expires_at: String,
+    },
+    Approvals {
+        #[arg(long)]
+        status: Option<String>,
+    },
+    Approve {
+        id: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    Reject {
+        id: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(Args)]
+struct PolicyRequestArgs {
+    #[arg(long)]
+    action: String,
+    #[arg(long)]
+    package: Option<String>,
+    #[arg(long)]
+    provider: Option<String>,
+    #[arg(long)]
+    source: Option<String>,
+    #[arg(long)]
+    channel: Option<String>,
+    #[arg(long)]
+    subject: Option<String>,
+    #[arg(long)]
+    target: Option<String>,
+    #[arg(long)]
+    projected_usd: Option<f64>,
+    #[arg(long)]
+    metadata_json: Option<String>,
+    #[arg(long)]
+    untrusted_excerpt: Option<String>,
+}
+
+#[derive(Args)]
 struct SecretsCommand {
     #[command(subcommand)]
     command: SecretsSubcommand,
@@ -489,7 +569,28 @@ enum CursorSubcommand {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let args = std::env::args_os().collect::<Vec<_>>();
+    let alias_resolution = resolve_slash_alias(args)?;
+    if let SlashAliasResolution::Mcp {
+        home,
+        tool,
+        arguments,
+    } = alias_resolution
+    {
+        let paths = home
+            .map(AppPaths::new)
+            .map(Ok)
+            .unwrap_or_else(AppPaths::from_env_or_default)?;
+        print_json(&call_mcp_tool(&paths, tool, arguments)?)?;
+        return Ok(());
+    }
+    if let SlashAliasResolution::HostOnly { alias, reason } = alias_resolution {
+        bail!("/{alias} is a Codex-host slash command, not a standalone CLI command: {reason}");
+    }
+    let SlashAliasResolution::Cli(args) = alias_resolution else {
+        unreachable!();
+    };
+    let cli = Cli::parse_from(args);
     let paths = cli
         .home
         .map(AppPaths::new)
@@ -520,8 +621,541 @@ fn main() -> Result<()> {
     }
 }
 
+enum SlashAliasResolution {
+    Cli(Vec<OsString>),
+    Mcp {
+        home: Option<PathBuf>,
+        tool: &'static str,
+        arguments: Value,
+    },
+    HostOnly {
+        alias: String,
+        reason: &'static str,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum SlashAliasTarget {
+    Cli(&'static [&'static str]),
+    Mcp(&'static str),
+    HostOnly(&'static str),
+}
+
+fn resolve_slash_alias(args: Vec<OsString>) -> Result<SlashAliasResolution> {
+    let Some(command_index) = slash_alias_command_index(&args) else {
+        return Ok(SlashAliasResolution::Cli(args));
+    };
+    let Some(alias) = slash_alias_name(&args[command_index]) else {
+        return Ok(SlashAliasResolution::Cli(args));
+    };
+    if let Some(resolution) = resolve_dynamic_slash_alias(&args, command_index, alias)? {
+        return Ok(resolution);
+    }
+    let Some(target) = slash_alias_target(alias) else {
+        return Ok(SlashAliasResolution::Cli(args));
+    };
+    match target {
+        SlashAliasTarget::Cli(parts) => Ok(SlashAliasResolution::Cli(rewrite_slash_alias_args(
+            &args,
+            command_index,
+            parts,
+            &args[command_index + 1..],
+        ))),
+        SlashAliasTarget::Mcp(tool) => Ok(SlashAliasResolution::Mcp {
+            home: home_arg_from_raw_args(&args, command_index),
+            tool,
+            arguments: parse_slash_alias_mcp_arguments(alias, tool, &args[command_index + 1..])?,
+        }),
+        SlashAliasTarget::HostOnly(reason) => Ok(SlashAliasResolution::HostOnly {
+            alias: alias.to_string(),
+            reason,
+        }),
+    }
+}
+
+fn slash_alias_command_index(args: &[OsString]) -> Option<usize> {
+    let mut index = 1;
+    while index < args.len() {
+        let text = args[index].to_string_lossy();
+        if text == "--home" {
+            index += 2;
+            continue;
+        }
+        if text.starts_with("--home=") {
+            index += 1;
+            continue;
+        }
+        if text.starts_with('-') {
+            return None;
+        }
+        return Some(index);
+    }
+    None
+}
+
+fn slash_alias_name(value: &OsString) -> Option<&str> {
+    let text = value.to_str()?.trim_start_matches('/');
+    (slash_alias_target(text).is_some() || slash_alias_is_dynamic(text)).then_some(text)
+}
+
+fn rewrite_slash_alias_args(
+    args: &[OsString],
+    command_index: usize,
+    parts: &[&str],
+    rest: &[OsString],
+) -> Vec<OsString> {
+    let mut rewritten = args[..command_index].to_vec();
+    rewritten.extend(parts.iter().map(OsString::from));
+    rewritten.extend(rest.iter().cloned());
+    rewritten
+}
+
+fn home_arg_from_raw_args(args: &[OsString], command_index: usize) -> Option<PathBuf> {
+    let mut index = 1;
+    while index < command_index {
+        let text = args[index].to_string_lossy();
+        if text == "--home" {
+            return args.get(index + 1).map(PathBuf::from);
+        }
+        if let Some(home) = text.strip_prefix("--home=") {
+            return Some(PathBuf::from(home));
+        }
+        index += 1;
+    }
+    None
+}
+
+fn parse_slash_alias_mcp_arguments(alias: &str, tool: &str, rest: &[OsString]) -> Result<Value> {
+    if rest.is_empty() {
+        return Ok(json!({}));
+    }
+    let first = rest[0].to_string_lossy();
+    let raw = if first == "--json" {
+        rest.get(1)
+            .with_context(|| format!("arcwell {alias} --json requires a JSON object"))?
+            .to_string_lossy()
+            .to_string()
+    } else if let Some(raw) = first.strip_prefix("--json=") {
+        raw.to_string()
+    } else if first == "-" {
+        read_stdin_lossy()?
+    } else {
+        bail!(
+            "arcwell {alias} maps to MCP tool {tool}; pass structured arguments as --json '{{...}}' or '-' for stdin"
+        );
+    };
+    serde_json::from_str(&raw).with_context(|| format!("parsing JSON arguments for {alias}"))
+}
+
+fn resolve_dynamic_slash_alias(
+    args: &[OsString],
+    command_index: usize,
+    alias: &str,
+) -> Result<Option<SlashAliasResolution>> {
+    let rest = &args[command_index + 1..];
+    match alias {
+        "memory-candidates" => {
+            let apply = rest.first().is_some_and(|arg| arg == "apply");
+            let parts = if apply {
+                &["candidate", "apply"][..]
+            } else {
+                &["candidate", "list"][..]
+            };
+            let rest = if apply { &rest[1..] } else { rest };
+            Ok(Some(SlashAliasResolution::Cli(rewrite_slash_alias_args(
+                args,
+                command_index,
+                parts,
+                rest,
+            ))))
+        }
+        "watch-github" => {
+            let Some(first) = rest.first().and_then(|arg| arg.to_str()) else {
+                return Ok(Some(SlashAliasResolution::Cli(rewrite_slash_alias_args(
+                    args,
+                    command_index,
+                    &["wiki", "enqueue-github-owner"],
+                    rest,
+                ))));
+            };
+            if let Some((owner, repo)) = first.split_once('/') {
+                let mut rewritten_rest = vec![OsString::from(owner), OsString::from(repo)];
+                rewritten_rest.extend(rest[1..].iter().cloned());
+                return Ok(Some(SlashAliasResolution::Cli(rewrite_slash_alias_args(
+                    args,
+                    command_index,
+                    &["wiki", "enqueue-github"],
+                    &rewritten_rest,
+                ))));
+            }
+            Ok(Some(SlashAliasResolution::Cli(rewrite_slash_alias_args(
+                args,
+                command_index,
+                &["wiki", "enqueue-github-owner"],
+                rest,
+            ))))
+        }
+        "wiki-run-github" => {
+            let Some(first) = rest.first().and_then(|arg| arg.to_str()) else {
+                return Ok(Some(SlashAliasResolution::Cli(rewrite_slash_alias_args(
+                    args,
+                    command_index,
+                    &["wiki", "run-github-owner"],
+                    rest,
+                ))));
+            };
+            if let Some((owner, repo)) = first.split_once('/') {
+                let mut rewritten_rest = vec![OsString::from(owner), OsString::from(repo)];
+                rewritten_rest.extend(rest[1..].iter().cloned());
+                return Ok(Some(SlashAliasResolution::Cli(rewrite_slash_alias_args(
+                    args,
+                    command_index,
+                    &["wiki", "run-github"],
+                    &rewritten_rest,
+                ))));
+            }
+            Ok(Some(SlashAliasResolution::Cli(rewrite_slash_alias_args(
+                args,
+                command_index,
+                &["wiki", "run-github-owner"],
+                rest,
+            ))))
+        }
+        "wiki-ingest" => {
+            let parts = rest
+                .first()
+                .and_then(|arg| arg.to_str())
+                .map(|target| {
+                    if target.starts_with("http://") || target.starts_with("https://") {
+                        &["wiki", "ingest-url"][..]
+                    } else if PathBuf::from(target).is_dir() {
+                        &["wiki", "ingest-dir"][..]
+                    } else {
+                        &["wiki", "ingest-file"][..]
+                    }
+                })
+                .unwrap_or(&["wiki", "ingest-file"][..]);
+            Ok(Some(SlashAliasResolution::Cli(rewrite_slash_alias_args(
+                args,
+                command_index,
+                parts,
+                rest,
+            ))))
+        }
+        "x-oauth" => {
+            let Some(step) = rest.first().and_then(|arg| arg.to_str()) else {
+                return Ok(Some(SlashAliasResolution::Cli(rewrite_slash_alias_args(
+                    args,
+                    command_index,
+                    &["x"],
+                    rest,
+                ))));
+            };
+            let parts = match step {
+                "url" | "authorize-url" | "oauth-url" => &["x", "oauth-url"][..],
+                "exchange" | "exchange-code" | "oauth-exchange" => &["x", "oauth-exchange"][..],
+                "refresh" | "oauth-refresh" => &["x", "oauth-refresh"][..],
+                _ => &["x"][..],
+            };
+            let rest = if parts == ["x"] { rest } else { &rest[1..] };
+            Ok(Some(SlashAliasResolution::Cli(rewrite_slash_alias_args(
+                args,
+                command_index,
+                parts,
+                rest,
+            ))))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn slash_alias_is_dynamic(alias: &str) -> bool {
+    matches!(
+        alias,
+        "memory-candidates" | "watch-github" | "wiki-run-github" | "wiki-ingest" | "x-oauth"
+    )
+}
+
+fn slash_alias_target(alias: &str) -> Option<SlashAliasTarget> {
+    SLASH_COMMAND_ALIASES
+        .iter()
+        .find_map(|(name, target)| (*name == alias).then_some(*target))
+}
+
+const SLASH_COMMAND_ALIASES: &[(&str, SlashAliasTarget)] = &[
+    ("arcwell-health", SlashAliasTarget::Cli(&["health"])),
+    (
+        "backup-create",
+        SlashAliasTarget::Cli(&["backup", "create"]),
+    ),
+    (
+        "backup-restore",
+        SlashAliasTarget::Cli(&["backup", "restore"]),
+    ),
+    (
+        "backup-status",
+        SlashAliasTarget::Cli(&["backup", "status"]),
+    ),
+    (
+        "backup-verify",
+        SlashAliasTarget::Cli(&["backup", "verify"]),
+    ),
+    (
+        "channel-authorizations",
+        SlashAliasTarget::Mcp("channel_authorizations"),
+    ),
+    (
+        "channel-authorize",
+        SlashAliasTarget::Mcp("channel_authorize"),
+    ),
+    (
+        "channel-deliveries",
+        SlashAliasTarget::Mcp("channel_delivery_list"),
+    ),
+    ("channel-list", SlashAliasTarget::Mcp("channel_list")),
+    ("channel-record", SlashAliasTarget::Mcp("channel_record")),
+    ("cost-add", SlashAliasTarget::Cli(&["cost", "add"])),
+    ("cost-check", SlashAliasTarget::Cli(&["cost", "check"])),
+    (
+        "cost-policy-list",
+        SlashAliasTarget::Cli(&["cost", "policies"]),
+    ),
+    (
+        "cost-policy-set",
+        SlashAliasTarget::Cli(&["cost", "set-policy"]),
+    ),
+    ("cost-summary", SlashAliasTarget::Cli(&["cost", "summary"])),
+    ("cursor-get", SlashAliasTarget::Cli(&["cursors", "get"])),
+    ("cursor-list", SlashAliasTarget::Cli(&["cursors", "list"])),
+    (
+        "digest-candidate-create",
+        SlashAliasTarget::Mcp("digest_candidate_create"),
+    ),
+    (
+        "digest-candidates",
+        SlashAliasTarget::Mcp("digest_candidate_list"),
+    ),
+    ("edge-ack", SlashAliasTarget::Mcp("edge_event_ack")),
+    (
+        "edge-dead-letter",
+        SlashAliasTarget::Mcp("edge_event_dead_letter"),
+    ),
+    ("edge-enqueue", SlashAliasTarget::Mcp("edge_event_enqueue")),
+    ("edge-events", SlashAliasTarget::Mcp("edge_event_list")),
+    ("edge-lease", SlashAliasTarget::Mcp("edge_event_lease")),
+    ("edge-nack", SlashAliasTarget::Mcp("edge_event_nack")),
+    (
+        "import-claude",
+        SlashAliasTarget::Cli(&["import", "claude"]),
+    ),
+    (
+        "librarian-expand",
+        SlashAliasTarget::Mcp("librarian_expand_topic"),
+    ),
+    ("mem0-add", SlashAliasTarget::Cli(&["memory", "mem0-add"])),
+    (
+        "mem0-delete",
+        SlashAliasTarget::Cli(&["memory", "mem0-delete"]),
+    ),
+    (
+        "mem0-forget-user",
+        SlashAliasTarget::Cli(&["memory", "mem0-forget-user"]),
+    ),
+    (
+        "mem0-history",
+        SlashAliasTarget::Cli(&["memory", "mem0-history"]),
+    ),
+    (
+        "mem0-search",
+        SlashAliasTarget::Cli(&["memory", "mem0-search"]),
+    ),
+    (
+        "mem0-update",
+        SlashAliasTarget::Cli(&["memory", "mem0-update"]),
+    ),
+    (
+        "memory-capture",
+        SlashAliasTarget::Cli(&["memory", "capture"]),
+    ),
+    (
+        "memory-delete",
+        SlashAliasTarget::Cli(&["memory", "delete"]),
+    ),
+    ("memory-dream", SlashAliasTarget::Cli(&["memory", "dream"])),
+    (
+        "memory-events",
+        SlashAliasTarget::Cli(&["memory", "events"]),
+    ),
+    (
+        "memory-extract",
+        SlashAliasTarget::Mcp("memory_extract_candidates"),
+    ),
+    ("memory-list", SlashAliasTarget::Cli(&["memory", "list"])),
+    (
+        "memory-recall",
+        SlashAliasTarget::Cli(&["memory", "recall"]),
+    ),
+    (
+        "memory-reject",
+        SlashAliasTarget::Cli(&["candidate", "reject"]),
+    ),
+    (
+        "memory-search",
+        SlashAliasTarget::Cli(&["memory", "mem0-search"]),
+    ),
+    ("ops", SlashAliasTarget::Cli(&["ops"])),
+    (
+        "profile-delete",
+        SlashAliasTarget::Cli(&["profile", "delete"]),
+    ),
+    ("profile-get", SlashAliasTarget::Cli(&["profile", "get"])),
+    ("profile-list", SlashAliasTarget::Cli(&["profile", "list"])),
+    (
+        "profile-search",
+        SlashAliasTarget::Cli(&["profile", "search"]),
+    ),
+    ("profile-set", SlashAliasTarget::Cli(&["profile", "set"])),
+    (
+        "project-create",
+        SlashAliasTarget::Cli(&["project", "create"]),
+    ),
+    ("project-list", SlashAliasTarget::Cli(&["project", "list"])),
+    (
+        "project-status",
+        SlashAliasTarget::Cli(&["project", "status-get"]),
+    ),
+    (
+        "project-status-record",
+        SlashAliasTarget::Cli(&["project", "status-record"]),
+    ),
+    (
+        "project-sync-codex",
+        SlashAliasTarget::HostOnly(
+            "it needs the current Codex host thread inventory before writing a project snapshot",
+        ),
+    ),
+    ("remember", SlashAliasTarget::Cli(&["memory", "mem0-add"])),
+    (
+        "research-brief",
+        SlashAliasTarget::Cli(&["research", "brief"]),
+    ),
+    (
+        "research-plan",
+        SlashAliasTarget::Cli(&["research", "plan"]),
+    ),
+    (
+        "research-runs",
+        SlashAliasTarget::Cli(&["research", "runs"]),
+    ),
+    (
+        "research-search",
+        SlashAliasTarget::Cli(&["research", "search"]),
+    ),
+    (
+        "research-task-complete",
+        SlashAliasTarget::Cli(&["research", "complete-task"]),
+    ),
+    (
+        "research-tasks",
+        SlashAliasTarget::Cli(&["research", "tasks"]),
+    ),
+    (
+        "research-workflow",
+        SlashAliasTarget::Cli(&["research", "workflow"]),
+    ),
+    (
+        "secret-delete",
+        SlashAliasTarget::Cli(&["secrets", "delete-value"]),
+    ),
+    (
+        "secret-list",
+        SlashAliasTarget::Cli(&["secrets", "list-values"]),
+    ),
+    (
+        "secret-ref-list",
+        SlashAliasTarget::Cli(&["secrets", "list"]),
+    ),
+    (
+        "secret-ref-set",
+        SlashAliasTarget::Cli(&["secrets", "set-ref"]),
+    ),
+    (
+        "secret-set",
+        SlashAliasTarget::Cli(&["secrets", "set-value"]),
+    ),
+    (
+        "source-card-add",
+        SlashAliasTarget::Cli(&["source-card", "add"]),
+    ),
+    (
+        "source-card-read",
+        SlashAliasTarget::Cli(&["source-card", "read"]),
+    ),
+    (
+        "source-card-search",
+        SlashAliasTarget::Cli(&["source-card", "search"]),
+    ),
+    (
+        "telegram-drain",
+        SlashAliasTarget::Cli(&["telegram", "drain"]),
+    ),
+    ("telegram-inbox", SlashAliasTarget::Mcp("channel_list")),
+    (
+        "telegram-send",
+        SlashAliasTarget::Cli(&["telegram", "send"]),
+    ),
+    (
+        "watch-arxiv",
+        SlashAliasTarget::Cli(&["wiki", "enqueue-arxiv"]),
+    ),
+    ("watch-rss", SlashAliasTarget::Cli(&["wiki", "enqueue-rss"])),
+    ("wiki-add", SlashAliasTarget::Cli(&["wiki", "add"])),
+    ("wiki-compile", SlashAliasTarget::Cli(&["wiki", "compile"])),
+    ("wiki-expand", SlashAliasTarget::Cli(&["wiki", "expand"])),
+    (
+        "wiki-import-codex-swift-sources",
+        SlashAliasTarget::Cli(&["wiki", "import-codex-swift-sources"]),
+    ),
+    ("wiki-job", SlashAliasTarget::Cli(&["wiki", "job"])),
+    ("wiki-jobs", SlashAliasTarget::Cli(&["wiki", "jobs"])),
+    ("wiki-list", SlashAliasTarget::Cli(&["wiki", "list"])),
+    ("wiki-read", SlashAliasTarget::Cli(&["wiki", "read"])),
+    (
+        "wiki-run-arxiv",
+        SlashAliasTarget::Cli(&["wiki", "run-arxiv"]),
+    ),
+    ("wiki-run-rss", SlashAliasTarget::Cli(&["wiki", "run-rss"])),
+    ("wiki-search", SlashAliasTarget::Cli(&["wiki", "search"])),
+    ("wiki-sources", SlashAliasTarget::Cli(&["wiki", "sources"])),
+    (
+        "worker-run-once",
+        SlashAliasTarget::Cli(&["worker", "run-once"]),
+    ),
+    (
+        "x-enqueue-search",
+        SlashAliasTarget::Cli(&["x", "enqueue-recent-search"]),
+    ),
+    (
+        "x-import-following-watch-sources",
+        SlashAliasTarget::Cli(&["x", "import-following-watch-sources"]),
+    ),
+    (
+        "x-import-json",
+        SlashAliasTarget::Cli(&["x", "import-json"]),
+    ),
+    ("x-list", SlashAliasTarget::Cli(&["x", "list"])),
+    ("x-report", SlashAliasTarget::Cli(&["x", "report"])),
+    ("x-search", SlashAliasTarget::Cli(&["x", "recent-search"])),
+    (
+        "x-watch-rebuild",
+        SlashAliasTarget::Cli(&["x", "rebuild-definitive-watch-sources"]),
+    ),
+];
+
 fn run(store: Store, command: Command) -> Result<()> {
     match command {
+        Command::Health => print_json(&store.health()?),
+        Command::Ops => print_json(&store.ops_snapshot()?),
         Command::Doctor(args) => doctor(store, args),
         Command::Service(args) => service(store, args),
         Command::Serve(_) => unreachable!(),
@@ -542,6 +1176,7 @@ fn run(store: Store, command: Command) -> Result<()> {
         Command::Candidate(args) => candidate(store, args),
         Command::Backup(args) => backup(store, args),
         Command::Cost(args) => cost(store, args),
+        Command::Policy(args) => policy(store, args),
         Command::Secrets(args) => secrets(store, args),
         Command::Cursors(args) => cursors(store, args),
     }
@@ -1033,6 +1668,19 @@ enum ProjectSubcommand {
         #[arg(long, default_value_t = 0.5)]
         confidence: f64,
     },
+    StatusSyncRecord {
+        project_id: String,
+        status: String,
+        summary: String,
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        thread_id: String,
+        #[arg(long, default_value_t = 0.8)]
+        confidence: f64,
+        #[arg(long)]
+        stale_after_seconds: Option<i64>,
+    },
     StatusGet {
         project_id: String,
         #[arg(long)]
@@ -1103,6 +1751,27 @@ enum WorkSubcommand {
     },
     Read {
         run_id: String,
+    },
+    Stale {
+        #[arg(long, default_value_t = 7)]
+        max_age_days: i64,
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+    FollowUps {
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+    ConsolidationCandidates {
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+    RetrievalContext {
+        query: String,
+        #[arg(long, default_value_t = 7)]
+        stale_after_days: i64,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
     },
     Consolidate {
         run_id: String,
@@ -1809,6 +2478,23 @@ fn project(store: Store, args: ProjectCommand) -> Result<()> {
             thread_ref.as_deref(),
             confidence,
         )?),
+        ProjectSubcommand::StatusSyncRecord {
+            project_id,
+            status,
+            summary,
+            host,
+            thread_id,
+            confidence,
+            stale_after_seconds,
+        } => print_json(&store.record_verified_project_status_sync(
+            &project_id,
+            &status,
+            &summary,
+            &host,
+            &thread_id,
+            confidence,
+            stale_after_seconds,
+        )?),
         ProjectSubcommand::StatusGet {
             project_id,
             channel,
@@ -1902,6 +2588,19 @@ fn work(store: Store, args: WorkCommand) -> Result<()> {
             limit,
         )?),
         WorkSubcommand::Read { run_id } => print_json(&store.read_work_run(&run_id)?),
+        WorkSubcommand::Stale {
+            max_age_days,
+            limit,
+        } => print_json(&store.list_stale_work_runs(max_age_days, limit)?),
+        WorkSubcommand::FollowUps { limit } => print_json(&store.list_work_follow_ups(limit)?),
+        WorkSubcommand::ConsolidationCandidates { limit } => {
+            print_json(&store.list_work_consolidation_candidates(limit)?)
+        }
+        WorkSubcommand::RetrievalContext {
+            query,
+            stale_after_days,
+            limit,
+        } => print_json(&store.work_retrieval_context(&query, stale_after_days, limit)?),
         WorkSubcommand::Consolidate {
             run_id,
             write_project_status,
@@ -1968,6 +2667,12 @@ fn procedure(store: Store, args: ProcedureCommand) -> Result<()> {
             limit,
         } => print_json(&store.search_procedures(query.as_deref(), Some(&status), limit)?),
         ProcedureSubcommand::Read { id } => print_json(&store.read_procedure(&id)?),
+        ProcedureSubcommand::RetrievalContext { query, limit } => {
+            print_json(&store.procedure_retrieval_context(&query, limit)?)
+        }
+        ProcedureSubcommand::ExportSkill { id, skill_name } => {
+            print_json(&store.export_procedure_to_codex_skill(&id, &skill_name)?)
+        }
         ProcedureSubcommand::Curate => print_json(&store.curate_procedures()?),
     }
 }
@@ -2107,6 +2812,57 @@ fn cost(store: Store, args: CostCommand) -> Result<()> {
     }
 }
 
+fn policy(store: Store, args: PolicyCommand) -> Result<()> {
+    match args.command {
+        PolicySubcommand::Check(request) => {
+            print_json(&store.policy_check(policy_request_from_args(request)?)?)
+        }
+        PolicySubcommand::Explain(request) => {
+            print_json(&store.policy_explain(policy_request_from_args(request)?)?)
+        }
+        PolicySubcommand::List { limit } => print_json(&store.list_policy_decisions(limit)?),
+        PolicySubcommand::Rules => print_json(&store.list_policy_rules()?),
+        PolicySubcommand::Override {
+            request,
+            reason,
+            expires_at,
+        } => print_json(&store.create_policy_allow_override(
+            policy_request_from_args(request)?,
+            &reason,
+            &expires_at,
+        )?),
+        PolicySubcommand::Approvals { status } => {
+            print_json(&store.list_policy_approvals(status.as_deref())?)
+        }
+        PolicySubcommand::Approve { id, reason } => {
+            print_json(&store.approve_policy_approval(&id, reason.as_deref())?)
+        }
+        PolicySubcommand::Reject { id, reason } => {
+            print_json(&store.reject_policy_approval(&id, reason.as_deref())?)
+        }
+    }
+}
+
+fn policy_request_from_args(args: PolicyRequestArgs) -> Result<PolicyRequest> {
+    let metadata = args
+        .metadata_json
+        .map(|raw| serde_json::from_str::<Value>(&raw).context("parsing --metadata-json"))
+        .transpose()?
+        .unwrap_or_else(|| json!({}));
+    Ok(PolicyRequest {
+        action: args.action,
+        package: args.package,
+        provider: args.provider,
+        source: args.source,
+        channel: args.channel,
+        subject: args.subject,
+        target: args.target,
+        projected_usd: args.projected_usd,
+        metadata,
+        untrusted_excerpt: args.untrusted_excerpt,
+    })
+}
+
 fn secrets(store: Store, args: SecretsCommand) -> Result<()> {
     match args.command {
         SecretsSubcommand::SetRef {
@@ -2115,7 +2871,13 @@ fn secrets(store: Store, args: SecretsCommand) -> Result<()> {
             scope,
             expires_at,
         } => {
-            store.set_secret_ref(&name, &location, &scope, expires_at.as_deref())?;
+            store.set_secret_ref_with_policy(
+                &name,
+                &location,
+                &scope,
+                expires_at.as_deref(),
+                "cli",
+            )?;
             print_json(&json!({ "ok": true, "name": name }))
         }
         SecretsSubcommand::List => print_json(&store.list_secret_refs()?),
@@ -2126,21 +2888,24 @@ fn secrets(store: Store, args: SecretsCommand) -> Result<()> {
             provider,
             expires_at,
         } => {
-            store.set_secret_value_with_metadata(
+            store.set_secret_value_with_policy(
                 &name,
                 &value,
                 &scope,
                 provider.as_deref(),
                 expires_at.as_deref(),
+                "cli",
             )?;
             print_json(&json!({ "ok": true, "name": name }))
         }
-        SecretsSubcommand::GetValue { name } => print_json(&store.get_secret_value(&name)?),
+        SecretsSubcommand::GetValue { name } => {
+            print_json(&store.get_secret_value_with_policy(&name, "cli")?)
+        }
         SecretsSubcommand::ListValues => print_json(&store.list_secret_values()?),
         SecretsSubcommand::Health => print_json(&store.secret_health()?),
-        SecretsSubcommand::DeleteValue { name } => {
-            print_json(&json!({ "ok": store.delete_secret_value(&name)?, "name": name }))
-        }
+        SecretsSubcommand::DeleteValue { name } => print_json(
+            &json!({ "ok": store.delete_secret_value_with_policy(&name, "cli")?, "name": name }),
+        ),
     }
 }
 
@@ -2169,6 +2934,10 @@ async fn serve(paths: AppPaths, args: ServeArgs) -> Result<()> {
         .route("/wiki", get(http_wiki).post(http_mutation_rejected))
         .route("/ops", get(http_ops).post(http_mutation_rejected))
         .route("/ops/ui", get(http_ops_ui).post(http_mutation_rejected))
+        .route(
+            "/ops/actions/edge-events/dead-letter",
+            post(http_ops_edge_event_dead_letter),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(args.addr).await?;
@@ -2182,6 +2951,8 @@ struct HttpState {
     auth_token: Option<String>,
     max_uri_bytes: usize,
     max_body_bytes: u64,
+    csrf_token: String,
+    idempotency_keys: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl HttpState {
@@ -2208,6 +2979,8 @@ impl HttpState {
             auth_token,
             max_uri_bytes,
             max_body_bytes,
+            csrf_token: Uuid::new_v4().to_string(),
+            idempotency_keys: Arc::new(Mutex::new(BTreeSet::new())),
         })
     }
 }
@@ -2272,13 +3045,159 @@ async fn http_ops(State(state): State<HttpState>, headers: HeaderMap, uri: Uri) 
     })
 }
 
-async fn http_ops_ui(State(state): State<HttpState>, headers: HeaderMap, uri: Uri) -> Response {
+#[derive(Debug, Default, Deserialize)]
+struct OpsUiQuery {
+    q: Option<String>,
+    status: Option<String>,
+    sort: Option<String>,
+    detail: Option<String>,
+    notice: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsEdgeDeadLetterForm {
+    csrf_token: String,
+    idempotency_key: String,
+    edge_event_id: String,
+    reason: String,
+}
+
+async fn http_ops_ui(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    query: Result<Query<OpsUiQuery>, QueryRejection>,
+) -> Response {
     if let Err(error) = validate_http_request(&state, &headers, &uri) {
         return http_html_error_response(error);
     }
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(error) => {
+            return http_html_error_response(HttpError::bad_request(
+                "bad_query",
+                error.to_string(),
+            ));
+        }
+    };
+    if let Err(error) = validate_ops_ui_query(&query) {
+        return http_html_error_response(error);
+    }
     match Store::open(state.paths.clone()).and_then(|store| store.ops_snapshot()) {
-        Ok(snapshot) => with_http_security_headers(Html(render_ops_ui(&snapshot)).into_response()),
+        Ok(snapshot) => with_http_security_headers(
+            Html(render_ops_ui_with_options(
+                &snapshot,
+                &OpsUiOptions::from_query(query),
+                Some(&state.csrf_token),
+                state.auth_token.is_some(),
+            ))
+            .into_response(),
+        ),
         Err(error) => http_html_error_response(HttpError::internal(error.to_string())),
+    }
+}
+
+async fn http_ops_edge_event_dead_letter(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = validate_http_mutation_request(&state, &headers, &uri) {
+        return http_error_response(error);
+    }
+    if body.len() as u64 > state.max_body_bytes {
+        return http_error_response(HttpError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        ));
+    }
+    let form = match parse_ops_dead_letter_form(&body) {
+        Ok(form) => form,
+        Err(error) => return http_error_response(error),
+    };
+    if !constant_time_eq(form.csrf_token.as_bytes(), state.csrf_token.as_bytes()) {
+        return http_error_response(HttpError::new(
+            StatusCode::FORBIDDEN,
+            "bad_csrf",
+            "CSRF token is missing or invalid",
+        ));
+    }
+    if let Err(error) = validate_ops_idempotency_key(&form.idempotency_key) {
+        return http_error_response(error);
+    }
+    if form.reason.trim().is_empty() || form.reason.len() > 1000 {
+        return http_error_response(HttpError::bad_request(
+            "bad_reason",
+            "dead-letter reason must be non-empty and at most 1000 bytes",
+        ));
+    }
+    let idempotency_scope = format!(
+        "edge-event-dead-letter:{}:{}",
+        form.edge_event_id, form.idempotency_key
+    );
+    let inserted = match state.idempotency_keys.lock() {
+        Ok(mut keys) => keys.insert(idempotency_scope),
+        Err(_) => {
+            return http_error_response(HttpError::internal("idempotency registry is unavailable"));
+        }
+    };
+    if !inserted {
+        return redirect_to_ops_ui(&format!(
+            "/ops/ui?detail=edge:{}&notice=duplicate",
+            url_component(&form.edge_event_id)
+        ));
+    }
+
+    let result = (|| -> Result<String> {
+        let store = Store::open(state.paths.clone())?;
+        let event = store
+            .get_edge_event(&form.edge_event_id)?
+            .with_context(|| format!("edge event not found: {}", form.edge_event_id))?;
+        if !is_dead_letterable_edge_status(&event.status) {
+            bail!(
+                "edge event {} is status {}; only pending, failed, or leased events can be dead-lettered from ops UI",
+                event.id,
+                event.status
+            );
+        }
+        let decision = store.policy_check(PolicyRequest {
+            action: "ops.edge_event.dead_letter".to_string(),
+            package: Some("arcwell-cli".to_string()),
+            provider: None,
+            source: Some("ops-ui".to_string()),
+            channel: Some("http".to_string()),
+            subject: Some("local-operator".to_string()),
+            target: Some(event.id.clone()),
+            projected_usd: None,
+            metadata: json!({
+                "edge_event_source": event.source,
+                "edge_event_status": event.status,
+                "idempotency_key": form.idempotency_key,
+            }),
+            untrusted_excerpt: Some(form.reason.clone()),
+        })?;
+        if !decision.allowed {
+            bail!(
+                "policy denied ops.edge_event.dead_letter: {}",
+                decision.reason
+            );
+        }
+        let reason = redact_secret_like_text(&form.reason);
+        let updated = store.dead_letter_edge_event(&form.edge_event_id, &reason)?;
+        Ok(updated.id)
+    })();
+
+    match result {
+        Ok(id) => redirect_to_ops_ui(&format!(
+            "/ops/ui?detail=edge:{}&notice=dead_lettered",
+            url_component(&id)
+        )),
+        Err(error) => http_error_response(HttpError::bad_request(
+            "ops_action_failed",
+            error.to_string(),
+        )),
     }
 }
 
@@ -2365,6 +3284,21 @@ fn validate_http_request(
     validate_http_auth(state, headers)
 }
 
+fn validate_http_mutation_request(
+    state: &HttpState,
+    headers: &HeaderMap,
+    uri: &Uri,
+) -> std::result::Result<(), HttpError> {
+    if state.auth_token.is_none() {
+        return Err(HttpError::new(
+            StatusCode::UNAUTHORIZED,
+            "mutation_auth_required",
+            "Arcwell HTTP mutations require an explicit auth token",
+        ));
+    }
+    validate_http_request(state, headers, uri)
+}
+
 fn validate_http_auth(
     state: &HttpState,
     headers: &HeaderMap,
@@ -2449,6 +3383,148 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     diff == 0
 }
 
+fn validate_ops_ui_query(query: &OpsUiQuery) -> std::result::Result<(), HttpError> {
+    for (name, value, max_len) in [
+        ("q", query.q.as_deref(), 512),
+        ("status", query.status.as_deref(), 80),
+        ("sort", query.sort.as_deref(), 80),
+        ("detail", query.detail.as_deref(), 160),
+        ("notice", query.notice.as_deref(), 80),
+    ] {
+        let Some(value) = value else {
+            continue;
+        };
+        if value.len() > max_len {
+            return Err(HttpError::new(
+                StatusCode::URI_TOO_LONG,
+                "query_too_large",
+                format!("query parameter {name} is too large"),
+            ));
+        }
+        if value.chars().any(char::is_control) {
+            return Err(HttpError::bad_request(
+                "bad_query",
+                format!("query parameter {name} contains control characters"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_ops_idempotency_key(key: &str) -> std::result::Result<(), HttpError> {
+    let trimmed = key.trim();
+    if trimmed.len() < 8 || trimmed.len() > 120 {
+        return Err(HttpError::bad_request(
+            "bad_idempotency_key",
+            "idempotency key must be between 8 and 120 bytes",
+        ));
+    }
+    if trimmed != key
+        || !trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ':' | '.'))
+    {
+        return Err(HttpError::bad_request(
+            "bad_idempotency_key",
+            "idempotency key may only contain ASCII letters, numbers, dot, colon, underscore, or hyphen",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_ops_dead_letter_form(
+    body: &[u8],
+) -> std::result::Result<OpsEdgeDeadLetterForm, HttpError> {
+    let text = std::str::from_utf8(body).map_err(|_| {
+        HttpError::bad_request("bad_form", "form body must be valid UTF-8 urlencoding")
+    })?;
+    let mut values = BTreeMap::<String, String>::new();
+    for pair in text.split('&').filter(|pair| !pair.is_empty()) {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            return Err(HttpError::bad_request(
+                "bad_form",
+                "form fields must use key=value encoding",
+            ));
+        };
+        let key = percent_decode_form_component(raw_key)?;
+        let value = percent_decode_form_component(raw_value)?;
+        if !matches!(
+            key.as_str(),
+            "csrf_token" | "idempotency_key" | "edge_event_id" | "reason"
+        ) {
+            return Err(HttpError::bad_request(
+                "bad_form",
+                format!("unsupported form field: {key}"),
+            ));
+        }
+        if values.insert(key.clone(), value).is_some() {
+            return Err(HttpError::bad_request(
+                "bad_form",
+                format!("duplicate form field: {key}"),
+            ));
+        }
+    }
+    let mut take = |key: &'static str| {
+        values
+            .remove(key)
+            .ok_or_else(|| HttpError::bad_request("bad_form", format!("missing form field: {key}")))
+    };
+    Ok(OpsEdgeDeadLetterForm {
+        csrf_token: take("csrf_token")?,
+        idempotency_key: take("idempotency_key")?,
+        edge_event_id: take("edge_event_id")?,
+        reason: take("reason")?,
+    })
+}
+
+fn percent_decode_form_component(value: &str) -> std::result::Result<String, HttpError> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' => {
+                if index + 2 >= bytes.len() {
+                    return Err(HttpError::bad_request(
+                        "bad_form",
+                        "form field contains truncated percent encoding",
+                    ));
+                }
+                let high = hex_value(bytes[index + 1])?;
+                let low = hex_value(bytes[index + 2])?;
+                decoded.push((high << 4) | low);
+                index += 3;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded)
+        .map_err(|_| HttpError::bad_request("bad_form", "form field is not valid UTF-8"))
+}
+
+fn hex_value(byte: u8) -> std::result::Result<u8, HttpError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(HttpError::bad_request(
+            "bad_form",
+            "form field contains invalid percent encoding",
+        )),
+    }
+}
+
+fn is_dead_letterable_edge_status(status: &str) -> bool {
+    matches!(status, "pending" | "failed" | "leased")
+}
+
 fn http_error_response(error: HttpError) -> Response {
     let message = redact_secret_like_text(&error.message);
     let mut response = (
@@ -2468,6 +3544,14 @@ fn http_error_response(error: HttpError) -> Response {
             HeaderValue::from_static(r#"Bearer realm="arcwell-local""#),
         );
     }
+    with_http_security_headers(response)
+}
+
+fn redirect_to_ops_ui(location: &str) -> Response {
+    let location =
+        HeaderValue::from_str(location).unwrap_or_else(|_| HeaderValue::from_static("/ops/ui"));
+    let mut response = (StatusCode::SEE_OTHER, "").into_response();
+    response.headers_mut().insert(header::LOCATION, location);
     with_http_security_headers(response)
 }
 
@@ -2660,13 +3744,45 @@ fn redact_high_entropy_token(token: &str) -> String {
     token.to_string()
 }
 
+#[derive(Debug, Default)]
+struct OpsUiOptions {
+    q: Option<String>,
+    status: Option<String>,
+    sort: String,
+    detail: Option<String>,
+    notice: Option<String>,
+}
+
+impl OpsUiOptions {
+    fn from_query(query: OpsUiQuery) -> Self {
+        Self {
+            q: trimmed_non_empty(query.q),
+            status: trimmed_non_empty(query.status),
+            sort: trimmed_non_empty(query.sort).unwrap_or_else(|| "updated_desc".to_string()),
+            detail: trimmed_non_empty(query.detail),
+            notice: trimmed_non_empty(query.notice),
+        }
+    }
+}
+
+#[cfg(test)]
 fn render_ops_ui(snapshot: &OpsSnapshot) -> String {
+    render_ops_ui_with_options(snapshot, &OpsUiOptions::default(), None, false)
+}
+
+fn render_ops_ui_with_options(
+    snapshot: &OpsSnapshot,
+    options: &OpsUiOptions,
+    csrf_token: Option<&str>,
+    controls_enabled: bool,
+) -> String {
     let health_class = if snapshot.health.ok { "ok" } else { "bad" };
     let failed_deliveries = snapshot
         .channel_delivery_attempts
         .iter()
         .filter(|attempt| !attempt.ok)
         .count();
+    let health_score = ops_health_score(snapshot);
     let mut html = String::new();
     html.push_str(
         r#"<!doctype html>
@@ -2681,19 +3797,25 @@ body{margin:0;background:#f6f7f9;color:#1f2328}
 main{max-width:1440px;margin:0 auto;padding:24px}
 h1{font-size:28px;margin:0 0 6px}
 h2{font-size:18px;margin:0 0 10px}
-p{margin:4px 0 14px}.muted{color:#57606a}
+p{margin:4px 0 14px}.muted{color:#57606a}.notice{border-left:4px solid #1f6feb;padding:8px 10px;background:white}
 .section{margin-top:24px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}
 .metric{border:1px solid #d8dee4;background:white;padding:10px;border-radius:6px;min-width:0}
 .metric span{display:block;color:#57606a;font-size:12px}.metric b{display:block;font-size:22px;margin-top:4px}
+.ops-form{display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;align-items:end;margin-top:18px}
+.ops-form label{display:grid;gap:4px;font-size:12px;color:#57606a}
+input,select,button{font:inherit;border:1px solid #d8dee4;border-radius:6px;background:white;color:inherit;padding:7px}
+button{font-weight:600;cursor:pointer}.danger{color:#b42318}.actions form{display:flex;gap:6px;flex-wrap:wrap}.actions input[name=reason]{min-width:220px}
+.detail{border:1px solid #d8dee4;background:white;padding:12px;border-radius:6px}
 .ok{color:#116329}.bad{color:#b42318}.warn{color:#9a6700}.pill{font-size:13px;font-weight:600}
 table{width:100%;border-collapse:collapse;background:white;border:1px solid #d8dee4}
 th,td{text-align:left;border-bottom:1px solid #d8dee4;padding:8px;vertical-align:top;font-size:13px}
 th{background:#eef2f6}
+a{color:#0969da;text-decoration:none}a:hover{text-decoration:underline}
 code,pre{white-space:pre-wrap;word-break:break-word}
 .scroll{overflow:auto}
-@media (max-width:720px){main{padding:14px}h1{font-size:24px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}th,td{font-size:12px;padding:7px}}
-@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}.muted,.metric span{color:#8b949e}.metric,table{background:#161b22;border-color:#30363d}th,td{border-color:#30363d}th{background:#21262d}}
+@media (max-width:720px){main{padding:14px}h1{font-size:24px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ops-form{grid-template-columns:1fr}th,td{font-size:12px;padding:7px}}
+@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}.muted,.metric span,.ops-form label{color:#8b949e}.metric,table,.detail,.notice,input,select,button{background:#161b22;border-color:#30363d}th,td{border-color:#30363d}th{background:#21262d}a{color:#58a6ff}}
 </style>
 </head>
 <body><main>"#,
@@ -2707,9 +3829,17 @@ code,pre{white-space:pre-wrap;word-break:break-word}
             "needs attention"
         }
     ));
-    html.push_str("<p class=\"muted\">Read-only localhost operations snapshot. Mutating controls are intentionally absent until narrow authenticated actions are added.</p>");
+    html.push_str("<p class=\"muted\">Local operations snapshot with filtered queues, source health, credential summaries, and narrow authenticated remediation controls where supported.</p>");
+    if let Some(notice) = &options.notice {
+        html.push_str(&format!(
+            "<p class=\"notice\">{}</p>",
+            html_escape(&ops_notice_text(notice))
+        ));
+    }
+    html.push_str(&render_ops_filter_form(options));
     html.push_str("<section class=\"grid\">");
     for (label, value) in [
+        ("Health score", health_score.score as usize),
         ("Jobs", snapshot.jobs.len()),
         ("Dead letters", snapshot.health.dead_lettered_jobs as usize),
         ("Edge events", snapshot.edge_events.len()),
@@ -2735,6 +3865,10 @@ code,pre{white-space:pre-wrap;word-break:break-word}
         ));
     }
     html.push_str("</section>");
+    html.push_str(&render_ops_summary(snapshot, &health_score));
+    if let Some(detail) = &options.detail {
+        html.push_str(&render_ops_detail(snapshot, detail));
+    }
     if !snapshot.health.warnings.is_empty() {
         html.push_str("<section class=\"section\"><h2>Warnings</h2><ul>");
         for warning in &snapshot.health.warnings {
@@ -2763,35 +3897,48 @@ code,pre{white-space:pre-wrap;word-break:break-word}
             snapshot.health.warnings.join("\n"),
         ]],
     ));
-    html.push_str(&ops_table(
+    html.push_str(&ops_table_with_raw_columns(
         "Jobs",
         &[
-            "kind", "status", "attempts", "worker", "next run", "updated", "error",
+            "id", "kind", "status", "attempts", "worker", "next run", "updated", "error",
         ],
-        snapshot.jobs.iter().take(50).map(|job| {
-            vec![
-                job.kind.clone(),
-                job.status.clone(),
-                format!("{}/{}", job.attempts, job.max_attempts),
-                job.worker_id.clone().unwrap_or_default(),
-                job.next_run_at.clone().unwrap_or_default(),
-                job.updated_at.clone(),
-                job.error.clone().unwrap_or_default(),
-            ]
-        }),
+        filtered_jobs(snapshot, options)
+            .into_iter()
+            .take(75)
+            .map(|job| {
+                vec![
+                    detail_link("job", &job.id, &short_id(&job.id)),
+                    job.kind.clone(),
+                    job.status.clone(),
+                    format!("{}/{}", job.attempts, job.max_attempts),
+                    job.worker_id.clone().unwrap_or_default(),
+                    job.next_run_at.clone().unwrap_or_default(),
+                    job.updated_at.clone(),
+                    job.error.clone().unwrap_or_default(),
+                ]
+            }),
+        &[0],
     ));
-    html.push_str(&ops_table(
+    html.push_str(&ops_table_with_raw_columns(
         "Edge Events",
-        &["source", "status", "attempts", "updated", "error"],
-        snapshot.edge_events.iter().take(50).map(|event| {
-            vec![
-                event.source.clone(),
-                event.status.clone(),
-                format!("{}/{}", event.attempts, event.max_attempts),
-                event.updated_at.clone(),
-                event.error.clone().unwrap_or_default(),
-            ]
-        }),
+        &[
+            "id", "source", "status", "attempts", "updated", "error", "action",
+        ],
+        filtered_edge_events(snapshot, options)
+            .into_iter()
+            .take(75)
+            .map(|event| {
+                vec![
+                    detail_link("edge", &event.id, &short_id(&event.id)),
+                    event.source.clone(),
+                    event.status.clone(),
+                    format!("{}/{}", event.attempts, event.max_attempts),
+                    event.updated_at.clone(),
+                    event.error.clone().unwrap_or_default(),
+                    render_edge_event_action(event, csrf_token, controls_enabled),
+                ]
+            }),
+        &[0, 6],
     ));
     html.push_str(&ops_table(
         "Cursors",
@@ -2807,16 +3954,19 @@ code,pre{white-space:pre-wrap;word-break:break-word}
     html.push_str(&ops_table(
         "Watch Sources",
         &["kind", "label", "locator", "cadence", "status", "updated"],
-        snapshot.watch_sources.iter().take(100).map(|source| {
-            vec![
-                source.source_kind.clone(),
-                source.label.clone(),
-                source.locator.clone(),
-                source.cadence.clone(),
-                source.status.clone(),
-                source.updated_at.clone(),
-            ]
-        }),
+        filtered_watch_sources(snapshot, options)
+            .into_iter()
+            .take(100)
+            .map(|source| {
+                vec![
+                    source.source_kind.clone(),
+                    source.label.clone(),
+                    source.locator.clone(),
+                    source.cadence.clone(),
+                    source.status.clone(),
+                    source.updated_at.clone(),
+                ]
+            }),
     ));
     html.push_str(&ops_table(
         "Source Health",
@@ -2829,17 +3979,20 @@ code,pre{white-space:pre-wrap;word-break:break-word}
             "last failure",
             "error",
         ],
-        snapshot.source_health.iter().take(100).map(|health| {
-            vec![
-                health.provider.clone(),
-                health.source_kind.clone(),
-                health.locator.clone(),
-                health.status.clone(),
-                health.last_success_at.clone().unwrap_or_default(),
-                health.last_failure_at.clone().unwrap_or_default(),
-                health.last_error.clone().unwrap_or_default(),
-            ]
-        }),
+        filtered_source_health(snapshot, options)
+            .into_iter()
+            .take(100)
+            .map(|health| {
+                vec![
+                    health.provider.clone(),
+                    health.source_kind.clone(),
+                    health.locator.clone(),
+                    health.status.clone(),
+                    health.last_success_at.clone().unwrap_or_default(),
+                    health.last_failure_at.clone().unwrap_or_default(),
+                    health.last_error.clone().unwrap_or_default(),
+                ]
+            }),
     ));
     html.push_str(&ops_table(
         "Source Cards",
@@ -3122,17 +4275,20 @@ code,pre{white-space:pre-wrap;word-break:break-word}
         &[
             "name", "scope", "provider", "source", "present", "status", "warnings",
         ],
-        snapshot.secret_health.iter().take(100).map(|secret| {
-            vec![
-                secret.name.clone(),
-                secret.scope.clone(),
-                secret.provider.clone().unwrap_or_default(),
-                secret.source.clone(),
-                secret.present.to_string(),
-                secret.status.clone(),
-                secret.warnings.join("\n"),
-            ]
-        }),
+        filtered_secret_health(snapshot, options)
+            .into_iter()
+            .take(100)
+            .map(|secret| {
+                vec![
+                    secret.name.clone(),
+                    secret.scope.clone(),
+                    secret.provider.clone().unwrap_or_default(),
+                    secret.source.clone(),
+                    secret.present.to_string(),
+                    secret.status.clone(),
+                    secret.warnings.join("\n"),
+                ]
+            }),
     ));
     html.push_str(&ops_table(
         "Secret References",
@@ -3159,6 +4315,18 @@ fn ops_table<I>(title: &str, headers: &[&str], rows: I) -> String
 where
     I: IntoIterator<Item = Vec<String>>,
 {
+    ops_table_with_raw_columns(title, headers, rows, &[])
+}
+
+fn ops_table_with_raw_columns<I>(
+    title: &str,
+    headers: &[&str],
+    rows: I,
+    raw_columns: &[usize],
+) -> String
+where
+    I: IntoIterator<Item = Vec<String>>,
+{
     let mut html = format!(
         "<section class=\"section\"><h2>{}</h2><div class=\"scroll\"><table><thead><tr>",
         html_escape(title)
@@ -3171,8 +4339,12 @@ where
     for row in rows {
         any = true;
         html.push_str("<tr>");
-        for cell in row {
-            html.push_str(&format!("<td>{}</td>", html_escape(&cell)));
+        for (index, cell) in row.into_iter().enumerate() {
+            if raw_columns.contains(&index) {
+                html.push_str(&format!("<td>{cell}</td>"));
+            } else {
+                html.push_str(&format!("<td>{}</td>", html_escape(&cell)));
+            }
         }
         html.push_str("</tr>");
     }
@@ -3184,6 +4356,479 @@ where
     }
     html.push_str("</tbody></table></div></section>");
     html
+}
+
+#[derive(Debug)]
+struct OpsHealthScore {
+    score: i64,
+    label: &'static str,
+    issues: Vec<String>,
+}
+
+fn ops_health_score(snapshot: &OpsSnapshot) -> OpsHealthScore {
+    let failed_jobs = snapshot
+        .jobs
+        .iter()
+        .filter(|job| matches!(job.status.as_str(), "failed" | "dead_lettered"))
+        .count() as i64;
+    let dead_edge = snapshot
+        .edge_events
+        .iter()
+        .filter(|event| event.status == "dead_lettered")
+        .count() as i64;
+    let failed_sources = snapshot
+        .source_health
+        .iter()
+        .filter(|source| source.status != "healthy")
+        .count() as i64;
+    let bad_secrets = snapshot
+        .secret_health
+        .iter()
+        .filter(|secret| !secret.present || secret.status != "ok")
+        .count() as i64;
+    let failed_deliveries = snapshot
+        .channel_delivery_attempts
+        .iter()
+        .filter(|attempt| !attempt.ok)
+        .count() as i64;
+    let mut issues = Vec::new();
+    if !snapshot.health.ok {
+        issues.push("base health report is failing".to_string());
+    }
+    if failed_jobs > 0 {
+        issues.push(format!("{failed_jobs} failed or dead-lettered wiki jobs"));
+    }
+    if dead_edge > 0 {
+        issues.push(format!("{dead_edge} dead-lettered edge events"));
+    }
+    if failed_sources > 0 {
+        issues.push(format!("{failed_sources} non-healthy sources"));
+    }
+    if bad_secrets > 0 {
+        issues.push(format!("{bad_secrets} missing or unhealthy credentials"));
+    }
+    if failed_deliveries > 0 {
+        issues.push(format!("{failed_deliveries} failed channel deliveries"));
+    }
+    for warning in &snapshot.health.warnings {
+        issues.push(warning.clone());
+    }
+    let penalty = (snapshot.health.warnings.len() as i64 * 8)
+        + (failed_jobs * 8)
+        + (dead_edge * 8)
+        + (failed_sources * 5)
+        + (bad_secrets * 6)
+        + (failed_deliveries * 4)
+        + if snapshot.health.ok { 0 } else { 12 };
+    let score = (100 - penalty).clamp(0, 100);
+    let label = if score >= 90 {
+        "good"
+    } else if score >= 70 {
+        "watch"
+    } else {
+        "needs attention"
+    };
+    OpsHealthScore {
+        score,
+        label,
+        issues,
+    }
+}
+
+fn render_ops_filter_form(options: &OpsUiOptions) -> String {
+    let q = options.q.clone().unwrap_or_default();
+    let status = options.status.clone().unwrap_or_default();
+    let sort = if options.sort.is_empty() {
+        "updated_desc"
+    } else {
+        options.sort.as_str()
+    };
+    let sort_options = [
+        ("updated_desc", "Updated newest"),
+        ("updated_asc", "Updated oldest"),
+        ("status", "Status"),
+        ("kind", "Kind/source"),
+        ("attempts_desc", "Attempts"),
+    ];
+    let mut html = format!(
+        "<form class=\"ops-form\" method=\"get\" action=\"/ops/ui\"><label>Search<input name=\"q\" value=\"{}\" placeholder=\"queue, source, credential, error\"></label><label>Status<input name=\"status\" value=\"{}\" placeholder=\"failed, pending, ok\"></label><label>Sort<select name=\"sort\">",
+        html_escape(&q),
+        html_escape(&status)
+    );
+    for (value, label) in sort_options {
+        let selected = if value == sort { " selected" } else { "" };
+        html.push_str(&format!(
+            "<option value=\"{}\"{}>{}</option>",
+            html_escape(value),
+            selected,
+            html_escape(label)
+        ));
+    }
+    html.push_str("</select></label><button type=\"submit\">Apply</button></form>");
+    html
+}
+
+fn render_ops_summary(snapshot: &OpsSnapshot, score: &OpsHealthScore) -> String {
+    let mut html = String::new();
+    html.push_str("<section class=\"section\"><h2>Summary</h2><section class=\"grid\">");
+    for (label, value) in [
+        ("Health", format!("{} ({})", score.score, score.label)),
+        (
+            "Queue statuses",
+            summarize_counts(snapshot.jobs.iter().map(|job| job.status.as_str())),
+        ),
+        (
+            "Job kinds",
+            summarize_counts(snapshot.jobs.iter().map(|job| job.kind.as_str())),
+        ),
+        (
+            "Edge statuses",
+            summarize_counts(
+                snapshot
+                    .edge_events
+                    .iter()
+                    .map(|event| event.status.as_str()),
+            ),
+        ),
+        (
+            "Edge sources",
+            summarize_counts(
+                snapshot
+                    .edge_events
+                    .iter()
+                    .map(|event| event.source.as_str()),
+            ),
+        ),
+        (
+            "Source statuses",
+            summarize_counts(
+                snapshot
+                    .source_health
+                    .iter()
+                    .map(|source| source.status.as_str()),
+            ),
+        ),
+        (
+            "Credential statuses",
+            summarize_counts(
+                snapshot
+                    .secret_health
+                    .iter()
+                    .map(|secret| secret.status.as_str()),
+            ),
+        ),
+    ] {
+        html.push_str(&format!(
+            "<div class=\"metric\"><span>{}</span><b>{}</b></div>",
+            html_escape(label),
+            html_escape(&value)
+        ));
+    }
+    html.push_str("</section>");
+    if !score.issues.is_empty() {
+        html.push_str("<ul>");
+        for issue in score.issues.iter().take(8) {
+            html.push_str(&format!("<li class=\"warn\">{}</li>", html_escape(issue)));
+        }
+        html.push_str("</ul>");
+    }
+    html.push_str("</section>");
+    html
+}
+
+fn render_ops_detail(snapshot: &OpsSnapshot, detail: &str) -> String {
+    let Some((kind, id)) = detail.split_once(':') else {
+        return format!(
+            "<section class=\"section detail\"><h2>Detail</h2><p class=\"bad\">Unsupported detail target: {}</p></section>",
+            html_escape(detail)
+        );
+    };
+    let value = match kind {
+        "job" => snapshot
+            .jobs
+            .iter()
+            .find(|job| job.id == id)
+            .and_then(|job| serde_json::to_value(job).ok()),
+        "edge" => snapshot
+            .edge_events
+            .iter()
+            .find(|event| event.id == id)
+            .and_then(|event| serde_json::to_value(event).ok()),
+        "secret" => snapshot
+            .secret_health
+            .iter()
+            .find(|secret| secret.name == id)
+            .and_then(|secret| serde_json::to_value(secret).ok()),
+        _ => None,
+    };
+    match value {
+        Some(value) => format!(
+            "<section class=\"section detail\"><h2>Detail: {}</h2><pre>{}</pre></section>",
+            html_escape(detail),
+            html_escape(&json_cell(&value))
+        ),
+        None => format!(
+            "<section class=\"section detail\"><h2>Detail</h2><p class=\"bad\">No matching ops detail for {}</p></section>",
+            html_escape(detail)
+        ),
+    }
+}
+
+fn filtered_jobs<'a>(
+    snapshot: &'a OpsSnapshot,
+    options: &OpsUiOptions,
+) -> Vec<&'a arcwell_core::WikiJob> {
+    let mut jobs = snapshot
+        .jobs
+        .iter()
+        .filter(|job| {
+            matches_status(&job.status, options)
+                && matches_query(
+                    options,
+                    [
+                        job.id.as_str(),
+                        job.kind.as_str(),
+                        job.status.as_str(),
+                        job.worker_id.as_deref().unwrap_or_default(),
+                        job.error.as_deref().unwrap_or_default(),
+                    ],
+                )
+        })
+        .collect::<Vec<_>>();
+    jobs.sort_by(|left, right| match normalized_sort(options) {
+        "updated_asc" => left.updated_at.cmp(&right.updated_at),
+        "status" => left
+            .status
+            .cmp(&right.status)
+            .then(left.updated_at.cmp(&right.updated_at)),
+        "kind" => left
+            .kind
+            .cmp(&right.kind)
+            .then(right.updated_at.cmp(&left.updated_at)),
+        "attempts_desc" => right
+            .attempts
+            .cmp(&left.attempts)
+            .then(right.updated_at.cmp(&left.updated_at)),
+        _ => right.updated_at.cmp(&left.updated_at),
+    });
+    jobs
+}
+
+fn filtered_edge_events<'a>(
+    snapshot: &'a OpsSnapshot,
+    options: &OpsUiOptions,
+) -> Vec<&'a arcwell_core::EdgeEvent> {
+    let mut events = snapshot
+        .edge_events
+        .iter()
+        .filter(|event| {
+            matches_status(&event.status, options)
+                && matches_query(
+                    options,
+                    [
+                        event.id.as_str(),
+                        event.source.as_str(),
+                        event.idempotency_key.as_str(),
+                        event.status.as_str(),
+                        event.error.as_deref().unwrap_or_default(),
+                    ],
+                )
+        })
+        .collect::<Vec<_>>();
+    events.sort_by(|left, right| match normalized_sort(options) {
+        "updated_asc" => left.updated_at.cmp(&right.updated_at),
+        "status" => left
+            .status
+            .cmp(&right.status)
+            .then(left.updated_at.cmp(&right.updated_at)),
+        "kind" => left
+            .source
+            .cmp(&right.source)
+            .then(right.updated_at.cmp(&left.updated_at)),
+        "attempts_desc" => right
+            .attempts
+            .cmp(&left.attempts)
+            .then(right.updated_at.cmp(&left.updated_at)),
+        _ => right.updated_at.cmp(&left.updated_at),
+    });
+    events
+}
+
+fn filtered_watch_sources<'a>(
+    snapshot: &'a OpsSnapshot,
+    options: &OpsUiOptions,
+) -> Vec<&'a arcwell_core::WatchSource> {
+    snapshot
+        .watch_sources
+        .iter()
+        .filter(|source| {
+            matches_status(&source.status, options)
+                && matches_query(
+                    options,
+                    [
+                        source.source_kind.as_str(),
+                        source.label.as_str(),
+                        source.locator.as_str(),
+                        source.cadence.as_str(),
+                        source.status.as_str(),
+                    ],
+                )
+        })
+        .collect()
+}
+
+fn filtered_source_health<'a>(
+    snapshot: &'a OpsSnapshot,
+    options: &OpsUiOptions,
+) -> Vec<&'a arcwell_core::SourceHealth> {
+    snapshot
+        .source_health
+        .iter()
+        .filter(|health| {
+            matches_status(&health.status, options)
+                && matches_query(
+                    options,
+                    [
+                        health.provider.as_str(),
+                        health.source_kind.as_str(),
+                        health.locator.as_str(),
+                        health.status.as_str(),
+                        health.last_error.as_deref().unwrap_or_default(),
+                    ],
+                )
+        })
+        .collect()
+}
+
+fn filtered_secret_health<'a>(
+    snapshot: &'a OpsSnapshot,
+    options: &OpsUiOptions,
+) -> Vec<&'a arcwell_core::SecretHealth> {
+    snapshot
+        .secret_health
+        .iter()
+        .filter(|secret| {
+            matches_status(&secret.status, options)
+                && matches_query(
+                    options,
+                    [
+                        secret.name.as_str(),
+                        secret.scope.as_str(),
+                        secret.provider.as_deref().unwrap_or_default(),
+                        secret.source.as_str(),
+                        secret.status.as_str(),
+                    ],
+                )
+        })
+        .collect()
+}
+
+fn render_edge_event_action(
+    event: &arcwell_core::EdgeEvent,
+    csrf_token: Option<&str>,
+    controls_enabled: bool,
+) -> String {
+    if !is_dead_letterable_edge_status(&event.status) {
+        return "No safe action for this status.".to_string();
+    }
+    let Some(csrf_token) = csrf_token else {
+        return "Open /ops/ui from the authenticated HTTP server to use controls.".to_string();
+    };
+    if !controls_enabled {
+        return "Disabled: start server with ARCWELL_HTTP_AUTH_TOKEN to enable mutations."
+            .to_string();
+    }
+    format!(
+        "<div class=\"actions\"><form method=\"post\" action=\"/ops/actions/edge-events/dead-letter\"><input type=\"hidden\" name=\"csrf_token\" value=\"{}\"><input type=\"hidden\" name=\"edge_event_id\" value=\"{}\"><input type=\"hidden\" name=\"idempotency_key\" value=\"{}\"><input name=\"reason\" value=\"manual ops review\" maxlength=\"1000\"><button class=\"danger\" type=\"submit\">Dead-letter</button></form></div>",
+        html_escape(csrf_token),
+        html_escape(&event.id),
+        html_escape(&format!("ops-ui-{}", event.id))
+    )
+}
+
+fn matches_status(status: &str, options: &OpsUiOptions) -> bool {
+    options
+        .status
+        .as_deref()
+        .map(|filter| {
+            status
+                .to_ascii_lowercase()
+                .contains(&filter.to_ascii_lowercase())
+        })
+        .unwrap_or(true)
+}
+
+fn matches_query<'a>(options: &OpsUiOptions, values: impl IntoIterator<Item = &'a str>) -> bool {
+    let Some(query) = options.q.as_deref() else {
+        return true;
+    };
+    let query = query.to_ascii_lowercase();
+    values
+        .into_iter()
+        .any(|value| value.to_ascii_lowercase().contains(&query))
+}
+
+fn normalized_sort(options: &OpsUiOptions) -> &str {
+    match options.sort.as_str() {
+        "updated_asc" | "status" | "kind" | "attempts_desc" => options.sort.as_str(),
+        _ => "updated_desc",
+    }
+}
+
+fn summarize_counts<'a>(values: impl Iterator<Item = &'a str>) -> String {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for value in values {
+        *counts.entry(value.to_string()).or_default() += 1;
+    }
+    if counts.is_empty() {
+        return "none".to_string();
+    }
+    counts
+        .into_iter()
+        .map(|(key, count)| format!("{key}:{count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn detail_link(kind: &str, id: &str, label: &str) -> String {
+    format!(
+        "<a href=\"/ops/ui?detail={}:{}\">{}</a>",
+        html_escape(kind),
+        html_escape(&url_component(id)),
+        html_escape(label)
+    )
+}
+
+fn short_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+fn trimmed_non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn ops_notice_text(notice: &str) -> String {
+    match notice {
+        "dead_lettered" => "Edge event dead-lettered.".to_string(),
+        "duplicate" => {
+            "Duplicate idempotency key ignored; no second mutation was applied.".to_string()
+        }
+        other => format!("Ops notice: {other}"),
+    }
+}
+
+fn url_component(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 fn html_escape(value: &str) -> String {
@@ -3553,6 +5198,40 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 projected_usd
             )?))
         }
+        "policy_check" => Ok(json!(
+            store.policy_check(policy_request_from_mcp_args(&arguments,)?)?
+        )),
+        "policy_explain" => Ok(json!(
+            store.policy_explain(policy_request_from_mcp_args(&arguments,)?)?
+        )),
+        "policy_decision_list" => {
+            let limit = optional_usize(&arguments, "limit", 50);
+            Ok(json!(store.list_policy_decisions(limit)?))
+        }
+        "policy_rule_list" => Ok(json!(store.list_policy_rules()?)),
+        "policy_override_allow" => {
+            let reason = required_string(&arguments, "reason")?;
+            let expires_at = required_string(&arguments, "expires_at")?;
+            Ok(json!(store.create_policy_allow_override(
+                policy_request_from_mcp_args(&arguments)?,
+                &reason,
+                &expires_at,
+            )?))
+        }
+        "policy_approval_list" => {
+            let status = arguments.get("status").and_then(Value::as_str);
+            Ok(json!(store.list_policy_approvals(status)?))
+        }
+        "policy_approval_approve" => {
+            let id = required_string(&arguments, "id")?;
+            let reason = arguments.get("reason").and_then(Value::as_str);
+            Ok(json!(store.approve_policy_approval(&id, reason)?))
+        }
+        "policy_approval_reject" => {
+            let id = required_string(&arguments, "id")?;
+            let reason = arguments.get("reason").and_then(Value::as_str);
+            Ok(json!(store.reject_policy_approval(&id, reason)?))
+        }
         "research_plan" => {
             let query = required_string(&arguments, "query")?;
             let max_sources = arguments
@@ -3659,6 +5338,27 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 confidence
             )?))
         }
+        "project_status_sync_record" => {
+            let project_id = required_string(&arguments, "project_id")?;
+            let status = required_string(&arguments, "status")?;
+            let summary = required_string(&arguments, "summary")?;
+            let host = required_string(&arguments, "host")?;
+            let thread_id = required_string(&arguments, "thread_id")?;
+            let confidence = arguments
+                .get("confidence")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.8);
+            let stale_after_seconds = arguments.get("stale_after_seconds").and_then(Value::as_i64);
+            Ok(json!(store.record_verified_project_status_sync(
+                &project_id,
+                &status,
+                &summary,
+                &host,
+                &thread_id,
+                confidence,
+                stale_after_seconds
+            )?))
+        }
         "project_status_get" => {
             let project_id = required_string(&arguments, "project_id")?;
             let channel = arguments.get("channel").and_then(Value::as_str);
@@ -3755,6 +5455,35 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
             let run_id = required_string(&arguments, "run_id")?;
             Ok(json!(store.read_work_run(&run_id)?))
         }
+        "work_run_stale" => {
+            let max_age_days = arguments
+                .get("max_age_days")
+                .and_then(Value::as_i64)
+                .unwrap_or(7);
+            let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(25) as usize;
+            Ok(json!(store.list_stale_work_runs(max_age_days, limit)?))
+        }
+        "work_follow_up_list" => {
+            let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(25) as usize;
+            Ok(json!(store.list_work_follow_ups(limit)?))
+        }
+        "work_consolidation_candidates" => {
+            let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(25) as usize;
+            Ok(json!(store.list_work_consolidation_candidates(limit)?))
+        }
+        "work_retrieval_context" => {
+            let query = required_string(&arguments, "query")?;
+            let stale_after_days = arguments
+                .get("stale_after_days")
+                .and_then(Value::as_i64)
+                .unwrap_or(7);
+            let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
+            Ok(json!(store.work_retrieval_context(
+                &query,
+                stale_after_days,
+                limit
+            )?))
+        }
         "work_consolidate" => {
             let run_id = required_string(&arguments, "run_id")?;
             let write_project_status = optional_bool(&arguments, "write_project_status", false);
@@ -3827,6 +5556,18 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
         "procedure_read" => {
             let id = required_string(&arguments, "id")?;
             Ok(json!(store.read_procedure(&id)?))
+        }
+        "procedure_retrieval_context" => {
+            let query = required_string(&arguments, "query")?;
+            let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(5) as usize;
+            Ok(json!(store.procedure_retrieval_context(&query, limit)?))
+        }
+        "procedure_export_skill" => {
+            let id = required_string(&arguments, "id")?;
+            let skill_name = required_string(&arguments, "skill_name")?;
+            Ok(json!(
+                store.export_procedure_to_codex_skill(&id, &skill_name)?
+            ))
         }
         "procedure_curate" => Ok(json!(store.curate_procedures()?)),
         "channel_record" => {
@@ -3901,14 +5642,15 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
             let scope = optional_string(&arguments, "scope", "local");
             let provider = arguments.get("provider").and_then(Value::as_str);
             let expires_at = arguments.get("expires_at").and_then(Value::as_str);
-            store.set_secret_value_with_metadata(&name, &value, &scope, provider, expires_at)?;
+            store
+                .set_secret_value_with_policy(&name, &value, &scope, provider, expires_at, "mcp")?;
             Ok(json!({ "ok": true, "name": name }))
         }
         "secret_value_list" => Ok(json!(store.list_secret_values()?)),
         "secret_health" => Ok(json!(store.secret_health()?)),
         "secret_value_delete" => {
             let name = required_string(&arguments, "name")?;
-            Ok(json!({ "ok": store.delete_secret_value(&name)?, "name": name }))
+            Ok(json!({ "ok": store.delete_secret_value_with_policy(&name, "mcp")?, "name": name }))
         }
         "cursor_list" => Ok(json!(store.list_cursors()?)),
         "cursor_get" => {
@@ -4285,6 +6027,54 @@ fn mcp_tools() -> Vec<Value> {
             ],
         ),
         tool(
+            "policy_check",
+            "Evaluate and audit an Arcwell policy request.",
+            [(
+                "action",
+                "string",
+                "Policy action, such as provider.network.",
+            )],
+        ),
+        tool(
+            "policy_explain",
+            "Explain matching Arcwell policy rules without writing a decision record.",
+            [(
+                "action",
+                "string",
+                "Policy action, such as provider.network.",
+            )],
+        ),
+        tool(
+            "policy_decision_list",
+            "List recent Arcwell policy decisions.",
+            [],
+        ),
+        tool("policy_rule_list", "List active Arcwell policy rules.", []),
+        tool(
+            "policy_override_allow",
+            "Create a temporary allow rule in arcwell-policy.toml.",
+            [
+                ("action", "string", "Policy action to allow."),
+                ("reason", "string", "Human reason for the override."),
+                ("expires_at", "string", "RFC3339 expiration timestamp."),
+            ],
+        ),
+        tool(
+            "policy_approval_list",
+            "List pending or resolved Arcwell policy approvals.",
+            [],
+        ),
+        tool(
+            "policy_approval_approve",
+            "Mark a pending Arcwell policy approval as approved.",
+            [("id", "string", "Policy approval id.")],
+        ),
+        tool(
+            "policy_approval_reject",
+            "Mark a pending Arcwell policy approval as rejected.",
+            [("id", "string", "Policy approval id.")],
+        ),
+        tool(
             "research_plan",
             "Create a research plan using local wiki context and suggested host-native searches.",
             [("query", "string", "Research question or topic.")],
@@ -4339,11 +6129,22 @@ fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "project_status_record",
-            "Record a timestamped project status snapshot with provenance.",
+            "Record a timestamped manual/durable project status snapshot with provenance. Reserved live-sync sources are rejected.",
             [
                 ("project_id", "string", "Project id."),
                 ("status", "string", "Project status label."),
                 ("summary", "string", "Status summary."),
+            ],
+        ),
+        tool(
+            "project_status_sync_record",
+            "Record an explicit verified host-thread sync snapshot with a freshness marker after the host has listed/read a matching thread.",
+            [
+                ("project_id", "string", "Project id."),
+                ("status", "string", "Project status label."),
+                ("summary", "string", "Status summary."),
+                ("host", "string", "Host name: codex or claude."),
+                ("thread_id", "string", "Verified host thread id."),
             ],
         ),
         tool(
@@ -4407,6 +6208,26 @@ fn mcp_tools() -> Vec<Value> {
             [("run_id", "string", "Work run id.")],
         ),
         tool(
+            "work_run_stale",
+            "List active work-memory runs whose updated_at is stale for host follow-up.",
+            [],
+        ),
+        tool(
+            "work_follow_up_list",
+            "List recorded follow-up items from completed work-memory runs.",
+            [],
+        ),
+        tool(
+            "work_consolidation_candidates",
+            "List validated project-bound work runs ready for consolidation.",
+            [],
+        ),
+        tool(
+            "work_retrieval_context",
+            "Build host prompt context for stale work, consolidation candidates, and follow-ups.",
+            [("query", "string", "Host retrieval query.")],
+        ),
+        tool(
             "work_consolidate",
             "Create a project status proposal from work trace evidence without generated-summary-only citations.",
             [("run_id", "string", "Work run id.")],
@@ -4451,8 +6272,25 @@ fn mcp_tools() -> Vec<Value> {
             [("id", "string", "Procedure id.")],
         ),
         tool(
+            "procedure_retrieval_context",
+            "Build host prompt context from approved procedural memory with freshness/confidence warnings.",
+            [("query", "string", "Procedure retrieval query.")],
+        ),
+        tool(
+            "procedure_export_skill",
+            "Export an active approved procedure into Arcwell's Codex skill export directory.",
+            [
+                ("id", "string", "Procedure id."),
+                (
+                    "skill_name",
+                    "string",
+                    "Lowercase hyphenated Codex skill name.",
+                ),
+            ],
+        ),
+        tool(
             "procedure_curate",
-            "Create reviewable archive candidates for exact duplicate procedures.",
+            "Create reviewable merge/no-op candidates for duplicate or stale procedures.",
             [],
         ),
         tool(
@@ -4785,6 +6623,53 @@ fn optional_bool(arguments: &Value, key: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+fn optional_usize(arguments: &Value, key: &str, default: usize) -> usize {
+    arguments
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(default)
+}
+
+fn policy_request_from_mcp_args(arguments: &Value) -> Result<PolicyRequest> {
+    Ok(PolicyRequest {
+        action: required_string(arguments, "action")?,
+        package: arguments
+            .get("package")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        provider: arguments
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        source: arguments
+            .get("source")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        channel: arguments
+            .get("channel")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        subject: arguments
+            .get("subject")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        target: arguments
+            .get("target")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        projected_usd: arguments.get("projected_usd").and_then(Value::as_f64),
+        metadata: arguments
+            .get("metadata")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+        untrusted_excerpt: arguments
+            .get("untrusted_excerpt")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    })
+}
+
 fn string_array_argument(arguments: &Value, key: &str) -> Result<Vec<String>> {
     arguments
         .get(key)
@@ -4988,6 +6873,34 @@ mod tests {
     }
 
     #[test]
+    fn slash_command_files_have_cli_or_mcp_aliases() {
+        let command_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/arcwell-codex/commands");
+        let mut command_names = fs::read_dir(&command_dir)
+            .unwrap()
+            .map(|entry| {
+                entry
+                    .unwrap()
+                    .path()
+                    .file_stem()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        command_names.sort();
+        assert_eq!(command_names.len(), 99);
+        let missing = command_names
+            .into_iter()
+            .filter(|name| slash_alias_target(name).is_none() && !slash_alias_is_dynamic(name))
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "missing slash command aliases: {missing:?}"
+        );
+    }
+
+    #[test]
     fn severe_launch_agent_plist_escapes_paths_and_clamps_worker_args() {
         let plist = launch_agent_plist(
             std::path::Path::new("/tmp/arcwell & \"worker\""),
@@ -5143,6 +7056,74 @@ mod tests {
         assert!(serialized.contains("X_BEARER_TOKEN"));
         assert!(serialized.contains("expired"));
         assert!(!serialized.contains(&token));
+    }
+
+    #[test]
+    fn severe_mcp_policy_admin_and_secret_denial_round_trip() {
+        // CLAIM: MCP exposes policy admin tools and secret mutation tools enforce policy before SQLite writes.
+        // ORACLE: policy_check records a denial, secret_value_set fails with that denial, and no secret value exists.
+        // SEVERITY: Severe because MCP is an agent-facing boundary for policy and credential administration.
+        let paths = test_paths("mcp-policy-admin");
+        fs::create_dir_all(&paths.home).unwrap();
+        fs::write(
+            paths.home.join("arcwell-policy.toml"),
+            r#"
+[[rules]]
+id = "deny-mcp-secret"
+effect = "deny"
+action = "secret.write"
+source = "mcp"
+target = "BLOCKED_TOKEN"
+reason = "MCP secret writes are denied for this token"
+"#,
+        )
+        .unwrap();
+
+        let tools = mcp_tools();
+        let tool_names: BTreeSet<_> = tools
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect();
+        assert!(tool_names.contains("policy_check"));
+        assert!(tool_names.contains("policy_explain"));
+        assert!(tool_names.contains("policy_override_allow"));
+        assert!(tool_names.contains("policy_approval_approve"));
+        assert!(tool_names.contains("policy_approval_reject"));
+
+        let decision = call_mcp_tool(
+            &paths,
+            "policy_check",
+            json!({
+                "action": "secret.write",
+                "source": "mcp",
+                "target": "BLOCKED_TOKEN"
+            }),
+        )
+        .unwrap();
+        assert_eq!(decision["effect"], "deny");
+        assert_eq!(decision["matched_rule_id"], "deny-mcp-secret");
+
+        let error = call_mcp_tool(
+            &paths,
+            "secret_value_set",
+            json!({
+                "name": "BLOCKED_TOKEN",
+                "value": "blocked-secret-value",
+                "scope": "local"
+            }),
+        )
+        .expect_err("denied MCP secret write must fail before mutation")
+        .to_string();
+        assert!(error.contains("policy denied secret.write"), "{error}");
+        assert!(!error.contains("blocked-secret-value"), "{error}");
+
+        let values = call_mcp_tool(&paths, "secret_value_list", json!({})).unwrap();
+        assert_eq!(values.as_array().unwrap().len(), 0);
+        let decisions =
+            call_mcp_tool(&paths, "policy_decision_list", json!({ "limit": 10 })).unwrap();
+        assert!(decisions.as_array().unwrap().iter().any(|decision| {
+            decision["action"] == "secret.write" && decision["effect"] == "deny"
+        }));
     }
 
     #[test]
@@ -5900,85 +7881,273 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
         assert!(!html.contains("<math href="));
     }
 
-    #[tokio::test]
-    async fn severe_ops_ui_read_only_auth_origin_and_repeated_post_fail_closed() {
-        // CLAIM: The ops UI has no mutating controls; direct mutation attempts still require auth/origin and fail closed.
-        // ORACLE: Missing auth is 401, hostile Origin is 403, repeated authorized POSTs are 405 with no state mutation.
-        let state = test_http_state("ops-ui-read-only", Some("local-auth-token-123"));
-        Store::open(state.paths.clone()).unwrap();
+    #[test]
+    fn severe_ops_ui_filters_sorts_summarizes_and_details_without_raw_html() {
+        // CLAIM: Ops UI filtering/detail views expose queue state without turning stored payloads into executable HTML.
+        // PRECONDITIONS: Edge payloads and errors may contain attacker HTML.
+        // ORACLE: Filtered HTML includes matching rows/details and omits non-matching rows; raw hostile HTML never appears.
+        // SEVERITY: Severe because ops pages aggregate untrusted provider/channel failure data.
+        let paths = test_paths("ops-ui-filters");
+        let store = Store::open(paths).unwrap();
+        let visible = store
+            .enqueue_edge_event(
+                "telegram",
+                "telegram:ops-ui-filter",
+                json!({ "text": "<script>alert('detail')</script>" }),
+                3600,
+            )
+            .unwrap();
+        store
+            .enqueue_edge_event(
+                "rss",
+                "rss:ops-ui-filter",
+                json!({ "text": "hidden" }),
+                3600,
+            )
+            .unwrap();
+        let job = store
+            .enqueue_wiki_job("ingest_file", json!({ "path": "/tmp/ops-ui-filter" }))
+            .unwrap();
 
-        let (missing_auth_status, _) = response_text(
-            http_ops_ui(
+        let snapshot = store.ops_snapshot().unwrap();
+        let html = render_ops_ui_with_options(
+            &snapshot,
+            &OpsUiOptions {
+                q: Some("telegram".to_string()),
+                status: Some("pending".to_string()),
+                sort: "status".to_string(),
+                detail: Some(format!("edge:{}", visible.id)),
+                notice: Some("duplicate".to_string()),
+            },
+            Some("csrf-token-123"),
+            true,
+        );
+
+        assert!(html.contains("Health score"));
+        assert!(html.contains("Queue statuses"));
+        assert!(html.contains("Credential statuses"));
+        assert!(html.contains("Duplicate idempotency key ignored"));
+        assert!(html.contains(&short_id(&visible.id)));
+        assert!(html.contains("Dead-letter"));
+        assert!(html.contains("telegram:ops-ui-filter"));
+        assert!(!html.contains("rss:ops-ui-filter"));
+        assert!(!html.contains(&short_id(&job.id)));
+        assert!(!html.contains("<script>alert('detail')</script>"));
+        assert!(html.contains("&lt;script&gt;alert(&#39;detail&#39;)&lt;/script&gt;"));
+    }
+
+    #[tokio::test]
+    async fn severe_ops_ui_edge_dead_letter_requires_auth_csrf_idempotency_and_policy() {
+        // CLAIM: The only ops UI mutation is narrow and fails closed without auth, local Origin, CSRF, idempotency, and policy allow.
+        // POSTCONDITIONS: Failed attempts do not change event status; duplicate successful submissions do not reapply or re-audit.
+        // ORACLE: HTTP status, edge-event state, redacted stored error, and policy decision count.
+        // SEVERITY: Severe because this is an authenticated local remediation control over durable queue state.
+        let unauthenticated = test_http_state("ops-ui-no-auth-mutation", None);
+        let unauth_store = Store::open(unauthenticated.paths.clone()).unwrap();
+        let unauth_event = unauth_store
+            .enqueue_edge_event(
+                "telegram",
+                "telegram:no-auth",
+                json!({ "text": "hello" }),
+                3600,
+            )
+            .unwrap();
+        let (no_config_status, no_config_json) = response_json(
+            http_ops_edge_event_dead_letter(
+                State(unauthenticated.clone()),
+                HeaderMap::new(),
+                Uri::from_static("/ops/actions/edge-events/dead-letter"),
+                Bytes::from(dead_letter_body(
+                    &unauthenticated.csrf_token,
+                    "no-auth-key",
+                    &unauth_event.id,
+                    "should fail",
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(no_config_status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            no_config_json
+                .pointer("/error/type")
+                .and_then(Value::as_str),
+            Some("mutation_auth_required")
+        );
+        assert_eq!(
+            unauth_store
+                .get_edge_event(&unauth_event.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "pending"
+        );
+
+        let state = test_http_state("ops-ui-dead-letter", Some("local-auth-token-123"));
+        let store = Store::open(state.paths.clone()).unwrap();
+        let event = store
+            .enqueue_edge_event(
+                "telegram",
+                "telegram:dead-letter",
+                json!({ "text": "hello" }),
+                3600,
+            )
+            .unwrap();
+        let valid_body = dead_letter_body(
+            &state.csrf_token,
+            "ops-ui-dead-letter-denied",
+            &event.id,
+            "manual review",
+        );
+
+        let (missing_auth_status, _) = response_json(
+            http_ops_edge_event_dead_letter(
                 State(state.clone()),
                 HeaderMap::new(),
-                Uri::from_static("/ops/ui"),
+                Uri::from_static("/ops/actions/edge-events/dead-letter"),
+                Bytes::from(valid_body.clone()),
             )
             .await,
         )
         .await;
         assert_eq!(missing_auth_status, StatusCode::UNAUTHORIZED);
 
-        let mut hostile_headers = HeaderMap::new();
-        hostile_headers.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer local-auth-token-123"),
-        );
+        let mut hostile_headers = authed_local_headers();
         hostile_headers.insert(
             header::ORIGIN,
             HeaderValue::from_static("https://evil.example"),
         );
         let (hostile_status, _) = response_json(
-            http_mutation_rejected(
+            http_ops_edge_event_dead_letter(
                 State(state.clone()),
                 hostile_headers,
-                Uri::from_static("/ops/ui"),
+                Uri::from_static("/ops/actions/edge-events/dead-letter"),
+                Bytes::from(valid_body.clone()),
             )
             .await,
         )
         .await;
         assert_eq!(hostile_status, StatusCode::FORBIDDEN);
 
-        let mut local_headers = HeaderMap::new();
-        local_headers.insert(
+        let (bad_csrf_status, bad_csrf_json) = response_json(
+            http_ops_edge_event_dead_letter(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/edge-events/dead-letter"),
+                Bytes::from(dead_letter_body(
+                    "wrong-csrf",
+                    "ops-ui-dead-letter-bad-csrf",
+                    &event.id,
+                    "manual review",
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(bad_csrf_status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            bad_csrf_json.pointer("/error/type").and_then(Value::as_str),
+            Some("bad_csrf")
+        );
+
+        let (policy_status, policy_json) = response_json(
+            http_ops_edge_event_dead_letter(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/edge-events/dead-letter"),
+                Bytes::from(valid_body),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(policy_status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            policy_json.pointer("/error/type").and_then(Value::as_str),
+            Some("ops_action_failed")
+        );
+        assert_eq!(
+            store.get_edge_event(&event.id).unwrap().unwrap().status,
+            "pending"
+        );
+        assert_eq!(store.list_policy_decisions(10).unwrap().len(), 1);
+
+        std::fs::write(
+            state.paths.home.join("arcwell-policy.toml"),
+            r#"
+[[rules]]
+id = "allow-ops-edge-dead-letter"
+effect = "allow"
+action = "ops.edge_event.dead_letter"
+reason = "local operator may dead-letter reviewed edge events"
+"#,
+        )
+        .unwrap();
+        let secret = format!("sk-{}", "a".repeat(40));
+        let allowed_body = dead_letter_body(
+            &state.csrf_token,
+            "ops-ui-dead-letter-allowed",
+            &event.id,
+            &format!("manual review Authorization: Bearer {secret}"),
+        );
+        let (allowed_status, _) = response_text(
+            http_ops_edge_event_dead_letter(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/edge-events/dead-letter"),
+                Bytes::from(allowed_body.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(allowed_status, StatusCode::SEE_OTHER);
+        let updated = store.get_edge_event(&event.id).unwrap().unwrap();
+        assert_eq!(updated.status, "dead_lettered");
+        assert!(!updated.error.unwrap_or_default().contains(&secret));
+        let decisions_after_success = store.list_policy_decisions(10).unwrap().len();
+        assert_eq!(decisions_after_success, 2);
+
+        let (duplicate_status, _) = response_text(
+            http_ops_edge_event_dead_letter(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/edge-events/dead-letter"),
+                Bytes::from(allowed_body),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(duplicate_status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            store.list_policy_decisions(10).unwrap().len(),
+            decisions_after_success
+        );
+    }
+
+    fn authed_local_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
             header::AUTHORIZATION,
             HeaderValue::from_static("Bearer local-auth-token-123"),
         );
-        local_headers.insert(
+        headers.insert(
             header::ORIGIN,
             HeaderValue::from_static("http://127.0.0.1:8787"),
         );
-        for _ in 0..2 {
-            let (status, body) = response_json(
-                http_mutation_rejected(
-                    State(state.clone()),
-                    local_headers.clone(),
-                    Uri::from_static("/ops/ui"),
-                )
-                .await,
-            )
-            .await;
-            assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
-            assert_eq!(
-                body.pointer("/error/type").and_then(Value::as_str),
-                Some("method_not_allowed")
-            );
-        }
+        headers
+    }
 
-        let html = render_ops_ui(
-            &Store::open(state.paths.clone())
-                .unwrap()
-                .ops_snapshot()
-                .unwrap(),
-        );
-        assert!(!html.contains("<form"));
-        assert!(!html.contains("<button"));
-        assert!(!html.contains("method=\"post\""));
-        assert!(
-            Store::open(state.paths)
-                .unwrap()
-                .list_projects()
-                .unwrap()
-                .is_empty()
-        );
+    fn dead_letter_body(
+        csrf_token: &str,
+        idempotency_key: &str,
+        edge_event_id: &str,
+        reason: &str,
+    ) -> String {
+        format!(
+            "csrf_token={}&idempotency_key={}&edge_event_id={}&reason={}",
+            url_component(csrf_token),
+            url_component(idempotency_key),
+            url_component(edge_event_id),
+            url_component(reason)
+        )
     }
 }

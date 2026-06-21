@@ -63,8 +63,77 @@ EOF
 
   node - "$DEV_PLUGIN/.codex-plugin/plugin.json" "$DEV_PLUGIN/.mcp.json" "$DEV_PLUGIN/hooks/hooks.json" "$DEV_WRAPPER" <<'NODE'
 const fs = require("fs");
+const path = require("path");
 const [pluginPath, mcpPath, hooksPath, wrapper] = process.argv.slice(2);
 const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+const commandSkillMarker = "<!-- arcwell-generated-command-skill -->";
+
+const parseMarkdownFrontmatter = (text) => {
+  if (!text.startsWith("---\n")) {
+    return { frontmatter: {}, body: text };
+  }
+  const end = text.indexOf("\n---\n", 4);
+  if (end < 0) {
+    return { frontmatter: {}, body: text };
+  }
+  const frontmatterText = text.slice(4, end);
+  const frontmatter = {};
+  for (const line of frontmatterText.split(/\r?\n/)) {
+    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (match) frontmatter[match[1]] = match[2].replace(/^['"]|['"]$/g, "");
+  }
+  return { frontmatter, body: text.slice(end + "\n---\n".length) };
+};
+
+const generateCommandSkillShims = (pluginRoot) => {
+  const commandsDir = path.join(pluginRoot, "commands");
+  const skillsDir = path.join(pluginRoot, "skills");
+  if (!fs.existsSync(commandsDir)) return { generated: 0, skippedExisting: [] };
+
+  let generated = 0;
+  const skippedExisting = [];
+  for (const entry of fs.readdirSync(commandsDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+
+    const commandName = path.basename(entry.name, ".md");
+    const commandPath = path.join(commandsDir, entry.name);
+    const skillDir = path.join(skillsDir, commandName);
+    const skillPath = path.join(skillDir, "SKILL.md");
+    if (fs.existsSync(skillPath)) {
+      const existing = fs.readFileSync(skillPath, "utf8");
+      if (!existing.includes(commandSkillMarker)) {
+        skippedExisting.push(commandName);
+        continue;
+      }
+    }
+
+    const commandText = fs.readFileSync(commandPath, "utf8");
+    const { frontmatter, body } = parseMarkdownFrontmatter(commandText);
+    const description = frontmatter.description || `Run Arcwell slash command /${commandName}`;
+    const skillText = [
+      "---",
+      `name: ${JSON.stringify(commandName)}`,
+      `description: ${JSON.stringify(`Slash command shim for /${commandName}: ${description}`)}`,
+      "---",
+      "",
+      commandSkillMarker,
+      "",
+      `# /${commandName}`,
+      "",
+      "This generated skill exposes the Arcwell slash command in Codex app surfaces that index skills rather than plugin command prompt files.",
+      "",
+      "Treat the user's current message after the skill invocation as the command arguments. Follow the equivalent command prompt below.",
+      "",
+      body.replaceAll("$ARGUMENTS", "the user's current command arguments").trimEnd(),
+      "",
+    ].join("\n");
+
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(skillPath, skillText);
+    generated += 1;
+  }
+  return { generated, skippedExisting };
+};
 
 const plugin = JSON.parse(fs.readFileSync(pluginPath, "utf8"));
 plugin.name = "arcwell-codex-dev";
@@ -104,6 +173,13 @@ if (fs.existsSync(hooksPath)) {
   rewriteCommand(hooks);
   fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
 }
+
+const generatedSkillShims = generateCommandSkillShims(path.dirname(path.dirname(pluginPath)));
+const skipped = generatedSkillShims.skippedExisting;
+console.log(
+  `generated command skill shims: ${generatedSkillShims.generated}` +
+    (skipped.length ? `; skipped existing skills: ${skipped.join(", ")}` : "")
+);
 NODE
 
   echo "materialized dev plugin: $DEV_PLUGIN"
@@ -282,6 +358,7 @@ if (hookCapture.ok !== true || !hookCapture.capture) {
   throw new Error("hook capture smoke failed");
 }
 NODE
+  "$REPO_ROOT/scripts/codex-hook-smoke" --plugin-dir "$DEV_PLUGIN" --arcwell-bin "$DEV_WRAPPER"
   echo "dev smoke passed"
 }
 

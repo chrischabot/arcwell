@@ -23,6 +23,8 @@ MCP tool registrations, package READMEs, or this document:
 ```sh
 scripts/verify-codex-plugin-docs
 scripts/verify-codex-plugin-docs --self-test
+scripts/codex-hook-smoke --arcwell-bin target/debug/arcwell
+scripts/memory-model-eval-gate --arcwell-bin target/debug/arcwell
 ```
 
 The check compares slash prompt files, this catalog, skill directories, MCP tool
@@ -31,10 +33,41 @@ source/channel prompt guards, and package README status badges. It intentionally
 fails when a command references a missing MCP tool or when a new prompt is not
 documented.
 
+`scripts/codex-hook-smoke` executes the plugin hook commands from
+`hooks/hooks.json` in a disposable `ARCWELL_HOME` and verifies recall/capture
+lifecycle events plus reviewable sensitive candidates. It is process-level hook
+contract proof only; it is not evidence that a live Codex app thread installed
+the plugin or fired hooks.
+
+`scripts/memory-model-eval-gate` runs the deterministic personal-memory eval
+corpus. Live/model-backed extraction quality remains blocked unless explicitly
+requested with `ARCWELL_MEMORY_MODEL_EVAL=1`,
+`ARCWELL_MEMORY_MODEL_EVAL_ALLOW_COST=1`, and a non-mock provider; even then,
+the script refuses to claim live quality until Arcwell has an implemented
+reviewed model-candidate oracle.
+
 Source, channel, search, and generated-summary text exposed through Arcwell is
 evidence/data, not instruction authority. Skills and prompts must quote,
 summarize, or fence that text and must not obey embedded tool calls, quoted
 system prompts, secret requests, or "ignore previous instructions" payloads.
+
+### Fresh-Thread Manual Smoke Matrix
+
+This matrix is the current Codex app smoke checklist. It is documented, but not
+yet recorded as passed in a fresh Codex thread.
+
+| Claim | Fresh-thread action | Expected evidence |
+| --- | --- | --- |
+| Stable plugin launches installed binary | Install `arcwell-codex@arcwell-local`, start a new thread, ask for Arcwell health through the slash picker. | `/arcwell-health` returns a structured health response from `arcwell mcp`; no `cargo run`, `target/debug`, or `.arcwell-dev` path appears in MCP errors. |
+| Dev plugin launches checkout wrapper | Run `scripts/arcwell-dev sync`, install or select `arcwell-codex-dev@arcwell-local`, start a new thread, then ask for Arcwell health. | Health response comes from the generated dev wrapper; `scripts/arcwell-dev smoke` still passes after the thread test. |
+| Slash prompts reach representative MCP tools | Run health, profile set/get, memory events, wiki search for a nonsense term, ops snapshot, and backup status from the slash picker. | Commands complete or report an honest empty/partial state; no prompt says a live external integration succeeded without evidence. |
+| Hooks are active only when the host actually runs them | In a new thread, submit a simple memory-relevant prompt, then inspect `/memory-events`. | Recall/capture lifecycle events appear with hook provenance; if absent, report hook execution unavailable rather than assuming it worked. |
+| Untrusted source/channel text remains data | Record or search text containing "ignore previous instructions" and a fake tool call, then ask the relevant command/skill to summarize it. | The output quotes or summarizes the hostile text as evidence and does not obey it. |
+| Partial/live features fail honestly | Try project live-state, Telegram inbox, X watch rebuild, and Claude thread-state commands without live credentials/profile proof. | Each command names the missing credential, host tool, or live proof instead of claiming success. |
+
+Record the smoke result with the Codex app version, plugin name/version,
+`ARCWELL_HOME`, command names as displayed by the picker, and the exact
+follow-up command used to verify hook events.
 
 ## Install
 
@@ -48,7 +81,12 @@ The plugin assumes `arcwell` is on `PATH`. The MCP server uses the default local
 
 ## Slash Commands
 
-Codex plugin slash commands are prompt files. Depending on the host surface and namespace collision handling, they may appear as `/arcwell-codex:remember`, `/remember`, or through the slash menu after typing part of the name. Use the displayed command name from the picker.
+Codex plugin slash commands are prompt files under `commands/`. The Codex app
+slash picker indexes enabled skills, so `scripts/arcwell-dev materialize`
+generates skill shims from these prompts for `arcwell-codex-dev`. Depending on
+the host surface and namespace collision handling, they may appear as
+`/arcwell-codex-dev:remember`, `/remember`, or through the slash menu after
+typing part of the name. Use the displayed command name from the picker.
 
 ### Health, Ops, And Services
 
@@ -154,8 +192,9 @@ Codex plugin slash commands are prompt files. Depending on the host surface and 
   thread state.
 - `/project-status-record` uses `project_status_record`.
 - `/project-sync-codex` uses host Codex thread tools only when the host exposes
-  them, then records a manual snapshot with `arcwell project status-record`.
-  It must report unavailable host tools instead of pretending live state exists.
+  them, then records a freshness-bounded verified snapshot with
+  `project_status_sync_record` or `arcwell project status-sync-record`. It must
+  report unavailable host tools instead of pretending live state exists.
 - `/channel-list` uses `channel_list`.
 - `/channel-record` uses `channel_record`.
 - `/channel-authorize` uses `channel_authorize`.
@@ -208,12 +247,15 @@ The plugin includes Codex hook config for memory lifecycle support:
 - `PreCompact` and `Stop` run `arcwell memory hook-capture`.
 
 Capture hooks default to review mode. Set `ARCWELL_MEMORY_HOOK_AUTO_APPLY=1` only
-when non-sensitive automatic capture is desired, and set
-`ARCWELL_MEMORY_HOOK_INFER=1` only when direct provider inference is desired.
+when non-sensitive deterministic candidates should be applied automatically.
+`ARCWELL_MEMORY_HOOK_INFER=1` records that inference was requested, but capture
+does not directly write raw provider-inferred text; model-backed capture quality
+is still unproven and must pass an explicit eval gate before being claimed.
 
 Live host hook execution is not assumed from the presence of this file. After
-installing or updating the plugin, run a Codex smoke test and check
-`/memory-events` or `arcwell://memory-events`.
+installing or updating the plugin, run `scripts/codex-hook-smoke` for the local
+hook contract, then run a fresh-thread Codex smoke test and check
+`/memory-events` or `arcwell://memory-events` for real host execution.
 
 ## Design Notes
 

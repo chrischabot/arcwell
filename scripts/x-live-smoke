@@ -25,6 +25,14 @@ trap cleanup EXIT
 
 export ARCWELL_HOME="${ARCWELL_SMOKE_HOME:-$tmp/arcwell-home}"
 mkdir -p "$ARCWELL_HOME"
+if [ -n "${X_USER_CONTEXT_SOURCE_HOME:-}" ]; then
+  if [ ! -d "$X_USER_CONTEXT_SOURCE_HOME" ]; then
+    echo "BLOCKED: X_USER_CONTEXT_SOURCE_HOME does not exist: $X_USER_CONTEXT_SOURCE_HOME" >&2
+    exit 2
+  fi
+  cp -R "$X_USER_CONTEXT_SOURCE_HOME"/. "$ARCWELL_HOME"/
+  echo "Copied Arcwell home metadata into disposable X smoke home for user-context proof."
+fi
 
 RUN_ID="x-live-smoke-$(date +%Y%m%dT%H%M%S)-$$"
 fixture="$tmp/x-fixture.json"
@@ -63,15 +71,39 @@ NODE
 echo "Local X replay/source-card smoke passed."
 
 LIVE_TOKEN="${X_BEARER_TOKEN:-${TWITTER_BEARER_TOKEN:-}}"
-if [ -z "$LIVE_TOKEN" ]; then
+secrets_health="$tmp/secrets-health.json"
+"$ARCWELL_BIN" secrets health >"$secrets_health"
+USER_CONTEXT_AVAILABLE=0
+if node - "$secrets_health" <<'NODE'
+const fs = require("fs");
+const health = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const hasRefresh = health.some((item) => item.name === "X_REFRESH_TOKEN" && item.present === true);
+const hasBearer = health.some((item) => item.name === "X_BEARER_TOKEN" && item.present === true);
+process.exit(hasRefresh && hasBearer ? 0 : 1);
+NODE
+then
+  USER_CONTEXT_AVAILABLE=1
+fi
+if [ "$USER_CONTEXT_AVAILABLE" -eq 1 ] && [ -n "${X_USER_CONTEXT_SOURCE_HOME:-}" ] && [ -n "$LIVE_TOKEN" ]; then
+  echo "Using copied stored X user-context token for live proof; env bearer token will not override it."
+  LIVE_TOKEN=""
+fi
+
+if [ -z "$LIVE_TOKEN" ] && [ "$USER_CONTEXT_AVAILABLE" -ne 1 ]; then
   echo "BLOCKED: live X smoke not run; missing X_BEARER_TOKEN or TWITTER_BEARER_TOKEN."
-  echo "Local replay smoke passed. Re-run with a disposable/current X bearer token for live proof."
+  echo "Local replay smoke passed. Re-run with a disposable/current X bearer token, or set X_USER_CONTEXT_SOURCE_HOME to an Arcwell home containing X_BEARER_TOKEN and X_REFRESH_TOKEN secret metadata."
   exit 2
 fi
 
-echo "Installing X bearer token into disposable Arcwell secret store."
-"$ARCWELL_BIN" secrets set-value X_BEARER_TOKEN "$LIVE_TOKEN" --scope x --provider x >"$tmp/secret-set.json"
-"$ARCWELL_BIN" secrets health >"$tmp/secrets-health.json"
+if [ -n "$LIVE_TOKEN" ]; then
+  echo "Installing X bearer token into disposable Arcwell secret store."
+  "$ARCWELL_BIN" secrets set-value X_BEARER_TOKEN "$LIVE_TOKEN" --scope x --provider x >"$tmp/secret-set.json"
+  "$ARCWELL_BIN" secrets health >"$tmp/secrets-health.json"
+else
+  if [ "$secrets_health" != "$tmp/secrets-health.json" ]; then
+    cp "$secrets_health" "$tmp/secrets-health.json"
+  fi
+fi
 
 node - "$tmp/secrets-health.json" <<'NODE'
 const fs = require("fs");
@@ -90,25 +122,32 @@ if (!health.some((item) => item.name === "X_BEARER_TOKEN" && item.present === tr
 NODE
 
 echo "Running live X recent search."
-if ! "$ARCWELL_BIN" x recent-search "from:openai" --max-results 10 >"$tmp/recent-search.json" 2>"$tmp/recent-search.err"; then
+if ! env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" x recent-search "from:openai" --max-results 10 >"$tmp/recent-search.json" 2>"$tmp/recent-search.err"; then
   echo "BLOCKED: live X recent-search failed; sanitized error follows:" >&2
   sed 's/[[:alnum:]_.=-]\{32,\}/[REDACTED]/g' "$tmp/recent-search.err" >&2
   exit 2
 fi
 
+if [ "$USER_CONTEXT_AVAILABLE" -ne 1 ]; then
+  echo "BLOCKED: X user-context watch proof not run; no X_REFRESH_TOKEN plus stored X_BEARER_TOKEN metadata found in the smoke home."
+  echo "Recent search passed. Bookmarks/follows require OAuth 2.0 User Context with tweet.read, users.read, bookmark.read, follows.read, and offline.access."
+  exit 2
+fi
+
 echo "Rebuilding definitive X watch sources from bookmarks/recent follows."
-if ! "$ARCWELL_BIN" x rebuild-definitive-watch-sources \
+if ! env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" x rebuild-definitive-watch-sources \
   --bookmark-days 92 \
   --max-bookmarks "${X_SMOKE_MAX_BOOKMARKS:-10}" \
   --max-recent-follows "${X_SMOKE_MAX_RECENT_FOLLOWS:-5}" \
   >"$tmp/watch-rebuild.json" 2>"$tmp/watch-rebuild.err"; then
   echo "BLOCKED: live X definitive watch rebuild failed; sanitized error follows:" >&2
   sed 's/[[:alnum:]_.=-]\{32,\}/[REDACTED]/g' "$tmp/watch-rebuild.err" >&2
+  echo "Required user-context scopes: tweet.read, users.read, bookmark.read, follows.read, offline.access." >&2
   exit 2
 fi
 
 echo "Polling definitive X watch sources."
-if ! "$ARCWELL_BIN" x monitor-watch-sources \
+if ! env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" x monitor-watch-sources \
   --max-sources "${X_SMOKE_MAX_SOURCES:-5}" \
   --max-results-per-source 10 \
   >"$tmp/monitor.json" 2>"$tmp/monitor.err"; then
@@ -148,4 +187,8 @@ if (typeof monitor.watched_sources !== "number" || !Array.isArray(monitor.source
 NODE
 
 echo "Live X smoke passed."
-echo "Artifacts remained in disposable ARCWELL_HOME: $ARCWELL_HOME"
+if [ -n "${ARCWELL_SMOKE_HOME:-}" ]; then
+  echo "Artifacts remained in ARCWELL_SMOKE_HOME: $ARCWELL_HOME"
+else
+  echo "Disposable ARCWELL_HOME will be removed on exit."
+fi

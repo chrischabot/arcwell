@@ -28,6 +28,7 @@ Cloudflare worker:
 - `POST /drain/ack` marks a drained event as acknowledged.
 - `POST /drain/nack` records a drain failure and retries or dead-letters after the attempt budget.
 - `GET /events` lists bounded event state for debugging.
+- Cloudflare Email Routing `email()` events can enqueue bounded `email` source events when `EMAIL_ROUTES_JSON` and sender allow rules are configured.
 - Events are stored in D1 through the `EDGE_DB` binding. The worker remains a bounded ingress/drain buffer, not the local durable brain.
 - Local tests use an in-memory store that exercises the same lease/ack/nack, auth-rotation, and rate-limit semantics.
 
@@ -39,6 +40,8 @@ Security rules:
 - Preserve idempotency key as the replay boundary.
 - Enforce a per-source fixed-window rate limit with `RATE_LIMIT_WINDOW_SECONDS` and `RATE_LIMIT_MAX_EVENTS`.
 - Do not execute or interpret event payload text at the edge.
+- Treat email envelope sender and configured route policy as authority; preserve display `From:` and MIME body as untrusted evidence only.
+- Reject oversized email raw MIME, unauthorized recipients/senders, missing `Message-ID`, and failing DMARC by default.
 
 Live smoke:
 

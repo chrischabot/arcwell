@@ -125,6 +125,10 @@ Projects have names, aliases, summaries, and status. Agents can resolve natural 
 
 Ambiguous project references fail instead of guessing.
 
+Project status reports distinguish durable snapshots from freshness-bounded
+verified host sync. Native live Codex/Claude thread inventory is still missing;
+manual snapshots and forged host-live source labels are not treated as live.
+
 ### Librarian And Digest Candidates
 
 The librarian package turns source cards into expanded topic pages and creates digest candidates for interesting launches, releases, papers, repos, and social/news signals.
@@ -312,6 +316,7 @@ arcwell wiki sources
 arcwell research plan "Vercel Eve"
 arcwell research brief "Vercel Eve"
 arcwell research audit "Vercel Eve"
+arcwell project status-sync-record <project-id> active "Fresh Codex thread summary" --host codex --thread-id <thread-id>
 arcwell wiki enqueue-rss https://example.com/feed.xml
 arcwell wiki enqueue-github-owner openai --limit 10
 arcwell wiki enqueue-github openai codex --mode releases

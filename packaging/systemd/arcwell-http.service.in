@@ -1,0 +1,20 @@
+[Unit]
+Description=Arcwell local HTTP server
+After=network-online.target
+
+[Service]
+Type=simple
+Environment="@ARCWELL_HOME_ENV@"
+WorkingDirectory="@ARCWELL_HOME_PATH@"
+ExecStart="@ARCWELL_BIN_EXEC@" serve --addr @ARCWELL_HTTP_ADDR@
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths="@ARCWELL_HOME_PATH@"
+StandardOutput=append:@LOG_DIR_PATH@/http.log
+StandardError=append:@LOG_DIR_PATH@/http.err.log
+
+[Install]
+WantedBy=default.target

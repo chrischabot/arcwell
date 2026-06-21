@@ -159,7 +159,7 @@ flowchart TD
 | Node | Owner | Primary write scope | Severe gate |
 | --- | --- | --- | --- |
 | P1.13 HTTP hardening | `subagent-http-ops` | `crates/arcwell-cli/src/main.rs`, CLI HTTP tests, ops docs only if needed | Missing auth, hostile Origin, huge query, HTML/script in errors, locked/missing DB, secret-like error redaction. |
-| P1.12 Policy engine | `subagent-policy` | Policy structs/store methods/tests in `crates/arcwell-core/src/lib.rs`; CLI/MCP only after core is stable | Denied network/provider path must not read credentials or mutate state; malformed policy fails closed. |
+| P1.12 Policy engine | `subagent-policy` | Policy structs/store methods/tests in `crates/arcwell-core/src/lib.rs`; CLI/MCP policy admin once core is stable | Denied or approval-gated provider paths must not read credentials or mutate state; CLI/MCP secret admin must policy-deny before mutation; malformed policy fails closed. |
 | P1.8 Work-memory graph | `subagent-work-graph` | Work-run schema/core methods/tests in `crates/arcwell-core/src/lib.rs`; avoid policy/HTTP edits | Secret redaction, prompt injection in logs, generated-summary citation loop, missing validation as success. |
 | P1.14/P1.15 Source quality | `subagent-source-quality` | Wiki ingest/adapters/source health in `crates/arcwell-core/src/lib.rs`; package README/docs | SSRF redirects, huge/binary HTML, duplicate canonical URL, cursor partial-write, retry storms. |
 | P2.17/P2.20 Plugin/docs verification | `subagent-plugin-docs` | scripts, plugin prompt audits, docs/status wording; no Rust core edits unless strictly needed | Missing MCP tool, stale slash command, unsafe command prompt, docs overclaim. |

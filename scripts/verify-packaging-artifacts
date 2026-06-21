@@ -1,0 +1,288 @@
+#!/usr/bin/env node
+"use strict";
+
+const childProcess = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const zlib = require("zlib");
+
+const REQUIRED_TARGETS = [
+  "DARWIN_ARM64",
+  "DARWIN_X86_64",
+  "LINUX_ARM64",
+  "LINUX_X86_64",
+];
+
+function read(file) {
+  return fs.readFileSync(file, "utf8");
+}
+
+function fail(message) {
+  console.error(`FAIL: ${message}`);
+  process.exit(1);
+}
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+function workspaceVersion(root) {
+  const cargo = read(path.join(root, "Cargo.toml"));
+  const match = cargo.match(/\[workspace\.package\][\s\S]*?\nversion\s*=\s*"([^"]+)"/);
+  assert(match, "Cargo.toml is missing workspace.package version");
+  return match[1];
+}
+
+function check(root) {
+  const errors = [];
+  const version = workspaceVersion(root);
+
+  const formulaPath = path.join(root, "packaging/homebrew/arcwell.rb.template");
+  const formula = read(formulaPath);
+  if (!formula.includes('class Arcwell < Formula')) errors.push("Homebrew template does not define Arcwell formula");
+  if (!formula.includes('version "__ARCWELL_VERSION__"')) errors.push("Homebrew template must keep an explicit version placeholder");
+  if (!formula.includes("backup\", \"verify")) errors.push("Homebrew formula test must run backup verify");
+  if (!formula.includes("doctor --strict")) errors.push("Homebrew caveats must tell users to run doctor --strict");
+  for (const target of REQUIRED_TARGETS) {
+    if (!formula.includes(`__ARCWELL_${target}_URL__`)) errors.push(`Homebrew template missing ${target} URL placeholder`);
+    if (!formula.includes(`__ARCWELL_${target}_SHA256__`)) errors.push(`Homebrew template missing ${target} SHA256 placeholder`);
+  }
+
+  const install = read(path.join(root, "packaging/install.sh"));
+  for (const needle of [
+    "sha256 mismatch",
+    "validate_archive_listing",
+    "unsafe archive member path",
+    "services were not installed or started",
+  ]) {
+    if (!install.includes(needle)) errors.push(`install.sh missing guard: ${needle}`);
+  }
+  if (/curl .*\|\s*(sh|bash)/.test(install)) errors.push("install.sh must not pipe network data into a shell");
+
+  const worker = read(path.join(root, "packaging/systemd/arcwell-worker.service.in"));
+  for (const needle of [
+    "Restart=always",
+    "Environment=\"@ARCWELL_HOME_ENV@\"",
+    "ExecStart=\"@ARCWELL_BIN_EXEC@\" worker run",
+    "ReadWritePaths=\"@ARCWELL_HOME_PATH@\"",
+  ]) {
+    if (!worker.includes(needle)) errors.push(`worker systemd template missing ${needle}`);
+  }
+
+  const http = read(path.join(root, "packaging/systemd/arcwell-http.service.in"));
+  if (!http.includes("ExecStart=\"@ARCWELL_BIN_EXEC@\" serve --addr @ARCWELL_HTTP_ADDR@")) {
+    errors.push("HTTP systemd template does not launch arcwell serve");
+  }
+
+  const systemdInstaller = read(path.join(root, "scripts/install-systemd-user"));
+  for (const needle of ["--enable-now", "--no-systemctl", "ARCWELL_HOME was not removed", "systemd_quote"]) {
+    if (!systemdInstaller.includes(needle)) errors.push(`systemd installer missing ${needle}`);
+  }
+
+  const inspector = read(path.join(root, "scripts/mcp-inspector"));
+  if (!inspector.includes("@modelcontextprotocol/inspector")) {
+    errors.push("MCP Inspector script must use the official @modelcontextprotocol/inspector package");
+  }
+
+  const docs = read(path.join(root, "docs/packaging-and-operations.md"));
+  for (const needle of [
+    "packaging/homebrew/arcwell.rb.template",
+    "packaging/install.sh",
+    "scripts/install-systemd-user",
+    "scripts/mcp-inspector",
+  ]) {
+    if (!docs.includes(needle)) errors.push(`packaging docs do not mention ${needle}`);
+  }
+
+  return { ok: errors.length === 0, errors, version };
+}
+
+function run(command, args, options = {}) {
+  const result = childProcess.spawnSync(command, args, {
+    encoding: "utf8",
+    maxBuffer: 4 * 1024 * 1024,
+    ...options,
+  });
+  if (result.error) throw result.error;
+  return result;
+}
+
+function sha256(file) {
+  const result = run("shasum", ["-a", "256", file]);
+  assert(result.status === 0, `shasum failed: ${result.stderr}`);
+  return result.stdout.trim().split(/\s+/)[0];
+}
+
+function writeExecutable(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text, { mode: 0o755 });
+  fs.chmodSync(file, 0o755);
+}
+
+function octal(value, width) {
+  const text = value.toString(8);
+  return `${"0".repeat(Math.max(0, width - text.length - 1))}${text}\0`;
+}
+
+function tarHeader(name, mode, size) {
+  assert(Buffer.byteLength(name) <= 100, `tar test entry name too long: ${name}`);
+  const header = Buffer.alloc(512, 0);
+  header.write(name, 0, "utf8");
+  header.write(octal(mode, 8), 100, "ascii");
+  header.write(octal(0, 8), 108, "ascii");
+  header.write(octal(0, 8), 116, "ascii");
+  header.write(octal(size, 12), 124, "ascii");
+  header.write(octal(0, 12), 136, "ascii");
+  header.fill(" ", 148, 156);
+  header.write("0", 156, "ascii");
+  header.write("ustar\0", 257, "ascii");
+  header.write("00", 263, "ascii");
+  let sum = 0;
+  for (const byte of header) sum += byte;
+  header.write(octal(sum, 8), 148, "ascii");
+  return header;
+}
+
+function writeTarGz(file, entries) {
+  const chunks = [];
+  for (const entry of entries) {
+    const data = Buffer.from(entry.type === "2" ? "" : entry.data);
+    chunks.push(tarHeader(entry.name, entry.mode || 0o644, data.length));
+    if (entry.type) {
+      chunks[chunks.length - 1].write(entry.type, 156, "ascii");
+      if (entry.linkName) chunks[chunks.length - 1].write(entry.linkName, 157, "utf8");
+      chunks[chunks.length - 1].fill(" ", 148, 156);
+      let sum = 0;
+      for (const byte of chunks[chunks.length - 1]) sum += byte;
+      chunks[chunks.length - 1].write(octal(sum, 8), 148, "ascii");
+    }
+    chunks.push(data);
+    const padding = (512 - (data.length % 512)) % 512;
+    if (padding) chunks.push(Buffer.alloc(padding, 0));
+  }
+  chunks.push(Buffer.alloc(1024, 0));
+  fs.writeFileSync(file, zlib.gzipSync(Buffer.concat(chunks)));
+}
+
+function expectFailure(label, command, args, pattern, options = {}) {
+  const result = run(command, args, options);
+  if (result.status === 0) {
+    throw new Error(`${label} unexpectedly succeeded:\n${result.stdout}`);
+  }
+  const combined = `${result.stdout}\n${result.stderr}`;
+  if (!pattern.test(combined)) {
+    throw new Error(`${label} failed with the wrong output:\n${combined}`);
+  }
+}
+
+function selfTest(root) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "arcwell-packaging-"));
+  const archiveRoot = path.join(tmp, "archive-root");
+  const prefix = path.join(tmp, "prefix with spaces");
+  const bin = path.join(archiveRoot, "arcwell");
+  writeExecutable(
+    bin,
+    "#!/usr/bin/env bash\nif [[ \"${1:-}\" == \"--help\" ]]; then echo arcwell fixture; exit 0; fi\necho fixture only >&2\nexit 2\n"
+  );
+  fs.writeFileSync(path.join(archiveRoot, "LICENSE"), "MIT\n");
+  const archive = path.join(tmp, "arcwell-v0.0.0-x86_64-unknown-linux-gnu.tar.gz");
+  let result = run("tar", ["-czf", archive, "-C", archiveRoot, "arcwell", "LICENSE"]);
+  assert(result.status === 0, `tar fixture failed: ${result.stderr}`);
+  const digest = sha256(archive);
+
+  result = run(path.join(root, "packaging/install.sh"), [
+    "--archive",
+    archive,
+    "--sha256",
+    digest,
+    "--prefix",
+    prefix,
+  ]);
+  assert(result.status === 0, `fixture install failed:\n${result.stdout}\n${result.stderr}`);
+  assert(fs.existsSync(path.join(prefix, "bin/arcwell")), "installer did not write arcwell binary");
+  assert(!fs.existsSync(path.join(prefix, "arcwell-worker.service")), "installer wrote unexpected service file");
+
+  expectFailure(
+    "checksum mismatch",
+    path.join(root, "packaging/install.sh"),
+    ["--archive", archive, "--sha256", "0".repeat(64), "--prefix", path.join(tmp, "bad-prefix")],
+    /sha256 mismatch/
+  );
+
+  const badArchive = path.join(tmp, "bad.tar.gz");
+  writeTarGz(badArchive, [
+    { name: "arcwell", mode: 0o755, data: "#!/usr/bin/env bash\necho bad\n" },
+    { name: "../evil", mode: 0o644, data: "escape\n" },
+  ]);
+  const badDigest = sha256(badArchive);
+  expectFailure(
+    "unsafe archive path",
+    path.join(root, "packaging/install.sh"),
+    ["--archive", badArchive, "--sha256", badDigest, "--prefix", path.join(tmp, "unsafe-prefix")],
+    /unsafe archive member path|archive does not contain/
+  );
+
+  const linkArchive = path.join(tmp, "link.tar.gz");
+  writeTarGz(linkArchive, [
+    { name: "arcwell", mode: 0o755, type: "2", linkName: "/bin/sh", data: "" },
+  ]);
+  const linkDigest = sha256(linkArchive);
+  expectFailure(
+    "unsafe archive link",
+    path.join(root, "packaging/install.sh"),
+    ["--archive", linkArchive, "--sha256", linkDigest, "--prefix", path.join(tmp, "link-prefix")],
+    /unsupported archive member type/
+  );
+
+  const fakeBin = path.join(tmp, "bin with spaces/arcwell");
+  writeExecutable(fakeBin, "#!/usr/bin/env bash\nexit 0\n");
+  const unitDir = path.join(tmp, "units");
+  const arcHome = path.join(tmp, "Arcwell Home % With Spaces");
+  result = run(path.join(root, "scripts/install-systemd-user"), [
+    "install",
+    "--arcwell-bin",
+    fakeBin,
+    "--arcwell-home",
+    arcHome,
+    "--unit-dir",
+    unitDir,
+    "--with-http",
+    "--no-systemctl",
+  ]);
+  assert(result.status === 0, `systemd render failed:\n${result.stdout}\n${result.stderr}`);
+  const unit = read(path.join(unitDir, "arcwell-worker.service"));
+  assert(unit.includes('ExecStart="'), "rendered worker unit did not quote ExecStart");
+  assert(unit.includes("%%"), "rendered worker unit did not escape systemd percent specifier");
+  fs.writeFileSync(path.join(arcHome, "user-data-must-remain.txt"), "keep\n");
+  result = run(path.join(root, "scripts/install-systemd-user"), [
+    "uninstall",
+    "--unit-dir",
+    unitDir,
+    "--with-http",
+    "--no-systemctl",
+  ]);
+  assert(result.status === 0, `systemd uninstall failed:\n${result.stdout}\n${result.stderr}`);
+  assert(fs.existsSync(path.join(arcHome, "user-data-must-remain.txt")), "systemd uninstall deleted ARCWELL_HOME data");
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+  console.log("verify-packaging-artifacts self-test passed");
+}
+
+const args = process.argv.slice(2);
+const rootIndex = args.indexOf("--root");
+const root = path.resolve(rootIndex >= 0 ? args[rootIndex + 1] : process.cwd());
+
+if (args.includes("--self-test")) {
+  selfTest(root);
+  process.exit(0);
+}
+
+const result = check(root);
+if (!result.ok) {
+  console.error("Packaging artifact verification failed:");
+  for (const error of result.errors) console.error(`- ${error}`);
+  process.exit(1);
+}
+
+console.log(`Packaging artifact verification passed for Arcwell ${result.version}.`);

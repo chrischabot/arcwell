@@ -14,7 +14,7 @@ Current implementation:
 - Local `arcwell telegram deliveries [--message-id <id>]` lists persisted delivery attempts.
 - MCP tools `telegram_drain_edge_events` and `telegram_send_message` expose the same behavior to agents.
 - Project-aware routing can bind an explicit `projectId` in payloads only for authorized subjects. Authorized chats can also auto-bind a Telegram message to a uniquely resolved project from the message text. Ambiguous or missing matches remain unbound.
-- `scripts/telegram-live-smoke` runs a disposable local authorization smoke and, when live credentials are supplied, sets the Telegram webhook, sends a safe outgoing reply, drains Cloudflare edge events locally, and asserts the incoming message is recorded exactly once.
+- `scripts/telegram-live-smoke` runs local authorization checks in a preserved smoke home and, when live credentials are supplied, sets the Telegram webhook, sends a safe outgoing reply, drains Cloudflare edge events locally, and asserts the exact incoming message is recorded exactly once. Failure artifacts and mismatch/duplicate diagnostics are kept under the smoke home.
 
 Channel safety rules:
 
@@ -39,5 +39,20 @@ Relevant MCP tools:
 - `channel_delivery_list`
 - `telegram_drain_edge_events`
 - `telegram_send_message`
+
+Live exact incoming proof:
+
+```sh
+set -a
+. ./.env
+set +a
+ARCWELL_TELEGRAM_LIVE_CONFIRM=disposable scripts/telegram-live-smoke
+```
+
+When prompted, send the exact phrase printed by the script to the disposable
+Telegram chat. If the run times out, re-run with the printed
+`TELEGRAM_SMOKE_EXPECT_TEXT=... ARCWELL_SMOKE_HOME=...` command so the same
+assertion can be repeated against the preserved local state. Do not paste bot
+tokens into logs; the smoke prints names, paths, and sanitized diagnostics only.
 - `project_resolve`
 - `ops_snapshot`

@@ -3,13 +3,13 @@ set -euo pipefail
 
 # CLAIM: A candidate Arcwell package binary plus the stable Codex plugin can be
 # staged, upgraded, verified, and uninstalled without corrupting the installed
-# binary, hiding stale PATH resolution, losing user data, or accepting an
-# unsupported local schema.
+# binary, hiding stale PATH resolution, losing user data, accepting an
+# unsupported local schema, or shipping broken release artifact scaffolds.
 # PRECONDITIONS: The smoke runs only in disposable temp prefixes/homes and does
 # not publish artifacts or touch a live launchd/systemd service.
 # ORACLE: CLI JSON output, binary hashes, plugin manifest/hook parsing, SQLite
-# schema metadata, restored profile data, filesystem state, and explicit command
-# failures.
+# schema metadata, restored profile data, release template checks, disposable
+# installer/systemd fixtures, filesystem state, and explicit command failures.
 # SEVERITY: Severe packaging coverage for path handling, stale binaries,
 # interrupted upgrades, old DB/schema state, duplicate service install,
 # permissions, and uninstall cleanup.
@@ -104,6 +104,7 @@ need_cmd cargo
 need_cmd node
 need_cmd sqlite3
 need_cmd shasum
+need_cmd tar
 
 if [[ "$BUILD_RELEASE" == "1" || ( "$BUILD_RELEASE" == "auto" && ! -x "$SOURCE_BIN" ) ]]; then
   log "building release candidate binary"
@@ -173,6 +174,10 @@ for (const hookCommand of commands) {
   }
 }
 NODE
+
+log "verifying release formula, installer, systemd, and MCP Inspector scaffolds"
+"$REPO_ROOT/scripts/verify-packaging-artifacts"
+"$REPO_ROOT/scripts/verify-packaging-artifacts" --self-test
 
 STALE_BIN_DIR="$SMOKE_ROOT/stale bin first on PATH"
 mkdir -p "$STALE_BIN_DIR"

@@ -9,7 +9,7 @@ Current first-pass implementation:
 - Digest candidates can be created from source-card ids.
 - Candidates are scored with transparent rule-based signals.
 - Topics can be expanded into wiki pages through `librarian_expand_topic`.
-- Expanded pages include deterministic source-card audit notes and exclude generated/model-answer source cards from primary evidence.
+- Expanded pages include deterministic source-card audit notes and exclude generated/model-answer, untrusted, and low-reliability source cards from primary evidence.
 - Email is documented as a future digest delivery option in `arcwell-email`, but
   no outbound email delivery path exists yet.
 
@@ -27,6 +27,7 @@ Remaining work:
 
 - Cluster related source cards across RSS, GitHub, arXiv, X, and web search.
 - Add richer contradiction detection beyond deterministic source-card audit heuristics.
+- Add model-backed extraction/synthesis only behind explicit config and source-grounded citation checks; no model-backed librarian synthesis is claimed today.
 - Add delivery routing to Telegram/email with explicit recipient authorization,
   dedupe, quiet hours, loop prevention, policy/cost checks, and delivery attempt
   records.

@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# CLAIM: Linux user-service unit files can be rendered and installed without
+# touching Arcwell data or enabling long-running services unless explicitly
+# requested.
+# PRECONDITIONS: Linux systemd live behavior still requires a host with
+# systemctl --user; temp-dir tests exercise rendering and filesystem effects.
+# ORACLE: rendered unit content, unit-file presence/removal, systemctl command
+# exit codes when enabled, and unchanged ARCWELL_HOME data.
+# SEVERITY: Strong host-packaging coverage; live restart/journal semantics stay
+# blocked until run on a Linux user-service host.
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ACTION="${1:-}"
+[[ $# -gt 0 ]] && shift || true
+
+ARCWELL_BIN="${ARCWELL_BIN:-}"
+ARCWELL_HOME="${ARCWELL_HOME:-$HOME/.arcwell}"
+HTTP_ADDR="${ARCWELL_HTTP_ADDR:-127.0.0.1:8787}"
+UNIT_DIR="${ARCWELL_SYSTEMD_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}"
+WITH_HTTP=0
+ENABLE_NOW=0
+NO_SYSTEMCTL=0
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  scripts/install-systemd-user install [options]
+  scripts/install-systemd-user uninstall [options]
+  scripts/install-systemd-user status [options]
+
+Options:
+  --arcwell-bin path    Absolute arcwell binary path. Defaults to command -v arcwell.
+  --arcwell-home path   ARCWELL_HOME for the unit. Defaults to ~/.arcwell.
+  --unit-dir path       Override systemd user unit directory for tests.
+  --with-http           Also install/remove arcwell-http.service.
+  --http-addr addr      HTTP bind address for the optional HTTP unit.
+  --enable-now          Run systemctl --user enable --now after installing.
+  --no-systemctl        Only write/remove unit files; do not call systemctl.
+
+This script is intentionally explicit. It never deletes ARCWELL_HOME and it
+does not enable or start services unless --enable-now is supplied.
+USAGE
+}
+
+fail() {
+  printf '[arcwell-systemd] FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+log() {
+  printf '[arcwell-systemd] %s\n' "$*"
+}
+
+systemd_quote() {
+  local value="$1"
+  [[ "$value" != *$'\n'* ]] || fail "systemd values must not contain newlines"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//%/%%}"
+  printf '%s' "$value"
+}
+
+render_template() {
+  local template="$1"
+  local dest="$2"
+  local bin_q home_q log_q env_q
+  bin_q="$(systemd_quote "$ARCWELL_BIN")"
+  home_q="$(systemd_quote "$ARCWELL_HOME")"
+  log_q="$(systemd_quote "$ARCWELL_HOME/logs")"
+  env_q="$(systemd_quote "ARCWELL_HOME=$ARCWELL_HOME")"
+  local content
+  content="$(<"$template")"
+  content="${content//@ARCWELL_BIN_EXEC@/$bin_q}"
+  content="${content//@ARCWELL_HOME_ENV@/$env_q}"
+  content="${content//@ARCWELL_HOME_PATH@/$home_q}"
+  content="${content//@LOG_DIR_PATH@/$log_q}"
+  content="${content//@ARCWELL_HTTP_ADDR@/$HTTP_ADDR}"
+  printf '%s\n' "$content" >"$dest"
+}
+
+systemctl_user() {
+  [[ "$NO_SYSTEMCTL" == "0" ]] || return 0
+  command -v systemctl >/dev/null 2>&1 || fail "systemctl is not available; rerun with --no-systemctl to render only"
+  systemctl --user "$@"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --arcwell-bin) ARCWELL_BIN="${2:-}"; shift ;;
+    --arcwell-home) ARCWELL_HOME="${2:-}"; shift ;;
+    --unit-dir) UNIT_DIR="${2:-}"; shift ;;
+    --with-http) WITH_HTTP=1 ;;
+    --http-addr) HTTP_ADDR="${2:-}"; shift ;;
+    --enable-now) ENABLE_NOW=1 ;;
+    --no-systemctl) NO_SYSTEMCTL=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) fail "unknown argument: $1" ;;
+  esac
+  shift
+done
+
+case "$ACTION" in
+  install|uninstall|status) ;;
+  -h|--help|"") usage; exit 0 ;;
+  *) fail "unknown action: $ACTION" ;;
+esac
+
+if [[ "$ACTION" == "install" ]]; then
+  if [[ -z "$ARCWELL_BIN" ]]; then
+    ARCWELL_BIN="$(command -v arcwell || true)"
+  fi
+  [[ -n "$ARCWELL_BIN" ]] || fail "arcwell binary not found; pass --arcwell-bin"
+  [[ "$ARCWELL_BIN" == /* ]] || fail "--arcwell-bin must be absolute: $ARCWELL_BIN"
+  [[ -x "$ARCWELL_BIN" ]] || fail "--arcwell-bin is not executable: $ARCWELL_BIN"
+  [[ "$ARCWELL_HOME" == /* ]] || fail "--arcwell-home must be absolute: $ARCWELL_HOME"
+
+  mkdir -p "$UNIT_DIR" "$ARCWELL_HOME/logs"
+  render_template "$REPO_ROOT/packaging/systemd/arcwell-worker.service.in" "$UNIT_DIR/arcwell-worker.service"
+  log "installed $UNIT_DIR/arcwell-worker.service"
+
+  if [[ "$WITH_HTTP" == "1" ]]; then
+    render_template "$REPO_ROOT/packaging/systemd/arcwell-http.service.in" "$UNIT_DIR/arcwell-http.service"
+    log "installed $UNIT_DIR/arcwell-http.service"
+  fi
+
+  systemctl_user daemon-reload
+  if [[ "$ENABLE_NOW" == "1" ]]; then
+    systemctl_user enable --now arcwell-worker.service
+    if [[ "$WITH_HTTP" == "1" ]]; then
+      systemctl_user enable --now arcwell-http.service
+    fi
+  fi
+elif [[ "$ACTION" == "uninstall" ]]; then
+  if [[ "$ENABLE_NOW" == "1" ]]; then
+    systemctl_user disable --now arcwell-worker.service || true
+    if [[ "$WITH_HTTP" == "1" ]]; then
+      systemctl_user disable --now arcwell-http.service || true
+    fi
+  fi
+  rm -f "$UNIT_DIR/arcwell-worker.service"
+  if [[ "$WITH_HTTP" == "1" ]]; then
+    rm -f "$UNIT_DIR/arcwell-http.service"
+  fi
+  systemctl_user daemon-reload
+  log "removed Arcwell systemd user unit files from $UNIT_DIR; ARCWELL_HOME was not removed"
+else
+  if [[ -f "$UNIT_DIR/arcwell-worker.service" ]]; then
+    log "arcwell-worker.service is installed at $UNIT_DIR/arcwell-worker.service"
+  else
+    log "arcwell-worker.service is not installed at $UNIT_DIR/arcwell-worker.service"
+  fi
+  if [[ -f "$UNIT_DIR/arcwell-http.service" ]]; then
+    log "arcwell-http.service is installed at $UNIT_DIR/arcwell-http.service"
+  fi
+  if [[ "$NO_SYSTEMCTL" == "0" ]] && command -v systemctl >/dev/null 2>&1; then
+    systemctl --user status arcwell-worker.service --no-pager || true
+  fi
+fi

@@ -76,6 +76,26 @@ The adjacent source project did not include an explicit top-level license file
 at integration time. Keep this package private until provenance/publication
 licensing is settled.
 
+## Read-Only Live Smoke
+
+Garderobe may already be deployed and in use outside this package. Do not run
+Wrangler deploys, migrations, seeds, imports, or write-oriented MCP/admin
+actions against that live deployment from Arcwell.
+
+The only repo-provided live smoke is intentionally read-only and unauthenticated:
+
+```sh
+GARDEROBE_READONLY_CONFIRM=readonly \
+GARDEROBE_BASE_URL=https://... \
+scripts/garderobe-readonly-smoke
+```
+
+It performs guarded GET requests against `/`, `/admin`, and OAuth metadata. It
+does not send bearer tokens or login codes and cannot prove authenticated MCP
+tool behavior, wardrobe inventory correctness, or write safety. Authenticated
+remote MCP tests should use disposable fixture rows or an explicitly approved
+staging deployment, not the live wardrobe source of truth.
+
 ## Host Usage
 
 For outfit planning, hosts should call Garderobe directly rather than asking

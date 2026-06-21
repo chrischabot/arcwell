@@ -40,7 +40,8 @@ Boundary:
 - Optional daemon providers are `brave`, `openai`, and `perplexity`.
 - Provider endpoints are guarded to official HTTPS origins or loopback tests unless explicitly overridden.
 - Generated research briefs and source-card wiki artifacts are outputs, not source material. Research source selection excludes generated `Research Brief: ...`, `Expanded: ...`, and `Source Card: ...` wiki pages from local-source evidence.
-- `research_audit` checks local source cards for schema/version metadata, generated-page recursion, uncited model answers, stale retrieval dates, prompt-injection/SEO-spam indicators, low-confidence claims, and conflicting launch dates.
+- `research_audit` checks local source cards for schema/version metadata, generated-page recursion, uncited model answers, stale retrieval dates, prompt-injection/SEO-spam indicators, low reliability, robots `noindex`, low-confidence claims, and conflicting launch dates.
+- Brief source selection excludes generated/model-answer cards plus explicitly untrusted or low-reliability source cards. Those cards remain stored and auditable as evidence, but they do not ground synthesized briefs.
 - Brave, OpenAI, and Perplexity are adapters, not hard dependencies.
 
 Recommended host-agent loop:
@@ -55,4 +56,4 @@ Recommended host-agent loop:
 Future work:
 
 - Model-backed synthesis, extraction, and contradiction review beyond the current deterministic audit heuristics.
-- Scheduled monitors that expand wiki pages when important sources change.
+- End-to-end scheduled monitor loops that expand wiki pages when important sources change; current hooks enqueue due watch-source jobs only.

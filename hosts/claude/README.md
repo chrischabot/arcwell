@@ -113,14 +113,18 @@ with an absolute binary path.
 For interactive protocol inspection:
 
 ```sh
-cargo build -p arcwell
-ARCWELL_HOME="$(mktemp -d)" npx -y @modelcontextprotocol/inspector \
-  /Users/chabotc/Projects/arcwell/target/debug/arcwell mcp
+scripts/mcp-inspector
 ```
 
 Use the Inspector to check capability negotiation, tool schemas, resource
 listing, representative tool calls, and error handling. The repeatable
 `scripts/claude-mcp-smoke` helper is the automated local regression check.
+To preflight whether the official Inspector package is reachable without
+opening an interactive session, run:
+
+```sh
+scripts/mcp-inspector --check-only
+```
 
 ## Manual Claude Use
 

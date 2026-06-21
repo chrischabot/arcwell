@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v curl >/dev/null 2>&1; then
+  echo "BLOCKED: curl is required for Garderobe read-only smoke." >&2
+  exit 2
+fi
+
+if [ "${GARDEROBE_READONLY_CONFIRM:-}" != "readonly" ]; then
+  echo "BLOCKED: refusing to touch Garderobe without GARDEROBE_READONLY_CONFIRM=readonly."
+  echo "This smoke performs only GET/HEAD requests and never deploys, migrates, seeds, or writes live data."
+  exit 2
+fi
+
+if [ -z "${GARDEROBE_BASE_URL:-}" ]; then
+  echo "BLOCKED: missing GARDEROBE_BASE_URL."
+  echo "Re-run with: GARDEROBE_READONLY_CONFIRM=readonly GARDEROBE_BASE_URL=https://... scripts/garderobe-readonly-smoke"
+  exit 2
+fi
+
+base="${GARDEROBE_BASE_URL%/}"
+tmp="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+fetch_headers() {
+  local path="$1"
+  local out="$2"
+  curl --silent --show-error --location --max-redirs 0 --max-time 10 \
+    --request GET \
+    --dump-header "$out.headers" \
+    --output "$out.body" \
+    --write-out '%{http_code}' \
+    "$base$path" >"$out.status" || true
+}
+
+assert_status() {
+  local label="$1"
+  local path="$2"
+  local expected="$3"
+  local out="$tmp/$label"
+  fetch_headers "$path" "$out"
+  local status
+  status="$(cat "$out.status")"
+  case "$expected" in
+    redirect)
+      if [ "$status" != "301" ] && [ "$status" != "302" ] && [ "$status" != "303" ] && [ "$status" != "307" ] && [ "$status" != "308" ]; then
+        echo "FAIL: $path expected redirect, got HTTP $status" >&2
+        exit 1
+      fi
+      ;;
+    public_or_auth)
+      if [ "$status" != "200" ] && [ "$status" != "401" ] && [ "$status" != "403" ]; then
+        echo "FAIL: $path expected public or auth-gated response, got HTTP $status" >&2
+        exit 1
+      fi
+      ;;
+    metadata_or_not_found)
+      if [ "$status" != "200" ] && [ "$status" != "404" ]; then
+        echo "FAIL: $path expected metadata or absent metadata, got HTTP $status" >&2
+        exit 1
+      fi
+      ;;
+  esac
+  echo "$path -> HTTP $status"
+}
+
+echo "Running Garderobe read-only smoke against $base"
+echo "Requests are limited to GET and do not include bearer tokens, login codes, deploys, migrations, seeds, or writes."
+
+assert_status root "/" redirect
+assert_status admin "/admin" public_or_auth
+assert_status oauth_metadata "/.well-known/oauth-authorization-server" metadata_or_not_found
+
+echo "PASS: Garderobe read-only surface responded without requiring any write operation."

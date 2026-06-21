@@ -18,5 +18,8 @@ Useful tools:
 - `project_create`
 - `project_resolve`
 - `project_list`
+- `project_status_get`
+- `project_status_record`
+- `project_status_sync_record`
 - `channel_list`
 - `ops_snapshot`

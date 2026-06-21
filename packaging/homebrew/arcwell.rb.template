@@ -1,0 +1,60 @@
+class Arcwell < Formula
+  desc "Local-first assistant services for MCP-capable agents"
+  homepage "https://github.com/chrischabot/arcwell"
+  version "__ARCWELL_VERSION__"
+  license "MIT"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "__ARCWELL_DARWIN_ARM64_URL__"
+      sha256 "__ARCWELL_DARWIN_ARM64_SHA256__"
+    else
+      url "__ARCWELL_DARWIN_X86_64_URL__"
+      sha256 "__ARCWELL_DARWIN_X86_64_SHA256__"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "__ARCWELL_LINUX_ARM64_URL__"
+      sha256 "__ARCWELL_LINUX_ARM64_SHA256__"
+    else
+      url "__ARCWELL_LINUX_X86_64_URL__"
+      sha256 "__ARCWELL_LINUX_X86_64_SHA256__"
+    end
+  end
+
+  def install
+    bin.install "arcwell"
+    prefix.install "LICENSE" if File.exist?("LICENSE")
+  end
+
+  def caveats
+    <<~EOS
+      Arcwell stores local durable data under ARCWELL_HOME, defaulting to:
+        ~/.arcwell
+
+      To install the macOS worker LaunchAgent after choosing that behavior:
+        arcwell service install
+
+      To validate the installed binary and local home:
+        arcwell backup verify
+        arcwell doctor --strict
+    EOS
+  end
+
+  test do
+    require "tmpdir"
+    require "shellwords"
+
+    assert_match "arcwell", shell_output("#{bin}/arcwell --help")
+
+    Dir.mktmpdir("arcwell-home") do |home|
+      system "#{bin}/arcwell", "--home", home, "profile", "set", "homebrew.smoke", "ok", "--source", "homebrew-test"
+      output = shell_output("#{bin}/arcwell --home #{Shellwords.escape(home)} profile get homebrew.smoke")
+      assert_match "ok", output
+      system "#{bin}/arcwell", "--home", home, "backup", "create"
+      system "#{bin}/arcwell", "--home", home, "backup", "verify"
+    end
+  end
+end

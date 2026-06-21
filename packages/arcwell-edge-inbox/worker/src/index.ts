@@ -2,6 +2,11 @@ export interface Env {
   ARCWELL_EDGE_SECRET: string;
   ARCWELL_EDGE_NEXT_SECRET?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  EMAIL_ROUTES_JSON?: string;
+  EMAIL_ALLOWED_SENDERS_JSON?: string;
+  EMAIL_MAX_RAW_BYTES?: string;
+  EMAIL_MAX_PREVIEW_CHARS?: string;
+  EMAIL_REQUIRE_DMARC_PASS?: string;
   MAX_PAYLOAD_BYTES?: string;
   RATE_LIMIT_WINDOW_SECONDS?: string;
   RATE_LIMIT_MAX_EVENTS?: string;
@@ -27,6 +32,22 @@ type NackInput = {
   idempotencyKey?: unknown;
   error?: unknown;
   retrySeconds?: unknown;
+};
+
+type InboundEmailMessage = {
+  from: string;
+  to: string;
+  raw: ReadableStream<Uint8Array>;
+  rawSize?: number;
+  headers: Headers;
+  setReject(reason: string): void;
+};
+
+type EmailRoute = {
+  id?: unknown;
+  recipient?: unknown;
+  projectId?: unknown;
+  allowedSenders?: unknown;
 };
 
 export type StoredEdgeEvent = {
@@ -59,6 +80,15 @@ type RateLimitResult = {
 };
 
 export default {
+  async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
+    if (!env.EDGE_DB) {
+      message.setReject("missing EDGE_DB binding");
+      return;
+    }
+    const result = await handleEmail(message, env, new D1EdgeEventStore(env.EDGE_DB));
+    if (!result.accepted) message.setReject(result.reason ?? "email_rejected");
+  },
+
   async fetch(request: Request, env: Env): Promise<Response> {
     if (!env.EDGE_DB) {
       const url = new URL(request.url);
@@ -70,6 +100,80 @@ export default {
     return handleRequest(request, env, new D1EdgeEventStore(env.EDGE_DB));
   }
 };
+
+export async function handleEmail(
+  message: InboundEmailMessage,
+  env: Env,
+  store: EdgeEventStore
+): Promise<{ accepted: boolean; duplicate: boolean; reason: string | null; idempotencyKey?: string }> {
+  const maxRawBytes = clampNumber(env.EMAIL_MAX_RAW_BYTES ?? env.MAX_PAYLOAD_BYTES, 1024, 512000, 128000);
+  if (typeof message.rawSize === "number" && message.rawSize > maxRawBytes) {
+    return { accepted: false, duplicate: false, reason: "email_raw_too_large" };
+  }
+  const routes = parseEmailRoutes(env.EMAIL_ROUTES_JSON);
+  if (routes.length === 0) return { accepted: false, duplicate: false, reason: "email_routes_not_configured" };
+  const recipient = normalizeEmailAddress(message.to);
+  if (!recipient) return { accepted: false, duplicate: false, reason: "missing_email_recipient" };
+  const route = routes.find((candidate) => normalizeEmailAddress(String(candidate.recipient ?? "")) === recipient);
+  if (!route) return { accepted: false, duplicate: false, reason: "unauthorized_email_route" };
+
+  const trustedSender = normalizeEmailAddress(message.from);
+  if (!trustedSender) return { accepted: false, duplicate: false, reason: "missing_trusted_email_sender" };
+  const allowedSenders = normalizeEmailAllowedSenders(route.allowedSenders, env.EMAIL_ALLOWED_SENDERS_JSON);
+  if (!emailSenderAllowed(trustedSender, allowedSenders)) {
+    return { accepted: false, duplicate: false, reason: "unauthorized_email_sender" };
+  }
+
+  const raw = await readStreamText(message.raw, maxRawBytes);
+  if ("reason" in raw) return { accepted: false, duplicate: false, reason: raw.reason };
+  const parsed = parseMimeMessage(raw.value, message.headers);
+  const messageId = normalizeHeaderToken(parsed.headers.get("message-id"));
+  if (!messageId) return { accepted: false, duplicate: false, reason: "missing_email_message_id" };
+  const requireDmarcPass = env.EMAIL_REQUIRE_DMARC_PASS !== "false";
+  const auth = parseAuthenticationResults(parsed.headers.get("authentication-results"));
+  if (requireDmarcPass && auth.dmarc !== "pass") {
+    return { accepted: false, duplicate: false, reason: "email_sender_authentication_failed" };
+  }
+
+  const previewChars = clampNumber(env.EMAIL_MAX_PREVIEW_CHARS, 100, 20000, 4000);
+  const subject = safeHeaderValue(parsed.headers.get("subject") ?? "(no subject)").slice(0, 180) || "(no subject)";
+  const headerFrom = normalizeEmailAddress(parsed.headers.get("from") ?? "");
+  const warnings = [];
+  if (headerFrom && headerFrom !== trustedSender) warnings.push("header_from_is_display_only_and_differs_from_trusted_sender");
+  if (parsed.trackingLinks.length > 0) warnings.push("tracking_links_preserved_as_unfetched_evidence");
+  const idempotencyKey = `email:message:${await sha256Hex(messageId, 32)}`;
+  const now = Date.now();
+  const limited = await enforceRateLimit(store, env, `source:email:recipient:${recipient}`, now);
+  if (limited) return { accepted: false, duplicate: false, reason: "email_rate_limited" };
+  const routeId = typeof route.id === "string" && route.id.length > 0 ? route.id : recipient;
+  const { duplicate } = await store.enqueue({
+    source: "email",
+    idempotencyKey,
+    payload: {
+      provider: "cloudflare_email_routing",
+      messageId,
+      receivedAt: new Date(now).toISOString(),
+      routeId,
+      projectId: typeof route.projectId === "string" ? route.projectId : null,
+      trustedSender,
+      headerFrom,
+      recipient,
+      subject,
+      sanitizedText: parsed.text.slice(0, previewChars),
+      auth,
+      warnings,
+      trackingLinks: parsed.trackingLinks
+    },
+    status: "pending",
+    receivedAt: now,
+    expiresAt: now + 24 * 60 * 60 * 1000,
+    leasedUntil: null,
+    attempts: 0,
+    maxAttempts: 3,
+    error: null
+  });
+  return { accepted: true, duplicate, reason: null, idempotencyKey };
+}
 
 export async function handleRequest(request: Request, env: Env, store: EdgeEventStore): Promise<Response> {
   const url = new URL(request.url);
@@ -217,6 +321,218 @@ function normalizeTelegramUpdate(value: Record<string, unknown>): { value: Recor
       text
     }
   };
+}
+
+function parseEmailRoutes(value: unknown): EmailRoute[] {
+  if (typeof value !== "string" || value.trim().length === 0) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((route) => objectValue(route)) as EmailRoute[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeEmailAllowedSenders(routeAllowed: unknown, globalAllowedJson: unknown): string[] {
+  const routeValues = Array.isArray(routeAllowed) ? routeAllowed : null;
+  if (routeValues) return routeValues.map(emailSenderRuleString).filter((value) => value.length > 0);
+  if (typeof globalAllowedJson !== "string" || globalAllowedJson.trim().length === 0) return [];
+  try {
+    const parsed = JSON.parse(globalAllowedJson) as unknown;
+    return Array.isArray(parsed) ? parsed.map(emailSenderRuleString).filter((value) => value.length > 0) : [];
+  } catch {
+    return [];
+  }
+}
+
+function emailSenderRuleString(value: unknown): string {
+  if (typeof value === "string") return value.trim().toLowerCase();
+  const object = objectValue(value);
+  if (!object) return "";
+  if (typeof object.address === "string") return object.address.trim().toLowerCase();
+  if (typeof object.domain === "string") return `@${object.domain.trim().toLowerCase().replace(/^@/, "")}`;
+  return "";
+}
+
+function emailSenderAllowed(sender: string, rules: string[]): boolean {
+  if (rules.length === 0) return false;
+  const senderDomain = sender.split("@")[1] ?? "";
+  return rules.some((rule) => {
+    const normalized = normalizeEmailAddress(rule);
+    if (normalized) return normalized === sender;
+    const domain = rule.replace(/^@/, "");
+    return domain.length > 0 && senderDomain === domain;
+  });
+}
+
+async function readStreamText(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number
+): Promise<{ value: string } | { reason: string }> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    total += next.value.byteLength;
+    if (total > maxBytes) return { reason: "email_raw_too_large" };
+    chunks.push(next.value);
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { value: new TextDecoder().decode(merged) };
+}
+
+function parseMimeMessage(raw: string, fallbackHeaders: Headers): { headers: Map<string, string>; text: string; trackingLinks: string[] } {
+  const [headerBlock, body] = splitHeaderBody(raw);
+  const headers = parseHeaders(headerBlock);
+  fallbackHeaders.forEach((value, key) => {
+    if (!headers.has(key.toLowerCase())) headers.set(key.toLowerCase(), value);
+  });
+  const contentType = headers.get("content-type") ?? "text/plain";
+  const text = sanitizeEmailText(extractMimeText(body, contentType, headers, 0)).slice(0, 20000);
+  return { headers, text, trackingLinks: findTrackingLinks(text) };
+}
+
+function extractMimeText(body: string, contentType: string, headers: Map<string, string>, depth: number): string {
+  if (depth > 6) return "";
+  const transferEncoding = (headers.get("content-transfer-encoding") ?? "").toLowerCase();
+  const decodedBody = decodeTransferEncoding(body, transferEncoding);
+  const boundary = contentType.match(/boundary="?([^";]+)"?/i)?.[1];
+  if (/multipart\//i.test(contentType) && boundary) {
+    const texts: string[] = [];
+    const htmls: string[] = [];
+    for (const part of splitMimeParts(decodedBody, boundary)) {
+      const [partHeadersRaw, partBody] = splitHeaderBody(part);
+      const partHeaders = parseHeaders(partHeadersRaw);
+      const partContentType = partHeaders.get("content-type") ?? "text/plain";
+      const extracted = extractMimeText(partBody, partContentType, partHeaders, depth + 1);
+      if (/text\/html/i.test(partContentType)) htmls.push(extracted);
+      else if (extracted.trim().length > 0) texts.push(extracted);
+    }
+    return texts.length > 0 ? texts.join("\n\n") : htmls.join("\n\n");
+  }
+  if (/text\/html/i.test(contentType)) return htmlToText(decodedBody);
+  if (/text\/plain/i.test(contentType) || contentType === "text/plain") return decodedBody;
+  return "";
+}
+
+function splitMimeParts(body: string, boundary: string): string[] {
+  return body
+    .split(`--${boundary}`)
+    .slice(1)
+    .map((part) => part.replace(/^\r?\n/, ""))
+    .filter((part) => !part.startsWith("--") && part.trim().length > 0);
+}
+
+function splitHeaderBody(value: string): [string, string] {
+  const match = value.match(/\r?\n\r?\n/);
+  if (!match || typeof match.index !== "number") return ["", value];
+  return [value.slice(0, match.index), value.slice(match.index + match[0].length)];
+}
+
+function parseHeaders(block: string): Map<string, string> {
+  const headers = new Map<string, string>();
+  let current = "";
+  for (const line of block.split(/\r?\n/)) {
+    if (/^[ \t]/.test(line) && current) {
+      headers.set(current, `${headers.get(current) ?? ""} ${line.trim()}`.trim());
+      continue;
+    }
+    const index = line.indexOf(":");
+    if (index <= 0) continue;
+    current = line.slice(0, index).toLowerCase();
+    headers.set(current, line.slice(index + 1).trim());
+  }
+  return headers;
+}
+
+function decodeTransferEncoding(body: string, encoding: string): string {
+  if (encoding === "base64") {
+    try {
+      const binary = atob(body.replace(/\s+/g, ""));
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    } catch {
+      return "";
+    }
+  }
+  if (encoding === "quoted-printable") {
+    return body
+      .replace(/=\r?\n/g, "")
+      .replace(/=([0-9A-F]{2})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  }
+  return body;
+}
+
+function parseAuthenticationResults(value: string | undefined): { dmarc: string; spf: string; dkim: string } {
+  const text = (value ?? "").toLowerCase();
+  return {
+    dmarc: text.match(/\bdmarc=(pass|fail|none|neutral|temperror|permerror)\b/)?.[1] ?? "unknown",
+    spf: text.match(/\bspf=(pass|fail|none|neutral|temperror|permerror)\b/)?.[1] ?? "unknown",
+    dkim: text.match(/\bdkim=(pass|fail|none|neutral|temperror|permerror)\b/)?.[1] ?? "unknown"
+  };
+}
+
+function normalizeHeaderToken(value: string | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const token = value.trim().replace(/^<|>$/g, "").toLowerCase();
+  if (!token || token.length > 300 || /[\r\n]/.test(token)) return null;
+  return token;
+}
+
+function normalizeEmailAddress(value: string): string | null {
+  const trimmed = value.trim();
+  const bracketed = trimmed.match(/<([^<>]+)>/);
+  const candidate = (bracketed ? bracketed[1] : trimmed).trim().replace(/^mailto:/i, "");
+  if (!candidate || candidate.length > 320 || /[\r\n]/.test(candidate)) return null;
+  const match = candidate.match(/^([A-Z0-9._%+\-']+)@([A-Z0-9.-]+\.[A-Z]{2,})$/i);
+  if (!match) return null;
+  return `${match[1].toLowerCase()}@${match[2].toLowerCase()}`;
+}
+
+function safeHeaderValue(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+function sanitizeEmailText(value: string): string {
+  return value
+    .replace(/\u0000/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
+}
+
+function htmlToText(html: string): string {
+  return html
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'");
+}
+
+function findTrackingLinks(value: string): string[] {
+  const links = value.match(/https?:\/\/[^\s"'<>]+/gi) ?? [];
+  return links
+    .filter((link) => /[?&](utm_[^=]+|fbclid|gclid|mc_cid|mc_eid)=/i.test(link) || /\/(track|tracking|open|click)\b/i.test(link))
+    .slice(0, 20);
+}
+
+async function sha256Hex(value: string, length: number): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, length);
 }
 
 function objectValue(value: unknown): Record<string, unknown> | null {
