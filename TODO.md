@@ -232,7 +232,7 @@ Adversarial/severe gate:
 - [ ] Live-smoke real Telegram webhook -> Cloudflare -> local drain ->
       `channel_messages`.
 - [x] Live-smoke real outgoing Telegram send and delivery attempt recording.
-- [ ] Add automatic worker-driven retry for due Telegram deliveries.
+- [x] Add automatic worker-driven retry for due Telegram deliveries.
 - [ ] Add safe follow-up context carryover for authorized Telegram chats.
 - [x] Add richer media/update support or explicitly document text/caption-only
       scope.

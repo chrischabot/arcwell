@@ -703,6 +703,8 @@ pub struct WorkerRunReport {
     pub failed: usize,
     pub dead_lettered: usize,
     pub jobs: Vec<WikiJob>,
+    pub telegram_retry: Option<TelegramRetryReport>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6494,6 +6496,7 @@ impl Store {
             };
             jobs.push(self.execute_wiki_job(job)?);
         }
+        let (telegram_retry, warnings) = self.retry_due_telegram_deliveries_for_worker(10)?;
         let completed = jobs.iter().filter(|job| job.status == "completed").count();
         let failed = jobs.iter().filter(|job| job.status == "failed").count();
         let dead_lettered = jobs
@@ -6507,6 +6510,8 @@ impl Store {
             failed,
             dead_lettered,
             jobs,
+            telegram_retry,
+            warnings,
         })
     }
 
@@ -10726,6 +10731,71 @@ impl Store {
             failed,
             reports,
         })
+    }
+
+    fn retry_due_telegram_deliveries_for_worker(
+        &self,
+        max_attempts: usize,
+    ) -> Result<(Option<TelegramRetryReport>, Vec<String>)> {
+        let due_count = self.due_telegram_delivery_count()?;
+        if due_count == 0 {
+            return Ok((None, Vec::new()));
+        }
+        let Some(bot_token) = self.configured_telegram_bot_token()? else {
+            return Ok((
+                None,
+                vec![format!(
+                    "{due_count} Telegram delivery retry item(s) are due, but TELEGRAM_BOT_TOKEN is not configured"
+                )],
+            ));
+        };
+        let api_base = self.configured_telegram_api_base()?;
+        let report = self.retry_due_telegram_deliveries(
+            &bot_token,
+            api_base.as_deref(),
+            max_attempts.min(due_count as usize),
+        )?;
+        Ok((Some(report), Vec::new()))
+    }
+
+    fn due_telegram_delivery_count(&self) -> Result<i64> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM channel_messages m
+                JOIN channel_delivery_attempts d ON d.message_id = m.id
+                WHERE m.channel = 'telegram'
+                  AND m.direction = 'outgoing'
+                  AND m.status = 'failed'
+                  AND d.ok = 0
+                  AND d.retry_at IS NOT NULL
+                  AND d.retry_at <= ?1
+                  AND d.attempt = (
+                    SELECT max(d2.attempt)
+                    FROM channel_delivery_attempts d2
+                    WHERE d2.message_id = m.id
+                  )
+                "#,
+                params![now()],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    fn configured_telegram_bot_token(&self) -> Result<Option<String>> {
+        self.get_usable_secret_value("TELEGRAM_BOT_TOKEN")
+            .map(|secret| secret.or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok()))
+    }
+
+    fn configured_telegram_api_base(&self) -> Result<Option<String>> {
+        let value = self
+            .get_usable_secret_value("TELEGRAM_API_BASE")?
+            .or_else(|| std::env::var("ARCWELL_TELEGRAM_API_BASE").ok());
+        if let Some(value) = &value {
+            validate_public_http_url(value)?;
+        }
+        Ok(value)
     }
 
     fn send_existing_telegram_message(
@@ -27302,6 +27372,66 @@ ARXIV=( "cat:cs.AI" )
             .unwrap();
         assert_eq!(retry.attempted, 1);
         assert_eq!(retry.sent, 1);
+        assert_eq!(store.list_channel_messages().unwrap().len(), 1);
+        let attempts = store
+            .list_channel_delivery_attempts(Some(&first.message.id))
+            .unwrap();
+        assert_eq!(attempts.len(), 2);
+        assert!(attempts.iter().any(|attempt| attempt.ok));
+        assert_eq!(
+            store
+                .get_channel_message(&first.message.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "sent"
+        );
+    }
+
+    #[test]
+    fn severe_worker_retries_due_telegram_delivery_from_local_config() {
+        // CLAIM: The resident worker path automatically retries due Telegram
+        // deliveries using local config, without creating a duplicate channel message.
+        // ORACLE: run_worker_once reports a Telegram retry, message count stays one,
+        // the existing message becomes sent, and delivery attempts increment to two.
+        // SEVERITY: Severe because unattended retries can otherwise duplicate sends
+        // or silently skip due delivery work.
+        let store = test_store("telegram-worker-retry");
+        store
+            .authorize_channel_subject("telegram", "telegram:chat:123", false, false, true)
+            .unwrap();
+        let failing_base = mock_status_server(
+            "429 Too Many Requests",
+            "retry-after: 1\r\n",
+            r#"{"ok":false}"#,
+            "application/json",
+        );
+        let first = store
+            .send_telegram_message("token", "123", "Retry from worker", Some(&failing_base))
+            .unwrap();
+        assert!(!first.ok);
+        store
+            .conn
+            .execute(
+                "UPDATE channel_delivery_attempts SET retry_at = ?1 WHERE message_id = ?2",
+                params!["2000-01-01T00:00:00.000000000+00:00", first.message.id],
+            )
+            .unwrap();
+        let ok_base = mock_status_server("200 OK", "", r#"{"ok":true}"#, "application/json");
+        store
+            .set_secret_value("TELEGRAM_BOT_TOKEN", "token", "telegram")
+            .unwrap();
+        store
+            .set_secret_value("TELEGRAM_API_BASE", &ok_base, "telegram")
+            .unwrap();
+
+        let report = store.run_worker_once(1).unwrap();
+        assert_eq!(report.processed, 0);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        let retry = report.telegram_retry.expect("worker should retry Telegram");
+        assert_eq!(retry.attempted, 1);
+        assert_eq!(retry.sent, 1);
+        assert_eq!(retry.failed, 0);
         assert_eq!(store.list_channel_messages().unwrap().len(), 1);
         let attempts = store
             .list_channel_delivery_attempts(Some(&first.message.id))
