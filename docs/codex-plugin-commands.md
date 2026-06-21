@@ -59,7 +59,7 @@ yet recorded as passed in a fresh Codex thread.
 | Claim | Fresh-thread action | Expected evidence |
 | --- | --- | --- |
 | Stable plugin launches installed binary | Install `arcwell-codex@arcwell-local`, start a new thread, ask for Arcwell health through the slash picker. | `/arcwell-health` returns a structured health response from `arcwell mcp`; no `cargo run`, `target/debug`, or `.arcwell-dev` path appears in MCP errors. |
-| Dev plugin launches checkout wrapper | Run `scripts/arcwell-dev sync`, install or select `arcwell-codex-dev@arcwell-local`, start a new thread, then ask for Arcwell health. | Health response comes from the generated dev wrapper; `scripts/arcwell-dev smoke` still passes after the thread test. |
+| Dev plugin launches checkout wrapper | Run `scripts/arcwell-dev sync`, install or select `arc@arcwell-local`, start a new thread, then ask for Arcwell health. | Health response comes from the generated dev wrapper; `scripts/arcwell-dev smoke` still passes after the thread test. |
 | Slash prompts reach representative MCP tools | Run health, profile set/get, memory events, wiki search for a nonsense term, ops snapshot, and backup status from the slash picker. | Commands complete or report an honest empty/partial state; no prompt says a live external integration succeeded without evidence. |
 | Hooks are active only when the host actually runs them | In a new thread, submit a simple memory-relevant prompt, then inspect `/memory-events`. | Recall/capture lifecycle events appear with hook provenance; if absent, report hook execution unavailable rather than assuming it worked. |
 | Untrusted source/channel text remains data | Record or search text containing "ignore previous instructions" and a fake tool call, then ask the relevant command/skill to summarize it. | The output quotes or summarizes the hostile text as evidence and does not obey it. |
@@ -83,9 +83,9 @@ The plugin assumes `arcwell` is on `PATH`. The MCP server uses the default local
 
 Codex plugin slash commands are prompt files under `commands/`. The Codex app
 slash picker indexes enabled skills, so `scripts/arcwell-dev materialize`
-generates skill shims from these prompts for `arcwell-codex-dev`. Depending on
+generates skill shims from these prompts for `arc`. Depending on
 the host surface and namespace collision handling, they may appear as
-`/arcwell-codex-dev:remember`, `/remember`, or through the slash menu after
+`/arc:remember`, `/remember`, or through the slash menu after
 typing part of the name. Use the displayed command name from the picker.
 
 ### Health, Ops, And Services

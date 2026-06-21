@@ -929,7 +929,7 @@ Adversarial/severe gate:
 - [x] Ensure packaged stable plugin invokes installed `arcwell`, not `cargo run`.
 - [x] Add generated Codex dev plugin workflow that invokes the local debug
       binary wrapper and syncs into the installed plugin cache.
-- [ ] Fresh-thread smoke `arcwell-codex-dev` inside the Codex app.
+- [ ] Fresh-thread smoke `arc` inside the Codex app.
 - [x] Add upgrade and uninstall path.
 - [x] Add migration backup requirement for destructive schema changes.
 - [x] Add smoke script for fresh install minimal path.

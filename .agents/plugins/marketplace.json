@@ -17,10 +17,10 @@
       "category": "Productivity"
     },
     {
-      "name": "arcwell-codex-dev",
+      "name": "arc",
       "source": {
         "source": "local",
-        "path": "./.arcwell-dev/plugins/arcwell-codex-dev"
+        "path": "./.arcwell-dev/plugins/arc"
       },
       "policy": {
         "installation": "AVAILABLE",

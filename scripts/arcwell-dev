@@ -4,11 +4,12 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STABLE_PLUGIN="$REPO_ROOT/plugins/arcwell-codex"
 DEV_ROOT="$REPO_ROOT/.arcwell-dev"
-DEV_PLUGIN="$DEV_ROOT/plugins/arcwell-codex-dev"
+DEV_PLUGIN_NAME="arc"
+DEV_PLUGIN="$DEV_ROOT/plugins/$DEV_PLUGIN_NAME"
 DEV_BIN_DIR="$DEV_ROOT/bin"
 DEV_WRAPPER="$DEV_BIN_DIR/arcwell-dev"
 CODEX_MARKETPLACE_NAME="arcwell-local"
-DEV_PLUGIN_REF="arcwell-codex-dev@$CODEX_MARKETPLACE_NAME"
+DEV_PLUGIN_REF="$DEV_PLUGIN_NAME@$CODEX_MARKETPLACE_NAME"
 
 usage() {
   cat <<'USAGE'
@@ -17,14 +18,14 @@ Usage: scripts/arcwell-dev <command>
 Commands:
   build       Build the debug arcwell binary.
   materialize Generate .arcwell-dev plugin and wrapper from plugins/arcwell-codex.
-  install     Build, materialize, add marketplace, and install arcwell-codex-dev.
+  install     Build, materialize, add marketplace, and install arc.
   sync        Build, materialize, and sync into the installed Codex plugin cache.
   watch       Re-run sync when Rust/plugin/docs files change.
   smoke       Run local dev-loop smoke checks against a disposable ARCWELL_HOME.
   status      Print dev binary, plugin, cache, and Codex availability.
 
 Notes:
-  - Use arcwell-codex-dev for development, arcwell-codex for stable use.
+  - Use arc for development, arcwell-codex for stable use.
   - After sync, use Cmd+K -> Force Reload Skills or start a new Codex thread.
   - New/removed tools, slash commands, hooks, or MCP schemas need a new thread.
 USAGE
@@ -136,10 +137,10 @@ const generateCommandSkillShims = (pluginRoot) => {
 };
 
 const plugin = JSON.parse(fs.readFileSync(pluginPath, "utf8"));
-plugin.name = "arcwell-codex-dev";
+plugin.name = "arc";
 plugin.description = "Development Arcwell plugin for Codex. Uses the local target/debug/arcwell binary.";
 plugin.interface = plugin.interface || {};
-plugin.interface.displayName = "Arcwell Dev";
+plugin.interface.displayName = "Arc";
 plugin.interface.shortDescription = "Live-development Arcwell plugin for Codex.";
 plugin.interface.longDescription = "Development build of Arcwell that points Codex at this checkout's target/debug/arcwell binary.";
 plugin.interface.brandColor = "#0F766E";
@@ -191,7 +192,7 @@ codex_cache_dir() {
   if [ ! -d "$cache_root" ]; then
     return 1
   fi
-  find "$cache_root" -type d -path "*/$CODEX_MARKETPLACE_NAME/arcwell-codex-dev/0.1.0" -print -quit 2>/dev/null
+  find "$cache_root" -type d -path "*/$CODEX_MARKETPLACE_NAME/$DEV_PLUGIN_NAME/0.1.0" -print -quit 2>/dev/null
 }
 
 ensure_marketplace_entry() {
@@ -203,8 +204,8 @@ const path = process.argv[2];
 const doc = JSON.parse(fs.readFileSync(path, "utf8"));
 doc.plugins = Array.isArray(doc.plugins) ? doc.plugins : [];
 const dev = {
-  name: "arcwell-codex-dev",
-  source: { source: "local", path: "./.arcwell-dev/plugins/arcwell-codex-dev" },
+  name: "arc",
+  source: { source: "local", path: "./.arcwell-dev/plugins/arc" },
   policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
   category: "Productivity"
 };
@@ -245,9 +246,13 @@ sync_plugin() {
   local cache
   cache="$(codex_cache_dir || true)"
   if [ -z "$cache" ]; then
-    echo "arcwell-codex-dev is not installed in the Codex plugin cache yet." >&2
-    echo "Run: scripts/arcwell-dev install" >&2
-    exit 2
+    echo "$DEV_PLUGIN_REF is not installed in the Codex plugin cache yet; installing it now."
+    install_plugin
+    cache="$(codex_cache_dir || true)"
+    if [ -z "$cache" ]; then
+      echo "$DEV_PLUGIN_REF install did not create the expected Codex plugin cache entry." >&2
+      exit 2
+    fi
   fi
   rsync -a --delete "$DEV_PLUGIN/" "$cache/"
   echo "synced dev plugin into Codex cache: $cache"
@@ -379,7 +384,7 @@ status() {
   if [ -n "$cache" ]; then
     echo "Codex cache: $cache"
   else
-    echo "Codex cache: arcwell-codex-dev not installed"
+    echo "Codex cache: $DEV_PLUGIN_REF not installed"
   fi
   if command -v codex >/dev/null 2>&1; then
     echo "codex CLI: $(command -v codex)"

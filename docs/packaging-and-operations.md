@@ -378,9 +378,9 @@ Use the generated development plugin while editing Arcwell from inside Codex:
 scripts/arcwell-dev install
 ```
 
-This creates `.arcwell-dev/plugins/arcwell-codex-dev` from the stable plugin,
+This creates `.arcwell-dev/plugins/arc` from the stable plugin,
 creates `.arcwell-dev/bin/arcwell-dev`, builds `target/debug/arcwell`, and
-installs `arcwell-codex-dev@arcwell-local` through the repo marketplace.
+installs `arc@arcwell-local` through the repo marketplace.
 
 Normal inner loop:
 
