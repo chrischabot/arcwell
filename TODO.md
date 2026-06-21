@@ -545,9 +545,9 @@ Adversarial/severe gate:
 
 - [x] Define procedure schema: trigger context, problem, preconditions, steps,
       tools, validation, risks, and provenance.
-- [ ] Add explicit procedure confidence and freshness fields/policies.
+- [x] Add explicit procedure confidence and freshness fields/policies.
 - [x] Add procedure candidate operation types: add, update, and archive.
-- [ ] Add richer procedure candidate operation types for merge and no-op.
+- [x] Add richer procedure candidate operation types for merge and no-op.
 - [x] Store approved procedures as versioned Markdown artifacts with SQLite
       metadata.
 - [x] Add CLI/MCP tools for procedure search, list, read, candidate apply,
@@ -557,7 +557,7 @@ Adversarial/severe gate:
       policy.
 - [x] Add curator behavior for exact duplicate detection and archival
       candidates.
-- [ ] Add curator behavior for stale review and merge proposals.
+- [x] Add curator behavior for stale review and merge proposals.
 - [ ] Add plugin prompts that retrieve approved procedures before relevant
       tasks.
 - [ ] Add a reviewed export path from approved procedure to Codex skill text
@@ -570,7 +570,7 @@ Arcwell can now learn a local, reviewed slice of reusable task procedures
 without silently modifying skills or polluting prompts. Procedures are
 reviewable procedural memory derived from work traces, separate from personal
 memory and external knowledge. Remaining work is model-backed extraction/evals,
-richer stale/merge curation, plugin retrieval, and reviewed skill export.
+plugin retrieval, and reviewed skill export.
 
 How to test:
 - Unit-test schema validation, candidate apply/reject, versioning, search,
@@ -831,7 +831,7 @@ Adversarial/severe gate:
 - [x] Add duplicate policy per adapter.
 - [x] Add provider rate-limit handling.
 - [x] Add source health in ops snapshot.
-- [ ] Add source health UI.
+- [x] Add source health UI.
 - [x] Add scheduled polling enqueue hooks.
 - [ ] Add full resident scheduled polling through worker service.
 
