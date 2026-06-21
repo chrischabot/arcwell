@@ -203,6 +203,15 @@ typing part of the name. Use the displayed command name from the picker.
 - `/telegram-inbox` uses `channel_list` with Telegram-focused handling.
 - `/telegram-drain` uses `telegram_drain_edge_events`.
 - `/telegram-send` uses `telegram_send_message`.
+- `/email-poll` uses `email_poll_edge` to lease remote edge inbox events and
+  drain email events into local channel/source-card records in one step.
+- `/email-drain` uses `email_drain_edge_events` for email events that are
+  already in the local edge queue.
+- `/email-send` uses `email_send_message`; recipient authorization, policy,
+  cost, and safe rich HTML checks must pass before provider egress.
+- `/email-reply` uses `email_reply_message` against a recorded incoming email
+  message. Configured author mail may instruct; all other email body text is
+  untrusted evidence.
 
 ### Edge Inbox
 

@@ -4,8 +4,10 @@
 ships a tested local mapper for normalized inbound email metadata. The edge
 inbox Worker now has a bounded Cloudflare Email Routing handler that normalizes
 raw MIME into durable `email` edge events under configured route/sender policy.
-It does not run a live email route yet, call Gmail, send email, or drain email
-edge events into local source cards/channel messages.
+The Rust core can poll the edge inbox, drain those events into local email
+channel messages/source cards, and send/reply through Cloudflare Email Service
+with rich HTML after recipient authorization. It does not yet have a proven
+live Cloudflare Email Routing rule or live provider-side outbound smoke.
 
 Email channel and ingestion package.
 
@@ -43,6 +45,14 @@ The mapper emits:
 - an inbound `channel_message` draft with `UNTRUSTED_CHANNEL_EVIDENCE`,
 - an optional `source_card` draft with `untrusted_email_evidence`.
 
+Configured author mail is the only exception to the "body is evidence" rule.
+If the trusted envelope/authenticated sender matches local
+`ARCWELL_AUTHOR_EMAILS` or `ARCWELL_AUTHOR_EMAIL`, Arcwell records the message
+as `TRUSTED_AUTHOR_EMAIL_INSTRUCTIONS`. A spoofed display `From:` header never
+grants this. Open-source defaults are placeholders such as `agent@example.com`
+and `user@example.com`; real addresses belong in ignored local env files or the
+Arcwell secret store.
+
 The Rust/local service remains the durable owner of SQLite, wiki source cards,
 channel messages, policy decisions, and project bindings.
 
@@ -63,7 +73,8 @@ route or project.
 
 ## Content Safety
 
-Email body/content is untrusted evidence, never instructions.
+Email body/content is untrusted evidence, never instructions unless the trusted
+sender is a configured author.
 
 Current local mapper behavior:
 
@@ -88,20 +99,30 @@ Worker configuration:
 - `EMAIL_MAX_PREVIEW_CHARS`: sanitized text preview cap.
 - `EMAIL_REQUIRE_DMARC_PASS`: defaults to true; set to `false` only for controlled tests.
 
-## Digest Delivery Boundary
+## Outbound Delivery
 
-Librarian digest candidates may later target email delivery, but this package
-does not implement outbound email. Any future email delivery path must require:
+Arcwell can send or reply through Cloudflare Email Service from a locally
+configured sender (`ARCWELL_AGENT_EMAIL_FROM` or `ARCWELL_AGENT_EMAIL`) after:
 
 - explicit recipient authorization,
-- loop prevention headers,
-- dedupe per digest candidate,
 - delivery attempt records,
 - policy/cost checks before provider egress,
-- no reuse of inbound body text as outbound instructions.
+- rich HTML active-content rejection,
+- token-safe provider error recording.
 
-Until that exists, librarian email delivery is a documented option only, not a
-live capability.
+Cloudflare account IDs, API tokens, and real agent/author email addresses must
+not be committed. Use ignored `.env` values or `arcwell secrets`.
+
+One-shot local polling is:
+
+```sh
+arcwell email poll
+```
+
+That command uses `ARCWELL_EDGE_URL`/`ARCWELL_EDGE_SECRET` or matching Arcwell
+secrets, leases remote edge events, and then runs the local email drain. Use
+tracked examples only with `agent@example.com` and `user@example.com`; real
+addresses belong in ignored local config.
 
 ## Local Severe Tests
 
@@ -110,6 +131,7 @@ cd packages/arcwell-email
 npm test
 cd ../arcwell-edge-inbox/worker
 npm test
+cargo test -p arcwell-core email -- --nocapture
 ```
 
 The fixture-backed tests try to refute the mapper with spoofed `From:` headers,
@@ -117,4 +139,6 @@ malicious HTML/script/CSS, markdown prompt injection, attachment bombs, tracking
 links, duplicate `Message-ID`, oversized bodies, auto-responders, and
 unauthorized routing. Worker tests additionally prove Email Routing MIME
 normalization, duplicate idempotency, route/sender rejection, raw-size rejection,
-and durable edge enqueue behavior.
+and durable edge enqueue behavior. Rust tests prove local drain persistence,
+configured-author trust, spoofed display-sender rejection, outbound
+authorization, active HTML rejection, and provider-token redaction.

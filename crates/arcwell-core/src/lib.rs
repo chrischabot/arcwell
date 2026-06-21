@@ -8628,6 +8628,13 @@ impl Store {
             .is_some_and(|authorization| authorization.can_send))
     }
 
+    fn email_sender_is_configured_author(&self, sender: &str) -> Result<bool> {
+        let sender = normalize_email_address(sender).context("invalid email sender")?;
+        Ok(configured_author_emails(self)?
+            .iter()
+            .any(|author| author == &sender))
+    }
+
     pub fn record_channel_delivery_attempt(
         &self,
         message_id: &str,
@@ -8755,6 +8762,118 @@ impl Store {
             nacked,
             messages,
         })
+    }
+
+    pub fn drain_email_edge_events(&self, max_events: usize) -> Result<EmailDrainReport> {
+        let mut processed = 0;
+        let mut acked = 0;
+        let mut nacked = 0;
+        let mut messages = Vec::new();
+        let mut source_cards = Vec::new();
+        for _ in 0..max_events.clamp(1, 100) {
+            let Some(event) = self.lease_edge_event_for_source("email")? else {
+                break;
+            };
+            processed += 1;
+            match self.record_email_event(&event) {
+                Ok((message, source_card)) => {
+                    self.ack_edge_event(&event.id)?;
+                    acked += 1;
+                    messages.push(message);
+                    source_cards.push(source_card);
+                }
+                Err(error) => {
+                    self.nack_edge_event(&event.id, &error.to_string())?;
+                    nacked += 1;
+                }
+            }
+        }
+        Ok(EmailDrainReport {
+            processed,
+            acked,
+            nacked,
+            messages,
+            source_cards,
+        })
+    }
+
+    fn record_email_event(&self, event: &EdgeEvent) -> Result<(ChannelMessage, SourceCard)> {
+        let payload = &event.payload_json;
+        let trusted_sender = payload
+            .get("trustedSender")
+            .or_else(|| payload.get("trusted_sender"))
+            .and_then(Value::as_str)
+            .and_then(normalize_email_address)
+            .context("email event missing trusted sender")?;
+        let recipient = payload
+            .get("recipient")
+            .and_then(Value::as_str)
+            .and_then(normalize_email_address)
+            .context("email event missing recipient")?;
+        let subject = payload
+            .get("subject")
+            .and_then(Value::as_str)
+            .unwrap_or("(no subject)");
+        let text = payload
+            .get("sanitizedText")
+            .or_else(|| payload.get("sanitized_text"))
+            .and_then(Value::as_str)
+            .context("email event missing sanitized text")?;
+        let message_id = payload
+            .get("messageId")
+            .or_else(|| payload.get("message_id"))
+            .and_then(Value::as_str)
+            .context("email event missing message id")?;
+        let auth = payload.get("auth").cloned().unwrap_or_else(|| json!({}));
+        let is_author = self.email_sender_is_configured_author(&trusted_sender)?;
+        let trust_label = if is_author {
+            "TRUSTED_AUTHOR_EMAIL_INSTRUCTIONS"
+        } else {
+            "UNTRUSTED_CHANNEL_EVIDENCE"
+        };
+        let body = format!(
+            "{trust_label}\nFrom: {trusted_sender}\nTo: {recipient}\nSubject: {}\nMessage-ID: {}\n\n{}",
+            excerpt(subject, 240),
+            excerpt(message_id, 240),
+            text
+        );
+        let project_id = payload.get("projectId").and_then(Value::as_str);
+        let message = self.record_channel_message(
+            "email",
+            "incoming",
+            &format!("email:{trusted_sender}"),
+            &body,
+            project_id,
+            Some(&event.id),
+        )?;
+        let card = self.add_source_card(SourceCardInput {
+            title: format!("Email: {}", excerpt(subject, 160)),
+            url: email_source_card_url(message_id),
+            source_type: "email".to_string(),
+            provider: "cloudflare_email_routing".to_string(),
+            summary: body.clone(),
+            claims: vec![],
+            retrieved_at: payload
+                .get("receivedAt")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            metadata: json!({
+                "trust": if is_author { "trusted_author_instruction" } else { "untrusted_email_evidence" },
+                "body_instruction_policy": if is_author {
+                    "configured_author_email_is_allowed_to_instruct"
+                } else {
+                    "email_body_is_evidence_never_instructions"
+                },
+                "trusted_sender": trusted_sender,
+                "recipient": recipient,
+                "message_id_hash": sha256(message_id.as_bytes()),
+                "source_event_id": event.id,
+                "route_id": payload.get("routeId").cloned().unwrap_or(Value::Null),
+                "warnings": payload.get("warnings").cloned().unwrap_or_else(|| json!([])),
+                "auth": auth,
+            }),
+        })?;
+        Ok((message, card))
     }
 
     fn record_telegram_event(&self, event: &EdgeEvent) -> Result<ChannelMessage> {
@@ -8909,6 +9028,142 @@ impl Store {
             ok,
             status,
             response: response_json,
+            message,
+            delivery,
+        })
+    }
+
+    pub fn send_cloudflare_email(
+        &self,
+        account_id: &str,
+        api_token: &str,
+        from: &str,
+        to: &str,
+        subject: &str,
+        text: &str,
+        html: Option<&str>,
+        reply_to_message_id: Option<&str>,
+        api_base: Option<&str>,
+    ) -> Result<EmailSendReport> {
+        validate_key(account_id)?;
+        validate_notes(api_token)?;
+        let from = normalize_email_address(from).context("invalid email from address")?;
+        let to = normalize_email_address(to).context("invalid email to address")?;
+        validate_notes(subject)?;
+        validate_notes(text)?;
+        if let Some(html) = html {
+            validate_email_html(html)?;
+        }
+        if let Some(message_id) = reply_to_message_id {
+            validate_notes(message_id)?;
+        }
+        let subject_key = format!("email:{to}");
+        if !self.channel_subject_can_send("email", &subject_key)? {
+            bail!("email subject is not authorized to send: {subject_key}");
+        }
+        self.policy_guard(PolicyRequest {
+            action: "channel.send".to_string(),
+            package: Some("arcwell-email".to_string()),
+            provider: Some("cloudflare_email".to_string()),
+            source: Some("email_send".to_string()),
+            channel: Some("email".to_string()),
+            subject: Some(subject_key.clone()),
+            target: Some(to.clone()),
+            projected_usd: None,
+            metadata: json!({
+                "from": from,
+                "reply_to_message_id": reply_to_message_id,
+                "rich_html": html.is_some(),
+            }),
+            untrusted_excerpt: Some(format!("{subject}\n\n{text}")),
+        })?;
+        self.require_cost_budget(
+            "arcwell-email",
+            "email_send",
+            "cloudflare_email",
+            "send",
+            Some("email_send"),
+            estimated_channel_send_cost(),
+            "Cloudflare Email send",
+        )?;
+        let mut message = self.record_channel_message_with_status(
+            "email",
+            "outgoing",
+            &format!("email:{to}"),
+            text,
+            "pending",
+            None,
+            None,
+        )?;
+        let endpoint = format!(
+            "{}/accounts/{}/email/sending/send",
+            api_base
+                .unwrap_or("https://api.cloudflare.com/client/v4")
+                .trim_end_matches('/'),
+            account_id
+        );
+        let mut headers = Map::new();
+        if let Some(message_id) = reply_to_message_id {
+            headers.insert("In-Reply-To".to_string(), json!(message_id));
+            headers.insert("References".to_string(), json!(message_id));
+        }
+        let mut body = json!({
+            "from": from,
+            "to": to,
+            "subject": subject,
+            "text": text,
+        });
+        if let Some(html) = html {
+            body["html"] = json!(html);
+        }
+        if !headers.is_empty() {
+            body["headers"] = Value::Object(headers);
+        }
+        let client = Client::builder().timeout(Duration::from_secs(20)).build()?;
+        let response = client
+            .post(endpoint)
+            .header(AUTHORIZATION, format!("Bearer {api_token}"))
+            .json(&body)
+            .send();
+        let (status, response_json, error, retry_at) = match response {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let retry_at = if (200..300).contains(&status) {
+                    None
+                } else {
+                    Some((Utc::now() + chrono::Duration::seconds(60)).to_rfc3339())
+                };
+                let response_json = response.json::<Value>().unwrap_or_else(|_| json!({}));
+                (status, response_json, None, retry_at)
+            }
+            Err(error) => (
+                0,
+                json!({ "success": false, "error": "request_failed" }),
+                Some(email_request_error_summary(&error)),
+                Some((Utc::now() + chrono::Duration::seconds(60)).to_rfc3339()),
+            ),
+        };
+        let ok = (200..300).contains(&status)
+            && response_json
+                .get("success")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+        let delivery = self.record_channel_delivery_attempt(
+            &message.id,
+            "email",
+            &subject_key,
+            ok,
+            i64::from(status),
+            &redact_email_send_response(response_json),
+            error.as_deref(),
+            retry_at.as_deref(),
+        )?;
+        message =
+            self.update_channel_message_status(&message.id, if ok { "sent" } else { "failed" })?;
+        Ok(EmailSendReport {
+            ok,
+            status,
+            response: delivery.response.clone(),
             message,
             delivery,
         })
@@ -11743,6 +11998,20 @@ fn default_policy_rules() -> Vec<PolicyRule> {
             priority: 0,
             expires_at: None,
         },
+        PolicyRule {
+            id: "default-allow-email-send".to_string(),
+            effect: "allow".to_string(),
+            action: "channel.send".to_string(),
+            reason: "default policy allows explicit email sends after channel authorization policy remains available".to_string(),
+            package: Some("arcwell-email".to_string()),
+            provider: Some("cloudflare_email".to_string()),
+            source: Some("email_send".to_string()),
+            channel: Some("email".to_string()),
+            subject: Some("*".to_string()),
+            target: None,
+            priority: 0,
+            expires_at: None,
+        },
     ]
 }
 
@@ -12051,6 +12320,120 @@ fn sanitize_channel_body(body: &str) -> Result<String> {
         .chars()
         .filter(|ch| *ch == '\n' || *ch == '\t' || !ch.is_control())
         .collect())
+}
+
+fn normalize_email_address(value: &str) -> Option<String> {
+    let value = value
+        .trim()
+        .trim_matches(['<', '>', '"', '\''])
+        .to_ascii_lowercase();
+    if value.len() > 254 || value.matches('@').count() != 1 {
+        return None;
+    }
+    let (local, domain) = value.split_once('@')?;
+    if local.is_empty() || domain.is_empty() || domain.starts_with('.') || domain.ends_with('.') {
+        return None;
+    }
+    if !local
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '%' | '+' | '-'))
+    {
+        return None;
+    }
+    if !domain
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-'))
+    {
+        return None;
+    }
+    Some(format!("{local}@{domain}"))
+}
+
+fn configured_author_emails(store: &Store) -> Result<Vec<String>> {
+    let mut authors = BTreeSet::new();
+    for key in ["ARCWELL_AUTHOR_EMAILS", "ARCWELL_AUTHOR_EMAIL"] {
+        if let Ok(value) = std::env::var(key) {
+            for item in value.split(',') {
+                if let Some(email) = normalize_email_address(item) {
+                    authors.insert(email);
+                }
+            }
+        }
+        if let Some(value) = store.get_secret_value(key).ok().flatten() {
+            for item in value.split(',') {
+                if let Some(email) = normalize_email_address(item) {
+                    authors.insert(email);
+                }
+            }
+        }
+    }
+    if authors.is_empty() {
+        authors.insert("user@example.com".to_string());
+    }
+    Ok(authors.into_iter().collect())
+}
+
+fn email_source_card_url(message_id: &str) -> String {
+    format!(
+        "https://example.com/.well-known/arcwell/email/{}",
+        &sha256(message_id.as_bytes())[..32]
+    )
+}
+
+fn validate_email_html(html: &str) -> Result<()> {
+    validate_notes(html)?;
+    let lower = html.to_ascii_lowercase();
+    for needle in [
+        "<script",
+        "javascript:",
+        "data:text/html",
+        "onerror=",
+        "onload=",
+        "onclick=",
+        "onmouseover=",
+        "<iframe",
+        "<object",
+        "<embed",
+    ] {
+        if lower.contains(needle) {
+            bail!("email html contains unsupported active content: {needle}");
+        }
+    }
+    Ok(())
+}
+
+fn email_request_error_summary(error: &reqwest::Error) -> String {
+    if error.is_timeout() {
+        "request_timeout".to_string()
+    } else if error.is_connect() {
+        "request_connect_failed".to_string()
+    } else {
+        "request_failed".to_string()
+    }
+}
+
+fn redact_email_send_response(mut value: Value) -> Value {
+    redact_secret_like_json(&mut value);
+    value
+}
+
+fn redact_secret_like_json(value: &mut Value) {
+    match value {
+        Value::String(text) => {
+            *text = redact_secret_like_text(text);
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_secret_like_json(item);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values_mut() {
+                redact_secret_like_json(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub fn render_channel_message_evidence(message: &ChannelMessage) -> String {
@@ -21308,6 +21691,179 @@ ARXIV=( "cat:cs.AI" )
             !serialized.contains(token) && !serialized.contains("/botSECRET"),
             "{serialized}"
         );
+    }
+
+    fn email_edge_payload(trusted_sender: &str, header_from: &str, message_id: &str) -> Value {
+        json!({
+            "provider": "cloudflare_email_routing",
+            "messageId": message_id,
+            "receivedAt": "2026-06-21T12:00:00Z",
+            "routeId": "codex",
+            "projectId": null,
+            "trustedSender": trusted_sender,
+            "headerFrom": header_from,
+            "recipient": "agent@example.com",
+            "subject": "Run the requested Arcwell task",
+            "sanitizedText": "Please inspect STATUS.md and send a concise reply.",
+            "auth": { "dmarc": "pass", "spf": "pass" },
+            "warnings": []
+        })
+    }
+
+    #[test]
+    fn severe_email_drain_trusts_only_configured_author_envelope_sender() {
+        // CLAIM: configured author email may create an instruction-labeled channel message,
+        // while a spoofed display From remains untrusted evidence.
+        // ORACLE: trust label and source-card metadata are derived from trustedSender,
+        // not headerFrom/display text.
+        // SEVERITY: Severe because email is an external instruction channel.
+        let store = test_store("email-author-trust");
+        let author = store
+            .enqueue_edge_event(
+                "email",
+                "email:message:author",
+                email_edge_payload("user@example.com", "User <user@example.com>", "<author@x>"),
+                3600,
+            )
+            .unwrap();
+        let spoof = store
+            .enqueue_edge_event(
+                "email",
+                "email:message:spoof",
+                email_edge_payload(
+                    "attacker@example.com",
+                    "User <user@example.com>",
+                    "<spoof@x>",
+                ),
+                3600,
+            )
+            .unwrap();
+
+        let report = store.drain_email_edge_events(10).unwrap();
+        assert_eq!(report.processed, 2);
+        assert_eq!(report.acked, 2);
+        assert_eq!(report.nacked, 0);
+        assert!(report.messages.iter().any(|message| {
+            message.source_event_id.as_deref() == Some(&author.id)
+                && message.body.contains("TRUSTED_AUTHOR_EMAIL_INSTRUCTIONS")
+        }));
+        assert!(report.messages.iter().any(|message| {
+            message.source_event_id.as_deref() == Some(&spoof.id)
+                && message.body.contains("UNTRUSTED_CHANNEL_EVIDENCE")
+                && !message.body.contains("TRUSTED_AUTHOR_EMAIL_INSTRUCTIONS")
+        }));
+        assert!(report.source_cards.iter().any(|card| {
+            card.metadata.get("trust").and_then(Value::as_str) == Some("trusted_author_instruction")
+        }));
+        assert!(report.source_cards.iter().any(|card| {
+            card.metadata.get("trust").and_then(Value::as_str) == Some("untrusted_email_evidence")
+        }));
+    }
+
+    #[test]
+    fn severe_email_drain_nacks_malformed_events_before_ack() {
+        // CLAIM: local email drain acks only after required email evidence is persisted.
+        // ORACLE: malformed event becomes failed and no channel/source rows are written.
+        let store = test_store("email-drain-malformed");
+        let event = store
+            .enqueue_edge_event(
+                "email",
+                "email:message:bad",
+                json!({ "subject": "bad" }),
+                3600,
+            )
+            .unwrap();
+        let report = store.drain_email_edge_events(10).unwrap();
+        assert_eq!(report.processed, 1);
+        assert_eq!(report.acked, 0);
+        assert_eq!(report.nacked, 1);
+        assert!(report.messages.is_empty());
+        assert!(report.source_cards.is_empty());
+        assert_eq!(
+            store.get_edge_event(&event.id).unwrap().unwrap().status,
+            "failed"
+        );
+    }
+
+    #[test]
+    fn severe_email_send_requires_authorization_and_rejects_active_html() {
+        // CLAIM: outbound email cannot be sent until the recipient is channel-authorized,
+        // and rich HTML rejects active content before any provider call or message write.
+        let store = test_store("email-send-auth-html");
+        let blocked = store
+            .send_cloudflare_email(
+                "abcd1234",
+                "TOKEN",
+                "agent@example.com",
+                "friend@example.com",
+                "Blocked",
+                "No auth",
+                None,
+                None,
+                Some("http://127.0.0.1:9"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(blocked.contains("not authorized to send"), "{blocked}");
+        assert!(store.list_channel_messages().unwrap().is_empty());
+
+        store
+            .authorize_channel_subject("email", "email:friend@example.com", false, false, true)
+            .unwrap();
+        let rejected_html = store
+            .send_cloudflare_email(
+                "abcd1234",
+                "TOKEN",
+                "agent@example.com",
+                "friend@example.com",
+                "Blocked html",
+                "Plain",
+                Some("<p>Hello</p><script>alert(1)</script>"),
+                None,
+                Some("http://127.0.0.1:9"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            rejected_html.contains("unsupported active content"),
+            "{rejected_html}"
+        );
+        assert!(store.list_channel_messages().unwrap().is_empty());
+    }
+
+    #[test]
+    fn severe_email_send_records_rich_delivery_without_token_leak() {
+        // CLAIM: authorized rich email sends record message/delivery state and do not
+        // persist Cloudflare bearer tokens in failures or provider responses.
+        let store = test_store("email-send-rich");
+        store
+            .authorize_channel_subject("email", "email:friend@example.com", false, false, true)
+            .unwrap();
+        let api = mock_status_server(
+            "200 OK",
+            "",
+            r#"{"success":true,"result":{"id":"msg_123"}}"#,
+            "application/json",
+        );
+        let report = store
+            .send_cloudflare_email(
+                "abcd1234",
+                "SECRET_CF_TOKEN_SHOULD_NOT_PERSIST",
+                "agent@example.com",
+                "friend@example.com",
+                "Arcwell update",
+                "Plain text",
+                Some("<p><strong>Rich</strong> text</p>"),
+                Some("<incoming@example>"),
+                Some(&api),
+            )
+            .unwrap();
+        assert!(report.ok);
+        assert_eq!(report.status, 200);
+        assert_eq!(report.message.status, "sent");
+        assert_eq!(report.delivery.provider_status, 200);
+        let serialized = serde_json::to_string(&report).unwrap();
+        assert!(!serialized.contains("SECRET_CF_TOKEN"), "{serialized}");
     }
 
     #[test]

@@ -51,6 +51,7 @@ enum Command {
     Research(ResearchCommand),
     X(XCommand),
     Telegram(TelegramCommand),
+    Email(EmailCommand),
     Edge(EdgeCommand),
     Project(ProjectCommand),
     Work(WorkCommand),
@@ -945,6 +946,13 @@ const SLASH_COMMAND_ALIASES: &[(&str, SlashAliasTarget)] = &[
     ("edge-lease", SlashAliasTarget::Mcp("edge_event_lease")),
     ("edge-nack", SlashAliasTarget::Mcp("edge_event_nack")),
     (
+        "email-drain",
+        SlashAliasTarget::Mcp("email_drain_edge_events"),
+    ),
+    ("email-poll", SlashAliasTarget::Mcp("email_poll_edge")),
+    ("email-reply", SlashAliasTarget::Mcp("email_reply_message")),
+    ("email-send", SlashAliasTarget::Mcp("email_send_message")),
+    (
         "import-claude",
         SlashAliasTarget::Cli(&["import", "claude"]),
     ),
@@ -1168,6 +1176,7 @@ fn run(store: Store, command: Command) -> Result<()> {
         Command::Research(args) => research(store, args),
         Command::X(args) => x_command(store, args),
         Command::Telegram(args) => telegram(store, args),
+        Command::Email(args) => email(store, args),
         Command::Edge(args) => edge(store, args),
         Command::Project(args) => project(store, args),
         Command::Work(args) => work(store, args),
@@ -1626,6 +1635,12 @@ struct TelegramCommand {
 }
 
 #[derive(Args)]
+struct EmailCommand {
+    #[command(subcommand)]
+    command: EmailSubcommand,
+}
+
+#[derive(Args)]
 struct EdgeCommand {
     #[command(subcommand)]
     command: EdgeSubcommand,
@@ -1815,6 +1830,62 @@ enum TelegramSubcommand {
         api_base: Option<String>,
         #[arg(long, default_value_t = 25)]
         max_attempts: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum EmailSubcommand {
+    Drain {
+        #[arg(long, default_value_t = 25)]
+        max_events: usize,
+    },
+    Poll {
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        secret: Option<String>,
+        #[arg(long, default_value_t = 25)]
+        max_events: usize,
+    },
+    Authorize {
+        address: String,
+        #[arg(long)]
+        read_projects: bool,
+        #[arg(long)]
+        write_projects: bool,
+        #[arg(long)]
+        send: bool,
+    },
+    Send {
+        to: String,
+        subject: String,
+        text: String,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        html: Option<String>,
+        #[arg(long)]
+        account_id: Option<String>,
+        #[arg(long)]
+        api_token: Option<String>,
+        #[arg(long)]
+        api_base: Option<String>,
+    },
+    Reply {
+        message_id: String,
+        text: String,
+        #[arg(long)]
+        subject: Option<String>,
+        #[arg(long)]
+        html: Option<String>,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        account_id: Option<String>,
+        #[arg(long)]
+        api_token: Option<String>,
+        #[arg(long)]
+        api_base: Option<String>,
     },
 }
 
@@ -2418,6 +2489,133 @@ fn telegram(store: Store, args: TelegramCommand) -> Result<()> {
     }
 }
 
+fn email(store: Store, args: EmailCommand) -> Result<()> {
+    match args.command {
+        EmailSubcommand::Drain { max_events } => {
+            print_json(&store.drain_email_edge_events(max_events)?)
+        }
+        EmailSubcommand::Poll {
+            url,
+            secret,
+            max_events,
+        } => {
+            cost_preflight(
+                &store,
+                "arcwell-edge-inbox",
+                "edge",
+                Some("edge_remote_drain"),
+                0.001 + max_events.clamp(1, 100) as f64 * 0.0001,
+                "remote email poll",
+            )?;
+            let url = edge_remote_url(&store, url.as_deref())?;
+            let secret = edge_remote_secret(&store, secret.as_deref())?;
+            let remote = store.drain_remote_edge_inbox(&url, &secret, max_events)?;
+            let email = store.drain_email_edge_events(max_events)?;
+            print_json(&json!({
+                "ok": true,
+                "remote": remote,
+                "email": email
+            }))
+        }
+        EmailSubcommand::Authorize {
+            address,
+            read_projects,
+            write_projects,
+            send,
+        } => print_json(&store.authorize_channel_subject(
+            "email",
+            &format!("email:{}", normalize_cli_email(&address)?),
+            read_projects,
+            write_projects,
+            send,
+        )?),
+        EmailSubcommand::Send {
+            to,
+            subject,
+            text,
+            from,
+            html,
+            account_id,
+            api_token,
+            api_base,
+        } => {
+            cost_preflight(
+                &store,
+                "arcwell-email",
+                "cloudflare_email",
+                Some("email_send"),
+                0.0001,
+                "Cloudflare Email send",
+            )?;
+            let account_id = cloudflare_account_id(&store, account_id.as_deref())?;
+            let api_token = cloudflare_api_token(&store, api_token.as_deref())?;
+            let from = from
+                .as_deref()
+                .map(ToOwned::to_owned)
+                .or_else(|| agent_email_from(&store).ok())
+                .unwrap_or_else(|| "agent@example.com".to_string());
+            print_json(&store.send_cloudflare_email(
+                &account_id,
+                &api_token,
+                &from,
+                &to,
+                &subject,
+                &text,
+                html.as_deref(),
+                None,
+                api_base.as_deref(),
+            )?)
+        }
+        EmailSubcommand::Reply {
+            message_id,
+            text,
+            subject,
+            html,
+            from,
+            account_id,
+            api_token,
+            api_base,
+        } => {
+            let original = store
+                .get_channel_message(&message_id)?
+                .with_context(|| format!("channel message not found: {message_id}"))?;
+            if original.channel != "email" || original.direction != "incoming" {
+                bail!("email reply requires an incoming email channel message");
+            }
+            let to = email_sender_from_channel_body(&original.body)
+                .context("incoming email message does not include a sender")?;
+            let original_message_id = email_message_id_from_channel_body(&original.body);
+            cost_preflight(
+                &store,
+                "arcwell-email",
+                "cloudflare_email",
+                Some("email_send"),
+                0.0001,
+                "Cloudflare Email reply",
+            )?;
+            let account_id = cloudflare_account_id(&store, account_id.as_deref())?;
+            let api_token = cloudflare_api_token(&store, api_token.as_deref())?;
+            let subject = subject.unwrap_or_else(|| "Re: Arcwell".to_string());
+            let from = from
+                .as_deref()
+                .map(ToOwned::to_owned)
+                .or_else(|| agent_email_from(&store).ok())
+                .unwrap_or_else(|| "agent@example.com".to_string());
+            print_json(&store.send_cloudflare_email(
+                &account_id,
+                &api_token,
+                &from,
+                &to,
+                &subject,
+                &text,
+                html.as_deref(),
+                original_message_id.as_deref(),
+                api_base.as_deref(),
+            )?)
+        }
+    }
+}
+
 fn edge(store: Store, args: EdgeCommand) -> Result<()> {
     match args.command {
         EdgeSubcommand::DrainRemote {
@@ -2433,19 +2631,8 @@ fn edge(store: Store, args: EdgeCommand) -> Result<()> {
                 0.001 + max_events.clamp(1, 100) as f64 * 0.0001,
                 "remote edge drain",
             )?;
-            let url = url
-                .or_else(|| std::env::var("ARCWELL_EDGE_URL").ok())
-                .or_else(|| {
-                    std::env::var("TELEGRAM_WEBHOOK_URL")
-                        .ok()
-                        .map(edge_base_from_webhook_url)
-                })
-                .or_else(|| store.get_secret_value("ARCWELL_EDGE_URL").ok().flatten())
-                .context("ARCWELL_EDGE_URL or --url is required")?;
-            let secret = secret
-                .or_else(|| std::env::var("ARCWELL_EDGE_SECRET").ok())
-                .or_else(|| store.get_secret_value("ARCWELL_EDGE_SECRET").ok().flatten())
-                .context("ARCWELL_EDGE_SECRET or --secret is required")?;
+            let url = edge_remote_url(&store, url.as_deref())?;
+            let secret = edge_remote_secret(&store, secret.as_deref())?;
             print_json(&store.drain_remote_edge_inbox(&url, &secret, max_events)?)
         }
     }
@@ -2696,12 +2883,112 @@ fn edge_base_from_webhook_url(url: String) -> String {
     url.trim_end_matches("/telegram/webhook").to_string()
 }
 
+fn edge_remote_url(store: &Store, explicit: Option<&str>) -> Result<String> {
+    explicit
+        .map(ToOwned::to_owned)
+        .or_else(|| std::env::var("ARCWELL_EDGE_URL").ok())
+        .or_else(|| {
+            std::env::var("TELEGRAM_WEBHOOK_URL")
+                .ok()
+                .map(edge_base_from_webhook_url)
+        })
+        .or_else(|| store.get_secret_value("ARCWELL_EDGE_URL").ok().flatten())
+        .context("ARCWELL_EDGE_URL or --url is required")
+}
+
+fn edge_remote_secret(store: &Store, explicit: Option<&str>) -> Result<String> {
+    explicit
+        .map(ToOwned::to_owned)
+        .or_else(|| std::env::var("ARCWELL_EDGE_SECRET").ok())
+        .or_else(|| store.get_secret_value("ARCWELL_EDGE_SECRET").ok().flatten())
+        .context("ARCWELL_EDGE_SECRET or --secret is required")
+}
+
 fn telegram_bot_token(store: &Store, explicit: Option<&str>) -> Result<String> {
     explicit
         .map(ToOwned::to_owned)
         .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())
         .or_else(|| store.get_secret_value("TELEGRAM_BOT_TOKEN").ok().flatten())
         .context("TELEGRAM_BOT_TOKEN is required")
+}
+
+fn cloudflare_account_id(store: &Store, explicit: Option<&str>) -> Result<String> {
+    explicit
+        .map(ToOwned::to_owned)
+        .or_else(|| std::env::var("CLOUDFLARE_ACCOUNT_ID").ok())
+        .or_else(|| {
+            store
+                .get_secret_value("CLOUDFLARE_ACCOUNT_ID")
+                .ok()
+                .flatten()
+        })
+        .context("CLOUDFLARE_ACCOUNT_ID is required")
+}
+
+fn cloudflare_api_token(store: &Store, explicit: Option<&str>) -> Result<String> {
+    explicit
+        .map(ToOwned::to_owned)
+        .or_else(|| std::env::var("CLOUDFLARE_EMAIL_API_TOKEN").ok())
+        .or_else(|| std::env::var("CLOUDFLARE_API_TOKEN").ok())
+        .or_else(|| {
+            store
+                .get_secret_value("CLOUDFLARE_EMAIL_API_TOKEN")
+                .ok()
+                .flatten()
+        })
+        .or_else(|| {
+            store
+                .get_secret_value("CLOUDFLARE_API_TOKEN")
+                .ok()
+                .flatten()
+        })
+        .context("CLOUDFLARE_EMAIL_API_TOKEN or CLOUDFLARE_API_TOKEN is required")
+}
+
+fn agent_email_from(store: &Store) -> Result<String> {
+    std::env::var("ARCWELL_AGENT_EMAIL_FROM")
+        .ok()
+        .or_else(|| std::env::var("ARCWELL_AGENT_EMAIL").ok())
+        .or_else(|| {
+            store
+                .get_secret_value("ARCWELL_AGENT_EMAIL_FROM")
+                .ok()
+                .flatten()
+        })
+        .or_else(|| store.get_secret_value("ARCWELL_AGENT_EMAIL").ok().flatten())
+        .context("ARCWELL_AGENT_EMAIL_FROM or ARCWELL_AGENT_EMAIL is required")
+}
+
+fn normalize_cli_email(value: &str) -> Result<String> {
+    let value = value
+        .trim()
+        .trim_matches(['<', '>', '"', '\''])
+        .to_ascii_lowercase();
+    if value.len() > 254 || value.matches('@').count() != 1 {
+        bail!("invalid email address");
+    }
+    let (local, domain) = value
+        .split_once('@')
+        .context("email address must include @")?;
+    if local.is_empty() || domain.is_empty() {
+        bail!("invalid email address");
+    }
+    Ok(value)
+}
+
+fn email_sender_from_channel_body(body: &str) -> Option<String> {
+    body.lines()
+        .find_map(|line| line.strip_prefix("From: "))
+        .map(str::trim)
+        .and_then(|value| normalize_cli_email(value).ok())
+}
+
+fn email_message_id_from_channel_body(body: &str) -> Option<String> {
+    body.lines()
+        .find_map(|line| line.strip_prefix("Message-ID: "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn import(store: Store, args: ImportCommand) -> Result<()> {
@@ -5623,6 +5910,95 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 &token, &chat_id, &text, api_base
             )?))
         }
+        "email_drain_edge_events" => {
+            let max_events = arguments
+                .get("max_events")
+                .and_then(Value::as_u64)
+                .unwrap_or(25) as usize;
+            Ok(json!(store.drain_email_edge_events(max_events)?))
+        }
+        "email_poll_edge" => {
+            let max_events = arguments
+                .get("max_events")
+                .and_then(Value::as_u64)
+                .unwrap_or(25) as usize;
+            let url = arguments.get("url").and_then(Value::as_str);
+            let secret = arguments.get("secret").and_then(Value::as_str);
+            let url = edge_remote_url(&store, url)?;
+            let secret = edge_remote_secret(&store, secret)?;
+            let remote = store.drain_remote_edge_inbox(&url, &secret, max_events)?;
+            let email = store.drain_email_edge_events(max_events)?;
+            Ok(json!({
+                "ok": true,
+                "remote": remote,
+                "email": email
+            }))
+        }
+        "email_send_message" => {
+            let to = required_string(&arguments, "to")?;
+            let subject = required_string(&arguments, "subject")?;
+            let text = required_string(&arguments, "text")?;
+            let from = arguments
+                .get("from")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| agent_email_from(&store).ok())
+                .unwrap_or_else(|| "agent@example.com".to_string());
+            let html = arguments.get("html").and_then(Value::as_str);
+            let account_id = arguments.get("account_id").and_then(Value::as_str);
+            let api_token = arguments.get("api_token").and_then(Value::as_str);
+            let api_base = arguments.get("api_base").and_then(Value::as_str);
+            let account_id = cloudflare_account_id(&store, account_id)?;
+            let api_token = cloudflare_api_token(&store, api_token)?;
+            Ok(json!(store.send_cloudflare_email(
+                &account_id,
+                &api_token,
+                &from,
+                &to,
+                &subject,
+                &text,
+                html,
+                None,
+                api_base
+            )?))
+        }
+        "email_reply_message" => {
+            let message_id = required_string(&arguments, "message_id")?;
+            let text = required_string(&arguments, "text")?;
+            let subject = optional_string(&arguments, "subject", "Re: Arcwell");
+            let from = arguments
+                .get("from")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| agent_email_from(&store).ok())
+                .unwrap_or_else(|| "agent@example.com".to_string());
+            let html = arguments.get("html").and_then(Value::as_str);
+            let account_id = arguments.get("account_id").and_then(Value::as_str);
+            let api_token = arguments.get("api_token").and_then(Value::as_str);
+            let api_base = arguments.get("api_base").and_then(Value::as_str);
+            let original = store
+                .get_channel_message(&message_id)?
+                .with_context(|| format!("channel message not found: {message_id}"))?;
+            if original.channel != "email" || original.direction != "incoming" {
+                bail!("email reply requires an incoming email channel message");
+            }
+            let to = email_sender_from_channel_body(&original.body)
+                .context("incoming email message does not include a sender")?;
+            let original_message_id = email_message_id_from_channel_body(&original.body);
+            let account_id = cloudflare_account_id(&store, account_id)?;
+            let api_token = cloudflare_api_token(&store, api_token)?;
+            Ok(json!(store.send_cloudflare_email(
+                &account_id,
+                &api_token,
+                &from,
+                &to,
+                &subject,
+                &text,
+                html,
+                original_message_id.as_deref(),
+                api_base
+            )?))
+        }
         "digest_candidate_create" => {
             let topic = required_string(&arguments, "topic")?;
             let source_card_ids = string_array_argument(&arguments, "source_card_ids")?;
@@ -6339,6 +6715,33 @@ fn mcp_tools() -> Vec<Value> {
             ],
         ),
         tool(
+            "email_drain_edge_events",
+            "Drain Cloudflare Email Routing edge events into local email channel messages and source cards.",
+            [],
+        ),
+        tool(
+            "email_poll_edge",
+            "Poll the remote edge inbox and then drain Cloudflare Email Routing events into local email channel messages and source cards.",
+            [],
+        ),
+        tool(
+            "email_send_message",
+            "Send a rich or plain email through Cloudflare Email Service and record delivery state.",
+            [
+                ("to", "string", "Recipient email address."),
+                ("subject", "string", "Email subject."),
+                ("text", "string", "Plain-text email body."),
+            ],
+        ),
+        tool(
+            "email_reply_message",
+            "Reply to a recorded incoming email channel message through Cloudflare Email Service.",
+            [
+                ("message_id", "string", "Incoming email channel message id."),
+                ("text", "string", "Plain-text reply body."),
+            ],
+        ),
+        tool(
             "digest_candidate_create",
             "Create an interestingness/digest candidate from source cards.",
             [
@@ -6889,7 +7292,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         command_names.sort();
-        assert_eq!(command_names.len(), 99);
+        assert_eq!(command_names.len(), 103);
         let missing = command_names
             .into_iter()
             .filter(|name| slash_alias_target(name).is_none() && !slash_alias_is_dynamic(name))

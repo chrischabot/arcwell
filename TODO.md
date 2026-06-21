@@ -1074,32 +1074,60 @@ Adversarial/severe gate:
 - [x] Add digest delivery option boundary for librarian alerts.
 - [x] Add bounded Cloudflare Email Routing Worker handler and severe enqueue
       tests.
-- [ ] Add local Rust drain/persistence from email edge events into durable
+- [x] Add local Rust drain/persistence from email edge events into durable
       channel messages/source cards.
-- [ ] Add ops visibility for email edge/channel state.
+- [x] Add one-shot email polling that remote-drains the edge inbox and then
+      persists local email channel/source-card records.
+- [x] Add outbound Cloudflare Email Service send/reply path with rich HTML
+      support, recipient authorization, policy/cost checks, and token-redaction
+      tests.
+- [x] Add configured-author trust boundary: tracked defaults are
+      `agent@example.com` and `user@example.com`; real author/agent addresses
+      must live only in local env/secret config.
+- [x] Add ops visibility for email edge/channel state through existing edge,
+      channel, source-card, delivery, and `/ops/ui` surfaces.
+- [x] Add guarded setup script for Worker route secret, deploy, and Email
+      Routing rule creation.
 - [ ] Run disposable live Cloudflare Email Routing smoke.
+      2026-06-21 note: no-deploy setup uploaded `EMAIL_ROUTES_JSON` to the
+      `arcwell-edge-inbox` Worker, but Cloudflare Email Routing rule creation
+      failed with API error `10000 Authentication error`; the active token needs
+      Email Routing rule permission or the route must be created in the
+      dashboard before live smoke can honestly pass.
 
 Description:
 Email is part of the desired proactive assistant loop. The current slice is a
 bounded `arcwell-email` package with a tested normalized mapper, explicit live
-blockers, and an edge inbox Email Routing handler that parses bounded raw MIME
-into durable email edge events under configured route/sender policy. Gmail
-remains host-native first for interactive selected-thread work. Live Email
-Routing, Rust drain, SQLite channel/source-card persistence, and outbound
-digest delivery are not implemented.
+blockers, an edge inbox Email Routing handler that parses bounded raw MIME into
+durable email edge events under configured route/sender policy, local Rust
+poll/drain into durable email channel/source-card records, and Cloudflare Email
+Service send/reply support. Gmail remains host-native first for interactive
+selected-thread work. Tracked defaults stay as `agent@example.com` and
+`user@example.com`; real agent/author addresses belong in ignored local config
+or secrets. Live Email Routing and provider-side outbound delivery are not yet
+proven.
 
 How to test:
 - Package-local severe fixtures:
   `cd packages/arcwell-email && npm test`.
 - Worker severe tests:
   `cd packages/arcwell-edge-inbox/worker && npm test`.
-- Future live smoke only with a disposable Cloudflare Email Routing test
-  address or a narrow test label after a live adapter exists.
+- Rust poll/drain/send tests:
+  `cargo test -p arcwell-core email -- --nocapture`.
+- Local one-shot polling:
+  `arcwell email poll` after `ARCWELL_EDGE_URL`/`ARCWELL_EDGE_SECRET` are
+  configured.
+- Setup script dry/safe gate:
+  `scripts/setup-email-route` must refuse without
+  `ARCWELL_EMAIL_SETUP_CONFIRM=configure`.
+- Live smoke only with a disposable Cloudflare Email Routing test address or
+  the configured narrow agent address after the route is installed.
 
 Success looks like:
 - Normalized important inbound email metadata can become a safe event/source
   card/channel message draft without treating email body as instructions.
-- The docs make clear that live email ingestion and delivery are still blocked.
+- The docs make clear that local email ingestion/send paths exist, while live
+  Cloudflare routing and live provider delivery remain unclaimed until smoked.
 
 Adversarial/severe gate:
 - Local fixtures test spoofed From, malicious HTML, attachment bombs, tracking

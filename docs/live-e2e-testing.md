@@ -454,8 +454,9 @@ Current blocker:
 
 ## Email Channel Live Smoke
 
-Status: local adversarial mapper fixtures pass; no live email capture or
-delivery is implemented.
+Status: local adversarial mapper fixtures, edge Email Routing enqueue tests, and
+Rust poll/drain/send tests pass. Live Cloudflare Email Routing and
+provider-side outbound delivery are not yet proven.
 
 Local package smoke:
 
@@ -469,7 +470,46 @@ malicious HTML/script/CSS, attachment bombs, duplicate `Message-ID` values,
 oversized bodies, auto-responder loops, and unauthorized routes. It also proves
 accepted messages are mapped as untrusted source-card/channel evidence.
 
-Future live smoke, only after a Cloudflare Email Routing adapter exists:
+Local Rust smoke:
+
+```sh
+cargo test -p arcwell-core email -- --nocapture
+```
+
+This proves email edge events drain into local channel/source-card records only
+after persistence, malformed email events are nacked before ack, configured
+author envelope senders can be treated as instructions, spoofed display `From:`
+headers remain untrusted evidence, and outbound Cloudflare Email Service sends
+require recipient authorization plus safe rich HTML.
+
+Local one-shot polling after a route has enqueued events:
+
+```sh
+arcwell email poll
+```
+
+This uses `ARCWELL_EDGE_URL`/`ARCWELL_EDGE_SECRET` or stored Arcwell secrets,
+leases remote edge events, persists them locally, then drains email events into
+channel/source-card records.
+
+Guarded Cloudflare setup:
+
+```sh
+ARCWELL_EMAIL_SETUP_CONFIRM=configure \
+ARCWELL_EMAIL_ROUTE_RECIPIENT=agent@example.com \
+ARCWELL_AUTHOR_EMAILS=user@example.com \
+ARCWELL_AGENT_EMAIL_FROM=agent@example.com \
+scripts/setup-email-route
+```
+
+Use ignored local env or secret-store values for real addresses. The script
+sets `EMAIL_ROUTES_JSON` on the Worker, deploys the current edge inbox Worker,
+and then attempts to create/update a Cloudflare Email Routing rule. The routing
+rule step requires a Cloudflare API token with Email Routing permissions.
+Tracked docs and examples must keep only `agent@example.com` and
+`user@example.com`.
+
+Live smoke:
 
 ```sh
 ARCWELL_EDGE_URL="https://<worker-host>" \
@@ -484,7 +524,7 @@ Expected result for that future smoke:
   Email Routing.
 - The worker enqueues one `email` edge event with a `Message-ID` idempotency
   key and sanitized metadata.
-- Local remote drain persists the edge event.
+- `arcwell email poll` persists the edge event locally.
 - The email drain path records exactly one channel message and optional source
   card for an authorized sender/route.
 - Re-sending or replaying the same `Message-ID` does not create duplicates.
@@ -493,10 +533,13 @@ Expected result for that future smoke:
 
 Current blockers:
 
-- No Cloudflare Email Routing Worker handler is implemented.
-- No live test address/route is configured.
-- No local Rust drain command or persistence path exists for email events.
-- No outbound email or librarian digest delivery is implemented.
+- No live test address/route is configured. On 2026-06-21, guarded no-deploy
+  setup uploaded `EMAIL_ROUTES_JSON` to the `arcwell-edge-inbox` Worker, but
+  Cloudflare Email Routing rule creation failed with API error
+  `10000 Authentication error`, so the current token lacks the needed Email
+  Routing rule permission.
+- No provider-side live outbound send/reply smoke has been recorded.
+- No librarian digest scheduler has been wired to email delivery yet.
 
 ## Codex Memory Hook Smoke
 
