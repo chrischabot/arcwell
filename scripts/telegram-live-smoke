@@ -246,6 +246,61 @@ echo "Re-run prompt if this times out:"
 printf 'TELEGRAM_SMOKE_EXPECT_TEXT=%q ARCWELL_SMOKE_HOME=%q ARCWELL_TELEGRAM_LIVE_CONFIRM=disposable scripts/telegram-live-smoke\n' "$INCOMING_TEXT" "$ARCWELL_HOME"
 echo "Waiting up to ${WAIT_SECONDS}s for webhook -> edge -> local drain -> channel record."
 
+if [ "${ARCWELL_TELEGRAM_SYNTHETIC_INCOMING:-}" = "1" ]; then
+  echo "Injecting a signed synthetic Telegram-shaped update through the deployed Arcwell webhook."
+  TELEGRAM_CHAT_ID="$CHAT_ID" TELEGRAM_SMOKE_EXPECT_TEXT="$INCOMING_TEXT" node - "$tmp/synthetic-incoming.json" <<'NODE'
+const fs = require("fs");
+const https = require("https");
+
+const out = process.argv[2];
+const chatIdRaw = process.env.TELEGRAM_CHAT_ID;
+const chatId = /^-?\d+$/.test(chatIdRaw) ? Number(chatIdRaw) : chatIdRaw;
+const updateId = Math.floor(Date.now() / 1000);
+const body = JSON.stringify({
+  update_id: updateId,
+  message: {
+    message_id: updateId,
+    date: Math.floor(Date.now() / 1000),
+    chat: { id: chatId, type: "private" },
+    from: { id: chatId, is_bot: false, username: "arcwell_smoke" },
+    text: process.env.TELEGRAM_SMOKE_EXPECT_TEXT
+  }
+});
+const url = new URL(`${process.env.ARCWELL_EDGE_URL.replace(/\/$/, "")}/telegram/webhook`);
+const request = https.request({
+  hostname: url.hostname,
+  path: `${url.pathname}${url.search}`,
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+    "x-telegram-bot-api-secret-token": process.env.TELEGRAM_WEBHOOK_SECRET
+  }
+}, (response) => {
+  let responseBody = "";
+  response.on("data", (chunk) => { responseBody += chunk; });
+  response.on("end", () => {
+    fs.writeFileSync(out, responseBody);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      console.error(`FAIL: synthetic Telegram webhook injection returned HTTP ${response.statusCode}.`);
+      process.exit(1);
+    }
+    const doc = JSON.parse(responseBody);
+    if (!doc.accepted && !doc.duplicate) {
+      console.error(`FAIL: synthetic Telegram webhook injection was not accepted: ${JSON.stringify(doc)}`);
+      process.exit(1);
+    }
+  });
+});
+request.on("error", (error) => {
+  console.error(`FAIL: synthetic Telegram webhook injection failed: ${error.message}`);
+  process.exit(1);
+});
+request.write(body);
+request.end();
+NODE
+fi
+
 deadline=$((SECONDS + WAIT_SECONDS))
 found=0
 duplicate=0

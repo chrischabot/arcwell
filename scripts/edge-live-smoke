@@ -106,9 +106,14 @@ ack_body() {
   node -e 'console.log(JSON.stringify({ idempotencyKey: process.argv[1] }))' "$1"
 }
 
-is_smoke_source() {
+nack_body() {
+  node -e 'console.log(JSON.stringify({ idempotencyKey: process.argv[1], error: process.argv[2], retrySeconds: 1 }))' "$1" "$2"
+}
+
+is_smoke_event() {
   local source="$1"
-  [[ "$source" == smoke* || "$source" == storm-* ]]
+  local key="${2:-}"
+  [[ "$source" == smoke* || "$source" == storm-* || "$key" == smoke:* ]]
 }
 
 lease_until_key() {
@@ -117,24 +122,6 @@ lease_until_key() {
   local label="$3"
   local attempt
   for attempt in $(seq 1 100); do
-    local peek_status peek_payload first_key first_source
-    mapfile -t peek < <(request_json GET "/events?limit=1" "$ARCWELL_EDGE_SECRET")
-    peek_status="${peek[0]}"
-    peek_payload="${peek[1]}"
-    assert_status "$peek_status" "200" "$label peek"
-    first_key="$(json_field "$peek_payload" "value.events[0] && value.events[0].idempotencyKey")"
-    first_source="$(json_field "$peek_payload" "value.events[0] && value.events[0].source")"
-    if [[ -z "$first_key" ]]; then
-      echo "$label: expected $target_key but remote queue returned no event" >&2
-      echo "$peek_payload" >&2
-      exit 1
-    fi
-    if [[ "$first_key" != "$target_key" ]] && ! is_smoke_source "$first_source"; then
-      echo "$label: refusing to lease non-smoke event before target $target_key" >&2
-      echo "$peek_payload" >&2
-      exit 1
-    fi
-
     local lease_status lease_payload event_key event_source
     mapfile -t lease < <(request_json POST /drain/lease "$ARCWELL_EDGE_SECRET" "{\"leaseSeconds\":$lease_seconds}")
     lease_status="${lease[0]}"
@@ -151,12 +138,13 @@ lease_until_key() {
       echo "$lease_payload" >&2
       exit 1
     fi
-    if is_smoke_source "$event_source"; then
+    if is_smoke_event "$event_source" "$event_key"; then
       request_json POST /drain/ack "$ARCWELL_EDGE_SECRET" "$(ack_body "$event_key")" >/dev/null
       continue
     fi
     echo "$label: refusing to consume non-smoke event before target $target_key" >&2
     echo "$lease_payload" >&2
+    request_json POST /drain/nack "$ARCWELL_EDGE_SECRET" "$(nack_body "$event_key" "edge live smoke refused non-smoke event")" >/dev/null || true
     exit 1
   done
   echo "$label: could not lease target $target_key after clearing smoke backlog" >&2
@@ -167,28 +155,20 @@ clear_leading_smoke_backlog() {
   local label="$1"
   local attempt
   for attempt in $(seq 1 250); do
-    local peek_status peek_payload first_key first_source
-    mapfile -t peek < <(request_json GET "/events?limit=1" "$ARCWELL_EDGE_SECRET")
-    peek_status="${peek[0]}"
-    peek_payload="${peek[1]}"
-    assert_status "$peek_status" "200" "$label peek"
-    first_key="$(json_field "$peek_payload" "value.events[0] && value.events[0].idempotencyKey")"
-    first_source="$(json_field "$peek_payload" "value.events[0] && value.events[0].source")"
-    if [[ -z "$first_key" ]]; then
-      return 0
-    fi
-    if ! is_smoke_source "$first_source"; then
-      return 0
-    fi
-    local lease_status lease_payload event_key
+    local lease_status lease_payload event_key event_source
     mapfile -t lease < <(request_json POST /drain/lease "$ARCWELL_EDGE_SECRET" '{"leaseSeconds":1}')
     lease_status="${lease[0]}"
     lease_payload="${lease[1]}"
     assert_status "$lease_status" "200" "$label lease"
     event_key="$(json_field "$lease_payload" "value.event && value.event.idempotencyKey")"
-    if [[ "$event_key" != "$first_key" ]]; then
-      echo "$label: lease order changed while clearing smoke backlog" >&2
+    event_source="$(json_field "$lease_payload" "value.event && value.event.source")"
+    if [[ -z "$event_key" ]]; then
+      return 0
+    fi
+    if ! is_smoke_event "$event_source" "$event_key"; then
+      echo "$label: refusing to consume non-smoke event" >&2
       echo "$lease_payload" >&2
+      request_json POST /drain/nack "$ARCWELL_EDGE_SECRET" "$(nack_body "$event_key" "edge live smoke refused non-smoke event")" >/dev/null || true
       exit 1
     fi
     request_json POST /drain/ack "$ARCWELL_EDGE_SECRET" "$(ack_body "$event_key")" >/dev/null
@@ -218,6 +198,7 @@ echo "edge live smoke run: $RUN_ID"
 mapfile -t health < <(request_json GET /health "$ARCWELL_EDGE_SECRET")
 assert_status "${health[0]}" "200" "health"
 assert_json "${health[1]}" "value.ok === true && value.durable === true" "health did not report durable worker"
+clear_leading_smoke_backlog "initial smoke cleanup"
 
 mapfile -t forged < <(request_json POST /events "forged-$RUN_ID" "$(event_body smoke "forged:$RUN_ID" forged 60)")
 assert_status "${forged[0]}" "401" "forged secret rejection"

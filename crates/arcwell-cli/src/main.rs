@@ -7637,7 +7637,26 @@ fn write_mcp(stdout: &mut impl Write, value: &Value) -> Result<()> {
 }
 
 fn print_json(value: &impl Serialize) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(value)?);
+    let mut stdout = std::io::stdout().lock();
+    write_json_pretty(&mut stdout, value)
+}
+
+fn write_json_pretty(writer: &mut impl Write, value: &impl Serialize) -> Result<()> {
+    let mut output = serde_json::to_string_pretty(value)?;
+    output.push('\n');
+
+    if let Err(err) = writer.write_all(output.as_bytes()) {
+        if err.kind() == std::io::ErrorKind::BrokenPipe {
+            return Ok(());
+        }
+        return Err(err.into());
+    }
+    if let Err(err) = writer.flush() {
+        if err.kind() == std::io::ErrorKind::BrokenPipe {
+            return Ok(());
+        }
+        return Err(err.into());
+    }
     Ok(())
 }
 
@@ -7785,6 +7804,19 @@ fn analyze_claude_export(path: &PathBuf, limit: usize) -> Result<ClaudeImportRep
 mod tests {
     use super::*;
     use axum::body::to_bytes;
+    use std::io;
+
+    struct BrokenPipeWriter;
+
+    impl Write for BrokenPipeWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed pipe"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     fn test_paths(name: &str) -> AppPaths {
         AppPaths::new(std::env::temp_dir().join(format!(
@@ -7807,6 +7839,13 @@ mod tests {
         let status = response.status();
         let body = to_bytes(response.into_body(), 1_000_000).await.unwrap();
         (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[test]
+    fn print_json_treats_broken_pipe_as_success() {
+        let mut writer = BrokenPipeWriter;
+
+        write_json_pretty(&mut writer, &json!({ "ok": true })).unwrap();
     }
 
     async fn response_text(response: Response) -> (StatusCode, String) {
