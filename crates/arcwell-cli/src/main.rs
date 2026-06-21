@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use arcwell_core::{
-    AppPaths, DoctorOptions, OpsSnapshot, PolicyRequest, ProcedureCandidateInput, SourceCardInput,
-    Store, WebSearchConfig, personal_memory_eval_corpus,
+    AppPaths, DoctorOptions, OpsSnapshot, PolicyRequest, ProcedureCandidateInput,
+    ResearchSourceInput, SourceCardInput, Store, WebSearchConfig, personal_memory_eval_corpus,
 };
 use axum::{
     Json, Router,
@@ -1584,6 +1584,94 @@ struct ResearchCommand {
 
 #[derive(Subcommand)]
 enum ResearchSubcommand {
+    Run {
+        query: String,
+    },
+    Status {
+        run_id: String,
+    },
+    Read {
+        run_id: String,
+    },
+    AuditRun {
+        run_id: String,
+    },
+    Stop {
+        run_id: String,
+    },
+    Sources {
+        run_id: String,
+    },
+    AddSource {
+        run_id: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        local_ref: Option<String>,
+        #[arg(long, default_value = "uncategorized")]
+        source_family: String,
+        #[arg(long, default_value = "web")]
+        source_type: String,
+        #[arg(long, default_value = "manual")]
+        provider: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        priority: i64,
+        #[arg(long, default_value = "candidate")]
+        fetch_status: String,
+        #[arg(long, default_value = "snippet-only")]
+        read_depth: String,
+        #[arg(long, default_value = "candidate")]
+        triage_status: String,
+        #[arg(long)]
+        canonical_key: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    LinkSourceCard {
+        run_id: String,
+        source_card_id: String,
+        #[arg(long, default_value = "uncategorized")]
+        source_family: String,
+        #[arg(long, default_value = "full-text")]
+        read_depth: String,
+        #[arg(long, default_value = "must-read-primary")]
+        triage_status: String,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    ExtractionPrompt {
+        run_id: String,
+        source_card_id: String,
+    },
+    IngestClaims {
+        run_id: String,
+        source_card_id: String,
+        #[arg(long, default_value = "manual")]
+        provider: String,
+        #[arg(long, default_value = "manual")]
+        model: String,
+        #[arg(long)]
+        output_json: String,
+    },
+    Claims {
+        run_id: String,
+    },
+    Clusters {
+        run_id: String,
+    },
+    Skeptic {
+        run_id: String,
+    },
+    Report {
+        run_id: String,
+        saturation_reason: String,
+        #[arg(long)]
+        no_write: bool,
+    },
     Plan {
         query: String,
         #[arg(long, default_value_t = 5)]
@@ -2349,6 +2437,100 @@ fn source_card(store: Store, args: SourceCardCommand) -> Result<()> {
 
 fn research(store: Store, args: ResearchCommand) -> Result<()> {
     match args.command {
+        ResearchSubcommand::Run { query } => print_json(&store.create_deep_research_run(&query)?),
+        ResearchSubcommand::Status { run_id } => print_json(&store.research_run_status(&run_id)?),
+        ResearchSubcommand::Read { run_id } => print_json(&store.read_research_run(&run_id)?),
+        ResearchSubcommand::AuditRun { run_id } => print_json(&store.audit_research_run(&run_id)?),
+        ResearchSubcommand::Stop { run_id } => print_json(&store.stop_research_run(&run_id)?),
+        ResearchSubcommand::Sources { run_id } => {
+            print_json(&store.list_research_run_sources(&run_id)?)
+        }
+        ResearchSubcommand::AddSource {
+            run_id,
+            title,
+            url,
+            local_ref,
+            source_family,
+            source_type,
+            provider,
+            reason,
+            priority,
+            fetch_status,
+            read_depth,
+            triage_status,
+            canonical_key,
+            notes,
+        } => {
+            let source = store.upsert_research_source(ResearchSourceInput {
+                url,
+                local_ref,
+                title: title.clone(),
+                source_family,
+                source_type,
+                provider,
+                author: None,
+                published_at: None,
+                language: None,
+                priority,
+                reason: reason.unwrap_or_else(|| format!("Candidate source for {title}")),
+                canonical_key,
+                fetch_status,
+                read_depth: read_depth.clone(),
+                metadata: json!({ "created_by": "arcwell-cli" }),
+            })?;
+            print_json(&store.link_research_source_to_run(
+                &run_id,
+                &source.id,
+                None,
+                &triage_status,
+                &read_depth,
+                notes.as_deref(),
+            )?)
+        }
+        ResearchSubcommand::LinkSourceCard {
+            run_id,
+            source_card_id,
+            source_family,
+            read_depth,
+            triage_status,
+            notes,
+        } => print_json(&store.link_source_card_to_research_run(
+            &run_id,
+            &source_card_id,
+            &source_family,
+            &read_depth,
+            &triage_status,
+            notes.as_deref(),
+        )?),
+        ResearchSubcommand::ExtractionPrompt {
+            run_id,
+            source_card_id,
+        } => print_json(&store.build_research_extraction_prompt(&run_id, &source_card_id)?),
+        ResearchSubcommand::IngestClaims {
+            run_id,
+            source_card_id,
+            provider,
+            model,
+            output_json,
+        } => print_json(&store.ingest_research_claims_from_model_output(
+            &run_id,
+            &source_card_id,
+            &provider,
+            &model,
+            &output_json,
+        )?),
+        ResearchSubcommand::Claims { run_id } => print_json(&store.list_research_claims(&run_id)?),
+        ResearchSubcommand::Clusters { run_id } => {
+            print_json(&store.build_research_clusters(&run_id)?)
+        }
+        ResearchSubcommand::Skeptic { run_id } => {
+            print_json(&store.run_research_skeptic_pass(&run_id)?)
+        }
+        ResearchSubcommand::Report {
+            run_id,
+            saturation_reason,
+            no_write,
+        } => print_json(&store.compile_research_report(&run_id, &saturation_reason, !no_write)?),
         ResearchSubcommand::Plan { query, max_sources } => {
             print_json(&store.create_research_plan(&query, max_sources)?)
         }
@@ -5565,6 +5747,154 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 .unwrap_or(5) as usize;
             Ok(json!(store.create_research_plan(&query, max_sources)?))
         }
+        "research_run" => {
+            let query = required_string(&arguments, "query")?;
+            Ok(json!(store.create_deep_research_run(&query)?))
+        }
+        "research_status" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.research_run_status(&run_id)?))
+        }
+        "research_read" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.read_research_run(&run_id)?))
+        }
+        "research_audit_run" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.audit_research_run(&run_id)?))
+        }
+        "research_stop" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.stop_research_run(&run_id)?))
+        }
+        "research_sources" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_run_sources(&run_id)?))
+        }
+        "research_source_add" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            let title = required_string(&arguments, "title")?;
+            let source_family = optional_string(&arguments, "source_family", "uncategorized");
+            let source_type = optional_string(&arguments, "source_type", "web");
+            let provider = optional_string(&arguments, "provider", "mcp");
+            let fetch_status = optional_string(&arguments, "fetch_status", "candidate");
+            let read_depth = optional_string(&arguments, "read_depth", "snippet-only");
+            let triage_status = optional_string(&arguments, "triage_status", "candidate");
+            let reason = arguments
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| format!("Candidate source for {title}"));
+            let priority = arguments
+                .get("priority")
+                .and_then(Value::as_i64)
+                .unwrap_or(50);
+            let source = store.upsert_research_source(ResearchSourceInput {
+                url: arguments
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                local_ref: arguments
+                    .get("local_ref")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                title,
+                source_family,
+                source_type,
+                provider,
+                author: arguments
+                    .get("author")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                published_at: arguments
+                    .get("published_at")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                language: arguments
+                    .get("language")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                priority,
+                reason,
+                canonical_key: arguments
+                    .get("canonical_key")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                fetch_status,
+                read_depth: read_depth.clone(),
+                metadata: arguments.get("metadata").cloned().unwrap_or(Value::Null),
+            })?;
+            Ok(json!(store.link_research_source_to_run(
+                &run_id,
+                &source.id,
+                None,
+                &triage_status,
+                &read_depth,
+                arguments.get("notes").and_then(Value::as_str),
+            )?))
+        }
+        "research_source_card_link" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            let source_card_id = required_string(&arguments, "source_card_id")?;
+            let source_family = optional_string(&arguments, "source_family", "uncategorized");
+            let read_depth = optional_string(&arguments, "read_depth", "full-text");
+            let triage_status = optional_string(&arguments, "triage_status", "must-read-primary");
+            Ok(json!(store.link_source_card_to_research_run(
+                &run_id,
+                &source_card_id,
+                &source_family,
+                &read_depth,
+                &triage_status,
+                arguments.get("notes").and_then(Value::as_str),
+            )?))
+        }
+        "research_extraction_prompt" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            let source_card_id = required_string(&arguments, "source_card_id")?;
+            Ok(json!(store.build_research_extraction_prompt(
+                &run_id,
+                &source_card_id
+            )?))
+        }
+        "research_claims_ingest" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            let source_card_id = required_string(&arguments, "source_card_id")?;
+            let provider = optional_string(&arguments, "provider", "mcp");
+            let model = optional_string(&arguments, "model", "manual");
+            let output_json = required_string(&arguments, "output_json")?;
+            Ok(json!(store.ingest_research_claims_from_model_output(
+                &run_id,
+                &source_card_id,
+                &provider,
+                &model,
+                &output_json,
+            )?))
+        }
+        "research_claims" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_claims(&run_id)?))
+        }
+        "research_clusters" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.build_research_clusters(&run_id)?))
+        }
+        "research_skeptic_pass" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.run_research_skeptic_pass(&run_id)?))
+        }
+        "research_report_compile" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            let saturation_reason = required_string(&arguments, "saturation_reason")?;
+            let no_write = arguments
+                .get("no_write")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Ok(json!(store.compile_research_report(
+                &run_id,
+                &saturation_reason,
+                !no_write,
+            )?))
+        }
         "research_web_search" => {
             let query = required_string(&arguments, "query")?;
             let provider = optional_string(&arguments, "provider", "host");
@@ -6089,7 +6419,7 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned);
             let metadata = arguments.get("metadata").cloned().unwrap_or(Value::Null);
-            Ok(json!(store.add_source_card(SourceCardInput {
+            let card = store.add_source_card(SourceCardInput {
                 title,
                 url,
                 source_type,
@@ -6098,7 +6428,25 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 claims,
                 retrieved_at,
                 metadata,
-            })?))
+            })?;
+            if let Some(run_id) = arguments.get("run_id").and_then(Value::as_str) {
+                let source_family = optional_string(&arguments, "source_family", "uncategorized");
+                let read_depth = optional_string(&arguments, "read_depth", "full-text");
+                let triage_status =
+                    optional_string(&arguments, "triage_status", "must-read-primary");
+                let notes = arguments.get("notes").and_then(Value::as_str);
+                let link = store.link_source_card_to_research_run(
+                    run_id,
+                    &card.id,
+                    &source_family,
+                    &read_depth,
+                    &triage_status,
+                    notes,
+                )?;
+                Ok(json!({ "source_card": card, "research_link": link }))
+            } else {
+                Ok(json!(card))
+            }
         }
         "source_card_search" => {
             let query = required_string(&arguments, "query")?;
@@ -6530,8 +6878,99 @@ fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "research_workflow_create",
-            "Create daemon-tracked research tasks for scout, extractor, skeptic, and synthesizer roles.",
+            "Create a daemon-tracked deep research workflow. Compatibility alias for research_run.",
             [("query", "string", "Research question or topic.")],
+        ),
+        tool(
+            "research_run",
+            "Start a daemon-tracked deep research run with orchestrator, scout, corpus, extractor, skeptic, synthesizer, and auditor tasks.",
+            [("query", "string", "Research question or topic.")],
+        ),
+        tool(
+            "research_status",
+            "Read durable status and task counts for one deep research run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_read",
+            "Read one deep research run, its tasks, and its final result page when present.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_audit_run",
+            "Audit a deep research run by id using its persisted query.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_stop",
+            "Stop a deep research run and cancel pending role tasks.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_sources",
+            "List source-ledger records linked to one deep research run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_source_add",
+            "Add or update a research source candidate and link it to a deep research run.",
+            [
+                ("run_id", "string", "Research run id."),
+                ("title", "string", "Source title."),
+                ("url", "string", "Canonical source URL when available."),
+            ],
+        ),
+        tool(
+            "research_source_card_link",
+            "Link an existing source card to a deep research run so retrieval and audit work by run id.",
+            [
+                ("run_id", "string", "Research run id."),
+                ("source_card_id", "string", "Source card id."),
+            ],
+        ),
+        tool(
+            "research_extraction_prompt",
+            "Build a bounded claim-extraction prompt and JSON schema for a run-linked source card.",
+            [
+                ("run_id", "string", "Research run id."),
+                ("source_card_id", "string", "Source card id."),
+            ],
+        ),
+        tool(
+            "research_claims_ingest",
+            "Validate and ingest model-produced structured claims for a run-linked source card.",
+            [
+                ("run_id", "string", "Research run id."),
+                ("source_card_id", "string", "Source card id."),
+                ("output_json", "string", "Model output JSON."),
+            ],
+        ),
+        tool(
+            "research_claims",
+            "List structured claims extracted for a deep research run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_clusters",
+            "Build deterministic thematic clusters from extracted research claims.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_skeptic_pass",
+            "Run mandatory skeptic checks over linked sources, extracted claims, clusters, and contradictions.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_report_compile",
+            "Compile a deep research report from linked sources, extracted claims, clusters, skeptic findings, and audit results.",
+            [
+                ("run_id", "string", "Research run id."),
+                (
+                    "saturation_reason",
+                    "string",
+                    "Why the run stopped or is ready to report.",
+                ),
+            ],
         ),
         tool(
             "research_tasks",
@@ -6866,11 +7305,12 @@ fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "source_card_add",
-            "Add a typed source card and write its Markdown page to the wiki.",
+            "Add a typed source card, write its Markdown page to the wiki, and optionally link it to a research run with run_id.",
             [
                 ("title", "string", "Source title."),
                 ("url", "string", "Source URL."),
                 ("summary", "string", "Short source summary."),
+                ("run_id", "string", "Optional research run id."),
             ],
         ),
         tool(
@@ -7671,7 +8111,222 @@ reason = "MCP secret writes are denied for this token"
             .and_then(Value::as_str)
             .unwrap();
         let tasks = call_mcp_tool(&paths, "research_tasks", json!({ "run_id": run_id })).unwrap();
-        assert_eq!(tasks.as_array().unwrap().len(), 4);
+        assert_eq!(tasks.as_array().unwrap().len(), 7);
+    }
+
+    #[test]
+    fn mcp_research_deep_run_lifecycle_round_trip() {
+        let paths = test_paths("mcp-research-deep-run");
+        let workflow =
+            call_mcp_tool(&paths, "research_run", json!({ "query": "agent monitors" })).unwrap();
+        let run_id = workflow
+            .get("run")
+            .and_then(|run| run.get("id"))
+            .and_then(Value::as_str)
+            .unwrap();
+        assert_eq!(
+            workflow
+                .get("run")
+                .and_then(|run| run.get("status"))
+                .and_then(Value::as_str),
+            Some("deep_open")
+        );
+        assert_eq!(workflow["tasks"].as_array().unwrap().len(), 7);
+
+        let status = call_mcp_tool(&paths, "research_status", json!({ "run_id": run_id })).unwrap();
+        assert_eq!(status["task_count"].as_u64(), Some(7));
+        assert_eq!(status["pending_task_count"].as_u64(), Some(7));
+
+        let read = call_mcp_tool(&paths, "research_read", json!({ "run_id": run_id })).unwrap();
+        assert_eq!(read["run"]["id"].as_str(), Some(run_id));
+        assert_eq!(read["tasks"].as_array().unwrap().len(), 7);
+
+        let audit =
+            call_mcp_tool(&paths, "research_audit_run", json!({ "run_id": run_id })).unwrap();
+        assert_eq!(audit["run"]["id"].as_str(), Some(run_id));
+        assert_eq!(audit["audit"]["query"].as_str(), Some("agent monitors"));
+
+        let stopped = call_mcp_tool(&paths, "research_stop", json!({ "run_id": run_id })).unwrap();
+        assert_eq!(stopped["run"]["status"].as_str(), Some("stopped"));
+        assert_eq!(stopped["pending_task_count"].as_u64(), Some(0));
+        assert_eq!(stopped["cancelled_task_count"].as_u64(), Some(7));
+    }
+
+    #[test]
+    fn mcp_research_source_ledger_links_cards_by_run_id() {
+        let paths = test_paths("mcp-research-source-ledger");
+        let workflow = call_mcp_tool(
+            &paths,
+            "research_run",
+            json!({ "query": "London AI scene" }),
+        )
+        .unwrap();
+        let run_id = workflow["run"]["id"].as_str().unwrap();
+
+        let linked_card = call_mcp_tool(
+            &paths,
+            "source_card_add",
+            json!({
+                "run_id": run_id,
+                "source_family": "official-records",
+                "read_depth": "full-text",
+                "triage_status": "must-read-primary",
+                "title": "Companies House filing",
+                "url": "https://example.com/companies-house-filing",
+                "summary": "Series A financing and director appointment records.",
+                "metadata": { "source_role": "primary", "trust_level": "high" },
+                "claims": [
+                    { "claim": "The filing records a director appointment.", "kind": "fact", "confidence": 0.9 }
+                ]
+            }),
+        )
+        .unwrap();
+        let card_id = linked_card["source_card"]["id"].as_str().unwrap();
+        assert_eq!(
+            linked_card["research_link"]["source_card"]["id"].as_str(),
+            Some(card_id)
+        );
+
+        let query_audit = call_mcp_tool(
+            &paths,
+            "research_audit",
+            json!({ "query": "London AI scene" }),
+        )
+        .unwrap();
+        assert_eq!(query_audit["source_card_count"].as_u64(), Some(0));
+
+        let run_sources =
+            call_mcp_tool(&paths, "research_sources", json!({ "run_id": run_id })).unwrap();
+        assert_eq!(run_sources.as_array().unwrap().len(), 1);
+        assert_eq!(
+            run_sources[0]["source"]["source_family"].as_str(),
+            Some("official-records")
+        );
+
+        let run_audit =
+            call_mcp_tool(&paths, "research_audit_run", json!({ "run_id": run_id })).unwrap();
+        assert_eq!(run_audit["audit"]["source_card_count"].as_u64(), Some(1));
+    }
+
+    #[test]
+    fn severe_mcp_research_source_add_rejects_missing_locator() {
+        let paths = test_paths("mcp-research-source-invalid");
+        let workflow =
+            call_mcp_tool(&paths, "research_run", json!({ "query": "sandboxing" })).unwrap();
+        let run_id = workflow["run"]["id"].as_str().unwrap();
+        let error = call_mcp_tool(
+            &paths,
+            "research_source_add",
+            json!({
+                "run_id": run_id,
+                "title": "No locator",
+                "source_family": "official",
+                "source_type": "docs",
+                "provider": "test",
+                "reason": "No URL or local ref should fail."
+            }),
+        )
+        .expect_err("missing locator must be rejected");
+        assert!(error.to_string().contains("url or local_ref"));
+    }
+
+    #[test]
+    fn mcp_research_claim_extraction_round_trip() {
+        let paths = test_paths("mcp-research-claim-extraction");
+        let workflow = call_mcp_tool(
+            &paths,
+            "research_run",
+            json!({ "query": "image compression" }),
+        )
+        .unwrap();
+        let run_id = workflow["run"]["id"].as_str().unwrap();
+        let linked_card = call_mcp_tool(
+            &paths,
+            "source_card_add",
+            json!({
+                "run_id": run_id,
+                "source_family": "papers",
+                "title": "Codec X paper",
+                "url": "https://example.com/codec-x-paper",
+                "summary": "Benchmarks suggest Codec X may reduce image size by 10 percent.",
+                "claims": [
+                    { "claim": "Codec X may reduce image size by 10 percent.", "kind": "measurement", "confidence": 0.7 }
+                ],
+                "metadata": { "source_role": "primary", "trust_level": "high" }
+            }),
+        )
+        .unwrap();
+        let card_id = linked_card["source_card"]["id"].as_str().unwrap();
+        let prompt = call_mcp_tool(
+            &paths,
+            "research_extraction_prompt",
+            json!({ "run_id": run_id, "source_card_id": card_id }),
+        )
+        .unwrap();
+        assert!(
+            prompt["prompt"]
+                .as_str()
+                .unwrap()
+                .contains("Return only JSON")
+        );
+
+        let records = call_mcp_tool(
+            &paths,
+            "research_claims_ingest",
+            json!({
+                "run_id": run_id,
+                "source_card_id": card_id,
+                "provider": "test",
+                "model": "test-model",
+                "output_json": r#"{"claims":[{"text":"Codec X may reduce image size by 10 percent.","kind":"measurement","confidence":0.7,"caveats":["benchmark-dependent"],"quote":"may reduce image size by 10 percent"}]}"#
+            }),
+        )
+        .unwrap();
+        assert_eq!(records.as_array().unwrap().len(), 1);
+        let claims = call_mcp_tool(&paths, "research_claims", json!({ "run_id": run_id })).unwrap();
+        assert_eq!(claims.as_array().unwrap().len(), 1);
+        let clusters =
+            call_mcp_tool(&paths, "research_clusters", json!({ "run_id": run_id })).unwrap();
+        assert_eq!(clusters.as_array().unwrap().len(), 1);
+        let skeptic =
+            call_mcp_tool(&paths, "research_skeptic_pass", json!({ "run_id": run_id })).unwrap();
+        assert_eq!(skeptic["ok"].as_bool(), Some(true));
+        let report = call_mcp_tool(
+            &paths,
+            "research_report_compile",
+            json!({
+                "run_id": run_id,
+                "saturation_reason": "Fixture source coverage satisfied.",
+                "no_write": true
+            }),
+        )
+        .unwrap();
+        assert_eq!(report["status"].as_str(), Some("completed"));
+        assert!(
+            report["markdown"]
+                .as_str()
+                .unwrap()
+                .contains("Bibliography")
+        );
+    }
+
+    #[test]
+    fn severe_mcp_research_lifecycle_rejects_missing_run_ids() {
+        let paths = test_paths("mcp-research-missing-run");
+        for tool_name in [
+            "research_status",
+            "research_read",
+            "research_audit_run",
+            "research_stop",
+        ] {
+            let error = call_mcp_tool(
+                &paths,
+                tool_name,
+                json!({ "run_id": "00000000-0000-0000-0000-000000000000" }),
+            )
+            .expect_err("missing run id must not be accepted");
+            assert!(error.to_string().contains("research run not found"));
+        }
     }
 
     #[test]

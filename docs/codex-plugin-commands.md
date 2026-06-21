@@ -155,12 +155,15 @@ typing part of the name. Use the displayed command name from the picker.
 
 - `/research-plan` uses `research_plan`.
 - `/research-search` uses `research_web_search`.
-- `/research-workflow` uses `research_workflow_create` and `research_tasks`.
+- `/research-workflow` uses `research_workflow_create` as a compatibility alias for deep runs and `research_tasks`.
+- Deep research runs use `research_run`, `research_status`, `research_read`, `research_audit_run`, and `research_stop`.
+- Deep research source ledgers use `research_sources`, `research_source_add`, `research_source_card_link`, and optional `run_id` linking in `source_card_add`.
+- Structured extraction and synthesis gates use `research_extraction_prompt`, `research_claims_ingest`, `research_claims`, `research_clusters`, `research_skeptic_pass`, and `research_report_compile`.
 - `/research-runs` uses `research_runs`.
 - `/research-tasks` uses `research_tasks`.
 - `/research-task-complete` uses `research_task_complete`.
 - `/research-brief` uses `research_brief_from_wiki` as a report/summary artifact renderer over already-collected evidence; it is not a quick research mode.
-- Research audits use `research_audit` when checking generated recursion,
+- Research audits use `research_audit` for legacy query audits and `research_audit_run` for run-linked audits when checking generated recursion,
   stale evidence, contradictions, uncited model answers, or untrusted sources.
 - `/import-claude` uses `arcwell import claude`.
 

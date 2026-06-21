@@ -405,17 +405,18 @@ writeback. A short brief can be a report section or interim artifact, but not a
 separate quick/surface mode. See `docs/deep-research-system-design.md`.
 
 - [x] Define a typed source-card schema with versioning.
-- [ ] Add `research run/status/read/audit/stop` as the target deep-run surface
+- [x] Add `research run/status/read/audit/stop` as the target deep-run surface
       over the existing partial plan/workflow/search/report building blocks.
-- [ ] Add a research source ledger with source-family, read-depth, canonical
+- [x] Add a research source ledger with source-family, read-depth, canonical
       URL, provider, freshness, fetch status, and run-source links.
-- [ ] Link source cards to research runs so audit/report retrieval is not only
+- [x] Link source cards to research runs so audit/report retrieval is not only
       literal query text search.
-- [ ] Add model-backed source extraction into claims, entities, dates, and links.
-- [ ] Add a structured claim graph with confidence, caveats, temporal scope,
+- [x] Add bounded model-output source extraction into claims, entities, dates, and links.
+- [x] Add a structured claim graph with confidence, caveats, temporal scope,
       source-card evidence links, and contradiction links.
-- [ ] Add clustering across RSS, GitHub, arXiv, X, web search, local wiki, and
-      fetched sources.
+- [x] Add deterministic clustering across linked run sources and extracted
+      claims, with adapter/source-family fields ready for RSS, GitHub, arXiv, X,
+      web search, local wiki, and fetched sources.
 - [x] Add deterministic contradiction, staleness, untrusted-source,
       low-reliability, robots/noindex, and uncertainty audit detection for
       source cards.
@@ -424,12 +425,12 @@ separate quick/surface mode. See `docs/deep-research-system-design.md`.
 - [ ] Add native host-search pathway for Codex/OpenAI and Claude where available.
 - [ ] Add Codex-native subagent prompts/configs for scout, corpus builder,
       extractor, skeptic, synthesizer, and auditor roles.
-- [ ] Add mandatory skeptic/refutation passes for important claims before final
+- [x] Add mandatory skeptic/refutation passes for important claims before final
       synthesis.
-- [ ] Add a report compiler that produces final reports with executive summary,
+- [x] Add a report compiler that produces final reports with executive summary,
       methodology/source coverage, key findings, evidence tables,
       contradictions, confidence labels, gaps, bibliography, and retrieval date.
-- [ ] Add saturation reporting that explains why the run stopped: coverage,
+- [x] Add saturation reporting that explains why the run stopped: coverage,
       diminishing novelty, unresolved blocker, provider limit, budget, or user
       stop.
 - [ ] Keep Brave and Perplexity as optional provider adapters.
@@ -437,18 +438,20 @@ separate quick/surface mode. See `docs/deep-research-system-design.md`.
 - [x] Prevent generated research pages from becoming primary sources.
 
 Description:
-The current research and librarian flows remain deterministic and local. Source
-cards now carry schema version, evidence role, trust level, reliability score,
-provenance strength, inferred source owner, crawl-rate policy, extracted
-dates/entities, and audit flags. `research_audit` surfaces generated-page
-recursion, uncited model answers, stale retrieval dates, prompt-injection/SEO
-spam evidence, low-reliability sources, robots/noindex metadata, low-confidence
-claims, and conflicting launch dates. Research outputs exclude
-generated/model-answer, untrusted, and low-reliability source cards from primary
-evidence and include an evidence audit section. The deep-only target still
-needs source-ledger/run-linking, model-backed extraction, a claim graph,
-clustering, Codex-native subagent orchestration, mandatory skeptic passes,
-report compilation, saturation reporting, and live host-native search proof.
+The current research and librarian flows are still local/deterministic for
+orchestration, but the deep-run substrate is implemented: durable run lifecycle,
+role tasks, source ledger/run links, source-card run linking, bounded
+model-output claim ingestion, structured claims, deterministic clusters,
+contradiction records, mandatory skeptic pass, run-aware audit, and report
+compilation. Source cards carry schema version, evidence role, trust level,
+reliability score, provenance strength, inferred source owner, crawl-rate
+policy, extracted dates/entities, and audit flags. `research_audit_run` includes
+run-linked source cards even when literal query search misses them. Reports
+exclude generated/model-answer, untrusted, and low-reliability source cards from
+primary evidence and are marked incomplete when skeptic/audit checks fail. The
+deep-only target still needs Codex-native subagent orchestration, real
+host-native search proof, large-corpus source-count/saturation evidence, and
+live runs on the three reference topics.
 
 How to test:
 - Source-card schema validation tests.

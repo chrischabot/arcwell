@@ -86,14 +86,17 @@ broad source discovery, deep reading, source-card and claim extraction,
 skeptic/refutation passes, cited synthesis, audit, and durable wiki writeback.
 Short summaries are report artifacts, not a separate quick research mode.
 
-The current partial implementation supports the building blocks:
+The current implementation supports the core local building blocks:
 
-1. Make a research plan.
-2. Gather current primary sources with host-native search or guarded provider adapters.
-3. Write source cards and notes into the wiki.
-4. Run tracked scout/extractor/skeptic/synthesizer tasks.
-5. Run audit passes before using research externally.
-6. Produce wiki-grounded report drafts from local source cards and wiki pages.
+1. Start/read/stop durable deep runs.
+2. Link source-card and source-ledger evidence to a run.
+3. Validate bounded model-produced claim extraction.
+4. Build deterministic claim clusters and skeptic/refutation reports.
+5. Compile a report from linked sources, claims, clusters, skeptic findings, and audit results.
+6. Mark reports incomplete when audit or skeptic checks fail.
+
+Live Codex subagent runs over hundreds of sources are still tracked as the next
+proof step; the local evidence and report substrate is implemented and tested.
 
 The complete target design is in
 [docs/deep-research-system-design.md](docs/deep-research-system-design.md).
@@ -323,9 +326,11 @@ arcwell wiki ingest-file ./notes.md
 arcwell wiki ingest-dir ./corpus
 arcwell wiki import-codex-swift-sources /path/to/codex-swift
 arcwell wiki sources
-arcwell research plan "Vercel Eve"
-arcwell research brief "Vercel Eve"
-arcwell research audit "Vercel Eve"
+arcwell research run "Vercel Eve"
+arcwell research status <run-id>
+arcwell research link-source-card <run-id> <source-card-id>
+arcwell research skeptic <run-id>
+arcwell research report <run-id> "coverage satisfied or limit reached"
 arcwell project status-sync-record <project-id> active "Fresh Codex thread summary" --host codex --thread-id <thread-id>
 arcwell wiki enqueue-rss https://example.com/feed.xml
 arcwell wiki enqueue-github-owner openai --limit 10

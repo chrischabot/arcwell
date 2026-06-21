@@ -96,7 +96,7 @@ The target surface is intentionally small:
 arcwell research run "topic or question"
 arcwell research status <run-id>
 arcwell research read <run-id>
-arcwell research audit <run-id>
+arcwell research audit-run <run-id>
 arcwell research stop <run-id>
 ```
 

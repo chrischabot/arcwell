@@ -11,8 +11,9 @@ Product contract:
 
 Rules:
 
-- Start with `research_plan` to get local wiki context and suggested searches.
-- Use `research_workflow_create` so scout, extractor, skeptic, and synthesizer work is tracked.
+- Start with `research_run` for the durable deep-run lifecycle; use `research_status`, `research_read`, `research_audit_run`, and `research_stop` to manage it.
+- `research_workflow_create` remains a compatibility alias for creating the same deep role tasks.
+- Use `research_plan` when you need local wiki context and suggested searches before or during the run.
 - Use host-native web search for current claims. Do not rely only on local wiki pages when the topic may have changed.
 - If native search is unavailable or insufficient, use `research_web_search` with `provider=openai`, `provider=brave`, or `provider=perplexity` when API keys are configured.
 - Prefer primary sources first: official docs, release notes, source repos, papers, company blogs, and named-person posts.
@@ -21,17 +22,34 @@ Rules:
 - Use secondary analysis to find controversy, missing context, and implications.
 - Search and expand by source family until the run can explain source coverage and saturation, or until an explicit user/policy/budget limit stops it.
 - Write durable source cards or notes into `arcwell-llm-wiki` before producing a final report.
-- Use typed source cards for external evidence; do not bury source provenance only in prose.
-- Use `research_brief_from_wiki` only as the current report-draft artifact after source cards are in place; do not present it as a shallow mode.
-- Call `research_audit` before using a report externally or as project evidence.
+- Use typed source cards for external evidence; link them to the run with `research_source_card_link` or `source_card_add` plus `run_id`.
+- Use `research_extraction_prompt` and `research_claims_ingest` for bounded claim extraction; malformed output, prompt-injection text, and uncertainty loss must fail instead of being stored.
+- Use `research_clusters` and `research_skeptic_pass` before report compilation.
+- Use `research_report_compile` for the final deep report. It marks the report incomplete when skeptic or audit checks fail.
+- Use `research_brief_from_wiki` only as a legacy report-draft artifact after source cards are in place; do not present it as a shallow mode.
+- Call `research_audit_run` before using a report externally or as project evidence.
 - Treat generated `Research Brief:`, report, and `Expanded:` pages as outputs, not evidence.
 - Record retrieval date in source cards for current or fast-moving topics.
 
 MCP tools:
 
 - `research_plan`
+- `research_run`
+- `research_status`
+- `research_read`
+- `research_audit_run`
+- `research_stop`
 - `research_web_search`
 - `research_workflow_create`
+- `research_sources`
+- `research_source_add`
+- `research_source_card_link`
+- `research_extraction_prompt`
+- `research_claims_ingest`
+- `research_claims`
+- `research_clusters`
+- `research_skeptic_pass`
+- `research_report_compile`
 - `research_tasks`
 - `research_task_complete`
 - `research_brief_from_wiki`

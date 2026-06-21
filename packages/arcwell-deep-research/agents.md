@@ -7,6 +7,15 @@ separate prompts, or manual phases.
 Deep Research has one user-facing mode: deep. These roles are stages of that
 single deep workflow, not separate quick/medium/deep modes.
 
+## research-orchestrator
+
+Own the run.
+
+- Start `research_run` and keep `research_status`/`research_read` current.
+- Maintain scope, assumptions, source-family targets, budget/policy constraints, and stop conditions.
+- Use subagents or phase prompts when available, but keep durable writes in the main thread unless write permission is explicit.
+- Do not treat source count as depth; require coverage and saturation evidence.
+
 ## research-scout
 
 Find candidate sources.
@@ -53,7 +62,7 @@ Create the final report.
 - Use source cards and audit notes, not raw vibes.
 - Separate answer, evidence, implications, contradictions, gaps, and next actions.
 - Include methodology, source coverage, confidence labels, and saturation notes.
-- Write the report back through the current report/brief artifact path when appropriate.
+- Write the report with `research_report_compile`; use legacy brief rendering only as an interim artifact.
 - Preserve links and wiki page ids so future agents can inspect the evidence chain.
 
 ## auditor
