@@ -12,8 +12,8 @@ Current first-pass implementation:
 - Candidates are scored with transparent rule-based signals.
 - Topics can be expanded into wiki pages through `librarian_expand_topic`.
 - Expanded pages include deterministic source-card audit notes and exclude generated/model-answer, untrusted, and low-reliability source cards from primary evidence.
-- Email is documented as a future digest delivery option in `arcwell-email`, but
-  no outbound email delivery path exists yet.
+- Email send/reply exists in `arcwell-email` after recipient authorization, but
+  librarian digest scheduling and delivery routing are not wired yet.
 
 MCP tools:
 

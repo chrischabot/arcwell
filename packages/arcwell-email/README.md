@@ -129,18 +129,31 @@ addresses belong in ignored local config.
 
 The 2026-06-21 manual live smoke used local-only real addresses to prove the
 configured author-to-agent route, then scrubbed tracked documentation back to
-`agent@example.com` and `user@example.com`. The remaining live gap is
-repeatability and operations: no committed replay script, scheduler/digest
-delivery, or production monitoring is claimed yet.
+`agent@example.com` and `user@example.com`.
+
+Repeatable local and guarded live smoke is:
+
+```sh
+scripts/email-live-smoke --no-live
+ARCWELL_EMAIL_LIVE_CONFIRM=route scripts/email-live-smoke --live
+```
+
+The script runs local mapper/Worker/Rust severe checks by default. Live mode
+drains the configured edge inbox into the configured local Arcwell home only
+after explicit confirmation, waits for a unique controlled author-originated
+subject, and can send a rich outbound smoke only when
+`ARCWELL_EMAIL_OUTBOUND_CONFIRM=send` and `ARCWELL_EMAIL_SMOKE_TO` are set. The
+remaining operations gap is scheduler/digest delivery and production
+monitoring/alerting.
 
 ## Local Severe Tests
 
 ```sh
-cd packages/arcwell-email
-npm test
-cd ../arcwell-edge-inbox/worker
-npm test
+cd packages/arcwell-email && npm test
+cd ../arcwell-edge-inbox/worker && npm test
+cd ../../..
 cargo test -p arcwell-core email -- --nocapture
+scripts/email-live-smoke --no-live
 ```
 
 The fixture-backed tests try to refute the mapper with spoofed `From:` headers,

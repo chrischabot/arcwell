@@ -572,8 +572,11 @@ Expected and recorded result for the completed smoke:
 
 Current blockers:
 
-- The live proof is manual; there is no committed `scripts/email-live-smoke`
-  replay harness yet.
+- `scripts/email-live-smoke --no-live` now provides the committed local severe
+  replay harness, and
+  `ARCWELL_EMAIL_LIVE_CONFIRM=route scripts/email-live-smoke --live` provides a
+  guarded live rerun path. Live mode is intentionally opt-in because it drains
+  the configured remote inbox into the configured local Arcwell home.
 - No librarian digest scheduler has been wired to email delivery yet.
 - No production monitoring/alerting exists for Email Routing or Cloudflare
   Email Service delivery health.

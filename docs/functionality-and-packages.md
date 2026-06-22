@@ -76,8 +76,9 @@ curl -H "Authorization: Bearer <local-long-random-token>" http://127.0.0.1:8787/
 ```
 
 The HTTP server defaults to localhost, rejects non-local browser `Origin`
-headers, exposes only read-only GET routes today, and returns structured
-redacted errors for failed reads.
+headers, exposes read-oriented JSON/HTML routes plus one narrow authenticated
+ops mutation for edge-event dead-lettering, and returns structured redacted
+errors for failed reads/mutations.
 
 Current endpoints:
 
@@ -87,6 +88,8 @@ Current endpoints:
 - `GET /wiki`
 - `GET /ops`
 - `GET /ops/ui`
+- `POST /ops/ui/edge-events/:id/dead-letter` for the authenticated, CSRF-checked,
+  policy-checked edge-event control.
 
 ### Cloudflare Workers
 
@@ -131,16 +134,22 @@ Data store:
 
 Current enforcement:
 
-- X recent search and daemon-side web search check policy before cost checks,
-  credential lookup, and provider calls.
-- Memory candidate apply checks policy before calling Arcwell Memory or marking
-  the candidate applied.
+- X recent search, X monitor/OAuth, daemon-side web search, and scheduled
+  URL/RSS/GitHub/arXiv/X network jobs check policy before cost checks,
+  credential lookup, provider calls, or queued network execution.
+- Source-card writes, memory capture, and memory candidate apply check policy
+  before local/provider mutation.
 - Procedure candidate apply checks policy before writing approved procedure
   metadata or Markdown artifacts.
 - Telegram send/retry checks policy before recording outgoing messages or
   calling Telegram.
 - Local project create/status writes check policy before mutating project state.
+- Worker enqueue and CLI/MCP secret value/ref administration check policy
+  before mutation or secret access.
 - Recent decisions and pending approvals are included in the ops snapshot.
+- CLI/MCP policy administration can check, explain, list rules and decisions,
+  create temporary allow overrides, list approvals, and mark approvals approved
+  or rejected.
 
 Boundary:
 
@@ -149,9 +158,11 @@ Boundary:
   OS permission system.
 - Existing cost policies and channel authorization checks remain active; policy
   does not weaken them.
-- CLI/MCP policy administration, approval resolution, and full coverage for
-  source ingestion, secret access, worker jobs, memory capture, and every
-  provider path remain planned work.
+- Coverage is not claimed universal until the full sensitive-operation
+  inventory across CLI, MCP, worker, HTTP, edge drain, provider adapters, and
+  credential helper reads is complete.
+- Approval resolution is audited; it does not replay or automatically authorize
+  past actions.
 
 ## Cross-Cutting: Cost Controls
 
@@ -604,10 +615,16 @@ Safety:
 
 Current limits:
 
-- No live Cloudflare Email Routing Worker is wired yet.
-- No raw MIME parser is persisted or trusted yet.
+- Live Cloudflare Email Routing has one controlled author-originated proof and
+  a guarded rerun script, but no mailbox-wide ingestion or production alerting
+  is claimed.
+- Raw MIME is parsed only inside the bounded Cloudflare Email Routing handler;
+  local durable state stores sanitized normalized metadata, channel messages,
+  source cards, and delivery records rather than raw mailbox archives.
 - No Gmail API polling package exists.
-- No outbound email/digest delivery exists.
+- Outbound Cloudflare Email Service send/reply exists after recipient
+  authorization, policy/cost checks, and active-HTML rejection; scheduled
+  digest delivery is not wired yet.
 
 ## Package: `arcwell-projects`
 
@@ -755,8 +772,8 @@ Current limits:
 - No model-backed extraction/eval set yet.
 - Curator only creates reviewable archive candidates for exact normalized-title
   duplicates; stale/merge synthesis remains planned.
-- Approved procedures are not yet exported to Codex skill files or retrieved by
-  plugin prompts automatically.
+- Approved procedures can be exported to Arcwell-owned Codex skill files after
+  review; plugin prompts do not yet retrieve them automatically.
 
 ## Package: `arcwell-librarian`
 

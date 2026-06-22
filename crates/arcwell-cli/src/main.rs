@@ -1,7 +1,9 @@
 use anyhow::{Context, Result, bail};
 use arcwell_core::{
-    AppPaths, DoctorOptions, OpsSnapshot, PolicyRequest, ProcedureCandidateInput,
-    ResearchSourceInput, SourceCardInput, Store, WebSearchConfig, personal_memory_eval_corpus,
+    AppPaths, DoctorOptions, ImportRunFinish, OpsSnapshot, PolicyRequest, ProcedureCandidateInput,
+    ResearchArtifactInput, ResearchHostSearchInput, ResearchHostSearchResultInput,
+    ResearchRoleRunStart, ResearchSourceInput, SourceCardInput, Store, WebSearchConfig,
+    personal_memory_eval_corpus,
 };
 use axum::{
     Json, Router,
@@ -14,12 +16,12 @@ use axum::{
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -54,6 +56,7 @@ enum Command {
     Email(EmailCommand),
     Edge(EdgeCommand),
     Project(ProjectCommand),
+    Controller(ControllerCommand),
     Work(WorkCommand),
     Procedure(ProcedureCommand),
     Import(ImportCommand),
@@ -298,7 +301,13 @@ enum ImportSubcommand {
         #[arg(long, default_value_t = 25)]
         limit: usize,
         #[arg(long)]
+        user_id: Option<String>,
+        #[arg(long)]
         write_candidates: bool,
+    },
+    Runs {
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
     },
 }
 
@@ -1184,6 +1193,7 @@ fn run(store: Store, command: Command) -> Result<()> {
         Command::Email(args) => email(store, args),
         Command::Edge(args) => edge(store, args),
         Command::Project(args) => project(store, args),
+        Command::Controller(args) => controller(store, args),
         Command::Work(args) => work(store, args),
         Command::Procedure(args) => procedure(store, args),
         Command::Import(args) => import(store, args),
@@ -1700,6 +1710,82 @@ enum ResearchSubcommand {
     Tasks {
         run_id: String,
     },
+    RoleStart {
+        run_id: String,
+        role: String,
+        #[arg(long, default_value = "codex")]
+        host: String,
+        #[arg(long, default_value = "host_sequential")]
+        execution_mode: String,
+        #[arg(long)]
+        host_thread_id: Option<String>,
+        #[arg(long)]
+        host_subagent_id: Option<String>,
+        #[arg(long)]
+        tool_surface: Option<String>,
+        #[arg(long, default_value = "v1")]
+        prompt_version: String,
+        #[arg(long)]
+        prompt_hash: Option<String>,
+        #[arg(long = "input-artifact-id")]
+        input_artifact_ids: Vec<String>,
+    },
+    RoleFinish {
+        role_run_id: String,
+        status: String,
+        #[arg(long)]
+        output_artifact_id: Option<String>,
+        #[arg(long)]
+        error_kind: Option<String>,
+        #[arg(long)]
+        error_message: Option<String>,
+    },
+    RoleRuns {
+        run_id: String,
+    },
+    ArtifactAdd {
+        run_id: String,
+        artifact_type: String,
+        title: String,
+        #[arg(long)]
+        body: String,
+        #[arg(long)]
+        role_run_id: Option<String>,
+        #[arg(long, default_value = "{}")]
+        metadata_json: String,
+    },
+    Artifacts {
+        run_id: String,
+    },
+    ArtifactRead {
+        id: String,
+    },
+    HostSearchRecord {
+        run_id: String,
+        query: String,
+        #[arg(long, default_value = "codex")]
+        host: String,
+        #[arg(long, default_value = "host-native")]
+        tool_surface: String,
+        #[arg(long)]
+        role_run_id: Option<String>,
+        #[arg(long)]
+        query_intent: Option<String>,
+        #[arg(long)]
+        requested_recency: Option<i64>,
+        #[arg(long = "requested-domain")]
+        requested_domains: Vec<String>,
+        #[arg(long)]
+        cost_decision_id: Option<String>,
+        #[arg(long)]
+        results_json: String,
+    },
+    HostSearches {
+        run_id: String,
+    },
+    HostSearchRead {
+        id: String,
+    },
     CompleteTask {
         task_id: String,
         notes: String,
@@ -1743,6 +1829,12 @@ struct EdgeCommand {
 struct ProjectCommand {
     #[command(subcommand)]
     command: ProjectSubcommand,
+}
+
+#[derive(Args)]
+struct ControllerCommand {
+    #[command(subcommand)]
+    command: ControllerSubcommand,
 }
 
 #[derive(Args)]
@@ -1795,6 +1887,114 @@ enum ProjectSubcommand {
         channel: Option<String>,
         #[arg(long)]
         subject: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ControllerSubcommand {
+    Route {
+        #[arg(long, default_value = "telegram")]
+        channel: String,
+        #[arg(long)]
+        account_id: Option<String>,
+        #[arg(long)]
+        conversation_id: String,
+        #[arg(long)]
+        sender: String,
+        text: String,
+    },
+    ThreadUpsert {
+        host: String,
+        host_thread_id: String,
+        #[arg(long)]
+        project_id: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        cwd: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        worktree: Option<String>,
+        #[arg(long, default_value = "active")]
+        status: String,
+        #[arg(long, default_value_t = true)]
+        active: bool,
+        #[arg(long)]
+        archived: bool,
+        #[arg(long)]
+        current_goal: Option<String>,
+        #[arg(long)]
+        latest_summary: Option<String>,
+        #[arg(long)]
+        latest_summary_source: Option<String>,
+        #[arg(long)]
+        last_activity_at: Option<String>,
+    },
+    Threads {
+        #[arg(long)]
+        project_id: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+    RunCreate {
+        #[arg(long)]
+        thread_id: Option<String>,
+        #[arg(long)]
+        project_id: Option<String>,
+        #[arg(long)]
+        origin_channel_message_id: Option<String>,
+        #[arg(long, default_value = "codex")]
+        host: String,
+        #[arg(long)]
+        host_run_id: Option<String>,
+        #[arg(long, default_value = "work")]
+        kind: String,
+        #[arg(long, default_value = "running")]
+        status: String,
+        requested_action: String,
+    },
+    Runs {
+        #[arg(long)]
+        project_id: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+    Stop {
+        run_id: String,
+        reason: String,
+    },
+    Event {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        thread_id: Option<String>,
+        #[arg(long)]
+        project_id: Option<String>,
+        event_type: String,
+        summary: String,
+        #[arg(long, default_value = "{}")]
+        data: String,
+        #[arg(long, default_value = "manual-cli")]
+        source: String,
+    },
+    Events {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        project_id: Option<String>,
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+    Pending {
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
     },
 }
 
@@ -2563,6 +2763,101 @@ fn research(store: Store, args: ResearchCommand) -> Result<()> {
             print_json(&store.create_research_workflow(&query)?)
         }
         ResearchSubcommand::Tasks { run_id } => print_json(&store.list_research_tasks(&run_id)?),
+        ResearchSubcommand::RoleStart {
+            run_id,
+            role,
+            host,
+            execution_mode,
+            host_thread_id,
+            host_subagent_id,
+            tool_surface,
+            prompt_version,
+            prompt_hash,
+            input_artifact_ids,
+        } => print_json(&store.start_research_role_run(ResearchRoleRunStart {
+            run_id,
+            role,
+            host,
+            host_thread_id,
+            host_subagent_id,
+            tool_surface,
+            prompt_version,
+            prompt_hash,
+            execution_mode,
+            input_artifact_ids,
+        })?),
+        ResearchSubcommand::RoleFinish {
+            role_run_id,
+            status,
+            output_artifact_id,
+            error_kind,
+            error_message,
+        } => print_json(&store.finish_research_role_run(
+            &role_run_id,
+            &status,
+            output_artifact_id.as_deref(),
+            error_kind.as_deref(),
+            error_message.as_deref(),
+        )?),
+        ResearchSubcommand::RoleRuns { run_id } => {
+            print_json(&store.list_research_role_runs(&run_id)?)
+        }
+        ResearchSubcommand::ArtifactAdd {
+            run_id,
+            artifact_type,
+            title,
+            body,
+            role_run_id,
+            metadata_json,
+        } => {
+            let metadata =
+                serde_json::from_str(&metadata_json).context("parsing --metadata-json")?;
+            print_json(&store.record_research_artifact(ResearchArtifactInput {
+                run_id,
+                role_run_id,
+                artifact_type,
+                title,
+                body,
+                metadata,
+            })?)
+        }
+        ResearchSubcommand::Artifacts { run_id } => {
+            print_json(&store.list_research_artifacts(&run_id)?)
+        }
+        ResearchSubcommand::ArtifactRead { id } => print_json(&store.read_research_artifact(&id)?),
+        ResearchSubcommand::HostSearchRecord {
+            run_id,
+            query,
+            host,
+            tool_surface,
+            role_run_id,
+            query_intent,
+            requested_recency,
+            requested_domains,
+            cost_decision_id,
+            results_json,
+        } => {
+            let results: Vec<ResearchHostSearchResultInput> =
+                serde_json::from_str(&results_json).context("parsing --results-json")?;
+            print_json(&store.record_research_host_search(ResearchHostSearchInput {
+                run_id,
+                role_run_id,
+                host,
+                tool_surface,
+                query,
+                query_intent,
+                requested_recency,
+                requested_domains,
+                cost_decision_id,
+                results,
+            })?)
+        }
+        ResearchSubcommand::HostSearches { run_id } => {
+            print_json(&store.list_research_host_searches(&run_id)?)
+        }
+        ResearchSubcommand::HostSearchRead { id } => {
+            print_json(&store.read_research_host_search(&id)?)
+        }
         ResearchSubcommand::CompleteTask { task_id, notes } => {
             print_json(&store.complete_research_task(&task_id, &notes)?)
         }
@@ -2914,6 +3209,127 @@ fn project(store: Store, args: ProjectCommand) -> Result<()> {
     }
 }
 
+fn controller(store: Store, args: ControllerCommand) -> Result<()> {
+    match args.command {
+        ControllerSubcommand::Route {
+            channel,
+            account_id,
+            conversation_id,
+            sender,
+            text,
+        } => print_json(&store.controller_route_text(
+            &channel,
+            account_id.as_deref(),
+            &conversation_id,
+            &sender,
+            &text,
+        )?),
+        ControllerSubcommand::ThreadUpsert {
+            host,
+            host_thread_id,
+            project_id,
+            title,
+            cwd,
+            branch,
+            worktree,
+            status,
+            active,
+            archived,
+            current_goal,
+            latest_summary,
+            latest_summary_source,
+            last_activity_at,
+        } => print_json(&store.upsert_controller_thread(
+            &host,
+            &host_thread_id,
+            project_id.as_deref(),
+            title.as_deref(),
+            cwd.as_deref(),
+            branch.as_deref(),
+            worktree.as_deref(),
+            &status,
+            active,
+            archived,
+            current_goal.as_deref(),
+            latest_summary.as_deref(),
+            latest_summary_source.as_deref(),
+            last_activity_at.as_deref(),
+        )?),
+        ControllerSubcommand::Threads {
+            project_id,
+            status,
+            limit,
+        } => print_json(&store.list_controller_threads(
+            project_id.as_deref(),
+            status.as_deref(),
+            limit,
+        )?),
+        ControllerSubcommand::RunCreate {
+            thread_id,
+            project_id,
+            origin_channel_message_id,
+            host,
+            host_run_id,
+            kind,
+            status,
+            requested_action,
+        } => print_json(&store.create_controller_run(
+            thread_id.as_deref(),
+            project_id.as_deref(),
+            origin_channel_message_id.as_deref(),
+            &host,
+            host_run_id.as_deref(),
+            &kind,
+            &status,
+            &requested_action,
+        )?),
+        ControllerSubcommand::Runs {
+            project_id,
+            status,
+            limit,
+        } => print_json(&store.list_controller_runs(
+            project_id.as_deref(),
+            status.as_deref(),
+            limit,
+        )?),
+        ControllerSubcommand::Stop { run_id, reason } => {
+            print_json(&store.request_controller_stop(&run_id, &reason)?)
+        }
+        ControllerSubcommand::Event {
+            run_id,
+            thread_id,
+            project_id,
+            event_type,
+            summary,
+            data,
+            source,
+        } => {
+            let data: Value = serde_json::from_str(&data).context("--data must be JSON")?;
+            print_json(&store.record_controller_event(
+                run_id.as_deref(),
+                thread_id.as_deref(),
+                project_id.as_deref(),
+                &event_type,
+                &summary,
+                data,
+                &source,
+            )?)
+        }
+        ControllerSubcommand::Events {
+            run_id,
+            project_id,
+            limit,
+        } => print_json(&store.list_controller_events(
+            run_id.as_deref(),
+            project_id.as_deref(),
+            limit,
+        )?),
+        ControllerSubcommand::Pending { status, limit } => {
+            print_json(&store.list_controller_pending_actions(status.as_deref(), limit)?)
+        }
+    }
+}
+
 fn work(store: Store, args: WorkCommand) -> Result<()> {
     match args.command {
         WorkSubcommand::Start {
@@ -3217,25 +3633,118 @@ fn import(store: Store, args: ImportCommand) -> Result<()> {
             path,
             dry_run,
             limit,
+            user_id,
             write_candidates,
         } => {
             if dry_run && write_candidates {
                 bail!("--dry-run and --write-candidates cannot be used together");
             }
-            let report = analyze_claude_export(&path, limit)?;
-            if write_candidates {
-                for candidate in &report.candidates {
-                    store.add_candidate(
-                        &candidate.target,
-                        &candidate.kind,
-                        &candidate.content,
-                        &candidate.sensitivity,
-                        &candidate.source_ref,
+            let mode = if write_candidates {
+                "write_candidates"
+            } else if dry_run {
+                "dry_run"
+            } else {
+                "analyze"
+            };
+            let import_run_id = store.start_import_run(
+                "claude",
+                &path.display().to_string(),
+                mode,
+                json!({
+                    "limit": limit,
+                    "user_id_configured": user_id.is_some()
+                }),
+            )?;
+            let result = (|| -> Result<ClaudeImportReport> {
+                let mut report = analyze_claude_export(&path, limit, user_id.as_deref())?;
+                if write_candidates {
+                    let mut existing = HashSet::new();
+                    for status in ["pending", "applied", "rejected"] {
+                        for candidate in store.list_candidates(status)? {
+                            existing.insert(candidate_dedupe_key(
+                                &candidate.target,
+                                &candidate.kind,
+                                &candidate.content,
+                                &candidate.source_ref,
+                                candidate.user_id.as_deref(),
+                            ));
+                        }
+                    }
+                    for candidate in &report.candidates {
+                        let key = candidate_dedupe_key(
+                            &candidate.target,
+                            &candidate.kind,
+                            &candidate.content,
+                            &candidate.source_ref,
+                            candidate.user_id.as_deref(),
+                        );
+                        if !existing.insert(key) {
+                            report.duplicates_suppressed += 1;
+                            continue;
+                        }
+                        store.add_candidate_with_operation(
+                            &candidate.target,
+                            &candidate.kind,
+                            &candidate.content,
+                            &candidate.sensitivity,
+                            &candidate.source_ref,
+                            &candidate.operation,
+                            candidate.memory_id.as_deref(),
+                            candidate.user_id.as_deref(),
+                            candidate.metadata.clone(),
+                        )?;
+                        report.candidates_written += 1;
+                    }
+                }
+                Ok(report)
+            })();
+            match result {
+                Ok(mut report) => {
+                    let record = store.finish_import_run(
+                        &import_run_id,
+                        ImportRunFinish {
+                            status: "completed".to_string(),
+                            conversations_seen: report.conversations_seen,
+                            conversations_sampled: report.conversations_sampled,
+                            candidates_seen: report.candidates_seen,
+                            candidates_sampled: report.candidates_sampled,
+                            candidates_written: report.candidates_written,
+                            duplicates_suppressed: report.duplicates_suppressed,
+                            error: None,
+                            metadata: json!({
+                                "resolved_source_kind": report.source_kind.clone(),
+                                "resolved_source_path": report.source_path.clone(),
+                                "dry_run": dry_run,
+                                "write_candidates": write_candidates
+                            }),
+                        },
                     )?;
+                    report.import_run_id = Some(record.id);
+                    print_json(&report)
+                }
+                Err(error) => {
+                    let _ = store.finish_import_run(
+                        &import_run_id,
+                        ImportRunFinish {
+                            status: "failed".to_string(),
+                            conversations_seen: 0,
+                            conversations_sampled: 0,
+                            candidates_seen: 0,
+                            candidates_sampled: 0,
+                            candidates_written: 0,
+                            duplicates_suppressed: 0,
+                            error: Some(error.to_string()),
+                            metadata: json!({
+                                "dry_run": dry_run,
+                                "write_candidates": write_candidates
+                            }),
+                        },
+                    );
+                    Err(error)
                 }
             }
-            print_json(&report)
         }
+        ImportSubcommand::Runs { limit } => print_json(&store.list_import_runs(limit)?),
     }
 }
 
@@ -4358,6 +4867,7 @@ code,pre{white-space:pre-wrap;word-break:break-word}
         ("Project statuses", snapshot.project_status_snapshots.len()),
         ("Channels", snapshot.channel_messages.len()),
         ("Telegram failures", failed_deliveries),
+        ("Import runs", snapshot.import_runs.len()),
         ("Memory candidates", snapshot.memory_candidates.len()),
         ("Procedure candidates", snapshot.procedure_candidates.len()),
         ("Work runs", snapshot.work_runs.len()),
@@ -4603,6 +5113,33 @@ code,pre{white-space:pre-wrap;word-break:break-word}
                     json_cell(&attempt.response),
                 ]
             }),
+    ));
+    html.push_str(&ops_table(
+        "Import Ledger",
+        &[
+            "source",
+            "mode",
+            "status",
+            "seen",
+            "sampled",
+            "written",
+            "duplicates",
+            "error",
+            "started",
+        ],
+        snapshot.import_runs.iter().take(50).map(|run| {
+            vec![
+                format!("{} {}", run.source_kind, run.source_path),
+                run.mode.clone(),
+                run.status.clone(),
+                run.candidates_seen.to_string(),
+                run.candidates_sampled.to_string(),
+                run.candidates_written.to_string(),
+                run.duplicates_suppressed.to_string(),
+                run.error.clone().unwrap_or_default(),
+                run.started_at.clone(),
+            ]
+        }),
     ));
     html.push_str(&ops_table(
         "Memory Review",
@@ -5448,6 +5985,7 @@ fn dispatch_mcp(paths: &AppPaths, method: &str, params: Value) -> Result<Value> 
                 { "uri": "arcwell://edge-events", "name": "Edge Inbox Events", "mimeType": "application/json" },
                 { "uri": "arcwell://channels", "name": "Channel Messages", "mimeType": "application/json" },
                 { "uri": "arcwell://projects", "name": "Projects", "mimeType": "application/json" },
+                { "uri": "arcwell://controller", "name": "Controller State", "mimeType": "application/json" },
                 { "uri": "arcwell://work-runs", "name": "Work Runs", "mimeType": "application/json" },
                 { "uri": "arcwell://procedures", "name": "Approved Procedures", "mimeType": "application/json" },
                 { "uri": "arcwell://procedure-candidates", "name": "Procedure Candidates", "mimeType": "application/json" },
@@ -5478,6 +6016,12 @@ fn dispatch_mcp(paths: &AppPaths, method: &str, params: Value) -> Result<Value> 
                 "arcwell://edge-events" => json!(store.list_edge_events()?),
                 "arcwell://channels" => json!(store.list_channel_messages()?),
                 "arcwell://projects" => json!(store.list_projects()?),
+                "arcwell://controller" => json!({
+                    "threads": store.list_controller_threads(None, None, 100)?,
+                    "runs": store.list_controller_runs(None, None, 100)?,
+                    "events": store.list_controller_events(None, None, 100)?,
+                    "pending_actions": store.list_controller_pending_actions(None, 100)?
+                }),
                 "arcwell://work-runs" => json!(store.search_work_runs(None, None, None, 100)?),
                 "arcwell://procedures" => {
                     json!(store.search_procedures(None, Some("active"), 100)?)
@@ -5942,6 +6486,130 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
             let run_id = required_string(&arguments, "run_id")?;
             Ok(json!(store.list_research_tasks(&run_id)?))
         }
+        "research_role_start" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            let role = required_string(&arguments, "role")?;
+            let host = optional_string(&arguments, "host", "codex");
+            let execution_mode = optional_string(&arguments, "execution_mode", "host_sequential");
+            let prompt_version = optional_string(&arguments, "prompt_version", "v1");
+            Ok(json!(
+                store.start_research_role_run(ResearchRoleRunStart {
+                    run_id,
+                    role,
+                    host,
+                    host_thread_id: arguments
+                        .get("host_thread_id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    host_subagent_id: arguments
+                        .get("host_subagent_id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    tool_surface: arguments
+                        .get("tool_surface")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    prompt_version,
+                    prompt_hash: arguments
+                        .get("prompt_hash")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    execution_mode,
+                    input_artifact_ids: string_array_argument(&arguments, "input_artifact_ids")?,
+                })?
+            ))
+        }
+        "research_role_finish" => {
+            let role_run_id = required_string(&arguments, "role_run_id")?;
+            let status = required_string(&arguments, "status")?;
+            Ok(json!(store.finish_research_role_run(
+                &role_run_id,
+                &status,
+                arguments.get("output_artifact_id").and_then(Value::as_str),
+                arguments.get("error_kind").and_then(Value::as_str),
+                arguments.get("error_message").and_then(Value::as_str),
+            )?))
+        }
+        "research_role_runs" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_role_runs(&run_id)?))
+        }
+        "research_artifact_add" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            let artifact_type = required_string(&arguments, "artifact_type")?;
+            let title = required_string(&arguments, "title")?;
+            let body = required_string(&arguments, "body")?;
+            Ok(json!(
+                store.record_research_artifact(ResearchArtifactInput {
+                    run_id,
+                    role_run_id: arguments
+                        .get("role_run_id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    artifact_type,
+                    title,
+                    body,
+                    metadata: arguments
+                        .get("metadata")
+                        .cloned()
+                        .unwrap_or_else(|| json!({})),
+                })?
+            ))
+        }
+        "research_artifacts" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_artifacts(&run_id)?))
+        }
+        "research_artifact_read" => {
+            let id = required_string(&arguments, "id")?;
+            Ok(json!(store.read_research_artifact(&id)?))
+        }
+        "research_host_search_record" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            let query = required_string(&arguments, "query")?;
+            let host = optional_string(&arguments, "host", "codex");
+            let tool_surface = optional_string(&arguments, "tool_surface", "host-native");
+            let results = arguments
+                .get("results")
+                .and_then(Value::as_array)
+                .cloned()
+                .context("missing array argument: results")?
+                .into_iter()
+                .map(serde_json::from_value)
+                .collect::<std::result::Result<Vec<ResearchHostSearchResultInput>, _>>()
+                .context("parsing host search results")?;
+            Ok(json!(
+                store.record_research_host_search(ResearchHostSearchInput {
+                    run_id,
+                    role_run_id: arguments
+                        .get("role_run_id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    host,
+                    tool_surface,
+                    query,
+                    query_intent: arguments
+                        .get("query_intent")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    requested_recency: arguments.get("requested_recency").and_then(Value::as_i64),
+                    requested_domains: string_array_argument(&arguments, "requested_domains")?,
+                    cost_decision_id: arguments
+                        .get("cost_decision_id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    results,
+                })?
+            ))
+        }
+        "research_host_searches" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_host_searches(&run_id)?))
+        }
+        "research_host_search_read" => {
+            let id = required_string(&arguments, "id")?;
+            Ok(json!(store.read_research_host_search(&id)?))
+        }
         "research_task_complete" => {
             let task_id = required_string(&arguments, "task_id")?;
             let notes = required_string(&arguments, "notes")?;
@@ -6024,6 +6692,104 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 subject
             )?))
         }
+        "controller_route_text" => {
+            let channel = optional_string(&arguments, "channel", "telegram");
+            let account_id = arguments.get("account_id").and_then(Value::as_str);
+            let conversation_id = required_string(&arguments, "conversation_id")?;
+            let sender = required_string(&arguments, "sender")?;
+            let text = required_string(&arguments, "text")?;
+            Ok(json!(store.controller_route_text(
+                &channel,
+                account_id,
+                &conversation_id,
+                &sender,
+                &text
+            )?))
+        }
+        "controller_thread_upsert" => {
+            let host = required_string(&arguments, "host")?;
+            let host_thread_id = required_string(&arguments, "host_thread_id")?;
+            let status = optional_string(&arguments, "status", "active");
+            Ok(json!(
+                store.upsert_controller_thread(
+                    &host,
+                    &host_thread_id,
+                    arguments.get("project_id").and_then(Value::as_str),
+                    arguments.get("title").and_then(Value::as_str),
+                    arguments.get("cwd").and_then(Value::as_str),
+                    arguments.get("branch").and_then(Value::as_str),
+                    arguments.get("worktree").and_then(Value::as_str),
+                    &status,
+                    optional_bool(&arguments, "active", true),
+                    optional_bool(&arguments, "archived", false),
+                    arguments.get("current_goal").and_then(Value::as_str),
+                    arguments.get("latest_summary").and_then(Value::as_str),
+                    arguments
+                        .get("latest_summary_source")
+                        .and_then(Value::as_str),
+                    arguments.get("last_activity_at").and_then(Value::as_str),
+                )?
+            ))
+        }
+        "controller_thread_list" => Ok(json!(store.list_controller_threads(
+            arguments.get("project_id").and_then(Value::as_str),
+            arguments.get("status").and_then(Value::as_str),
+            optional_usize(&arguments, "limit", 25),
+        )?)),
+        "controller_run_create" => {
+            let host = optional_string(&arguments, "host", "codex");
+            let kind = optional_string(&arguments, "kind", "work");
+            let status = optional_string(&arguments, "status", "running");
+            let requested_action = required_string(&arguments, "requested_action")?;
+            Ok(json!(
+                store.create_controller_run(
+                    arguments.get("thread_id").and_then(Value::as_str),
+                    arguments.get("project_id").and_then(Value::as_str),
+                    arguments
+                        .get("origin_channel_message_id")
+                        .and_then(Value::as_str),
+                    &host,
+                    arguments.get("host_run_id").and_then(Value::as_str),
+                    &kind,
+                    &status,
+                    &requested_action,
+                )?
+            ))
+        }
+        "controller_run_list" => Ok(json!(store.list_controller_runs(
+            arguments.get("project_id").and_then(Value::as_str),
+            arguments.get("status").and_then(Value::as_str),
+            optional_usize(&arguments, "limit", 25),
+        )?)),
+        "controller_stop" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            let reason = required_string(&arguments, "reason")?;
+            Ok(json!(store.request_controller_stop(&run_id, &reason)?))
+        }
+        "controller_event_record" => {
+            let event_type = required_string(&arguments, "event_type")?;
+            let summary = required_string(&arguments, "summary")?;
+            let source = optional_string(&arguments, "source", "mcp");
+            let data = arguments.get("data").cloned().unwrap_or_else(|| json!({}));
+            Ok(json!(store.record_controller_event(
+                arguments.get("run_id").and_then(Value::as_str),
+                arguments.get("thread_id").and_then(Value::as_str),
+                arguments.get("project_id").and_then(Value::as_str),
+                &event_type,
+                &summary,
+                data,
+                &source,
+            )?))
+        }
+        "controller_event_list" => Ok(json!(store.list_controller_events(
+            arguments.get("run_id").and_then(Value::as_str),
+            arguments.get("project_id").and_then(Value::as_str),
+            optional_usize(&arguments, "limit", 25),
+        )?)),
+        "controller_pending_list" => Ok(json!(store.list_controller_pending_actions(
+            arguments.get("status").and_then(Value::as_str),
+            optional_usize(&arguments, "limit", 25),
+        )?)),
         "work_run_start" => {
             let goal = required_string(&arguments, "goal")?;
             let project_id = arguments.get("project_id").and_then(Value::as_str);
@@ -6978,6 +7744,74 @@ fn mcp_tools() -> Vec<Value> {
             [("run_id", "string", "Research run id.")],
         ),
         tool(
+            "research_role_start",
+            "Record the start of a host or Codex subagent role execution for a deep research run.",
+            [
+                ("run_id", "string", "Research run id."),
+                ("role", "string", "Research role name."),
+            ],
+        ),
+        tool(
+            "research_role_finish",
+            "Record completion, rejection, cancellation, or failure of a research role execution.",
+            [
+                ("role_run_id", "string", "Research role run id."),
+                (
+                    "status",
+                    "string",
+                    "completed, failed, rejected, or cancelled.",
+                ),
+            ],
+        ),
+        tool(
+            "research_role_runs",
+            "List host/subagent role execution records for one deep research run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_artifact_add",
+            "Record an auditable research artifact such as a source map, role output, rejected proposal, evidence pack, or synthesis draft.",
+            [
+                ("run_id", "string", "Research run id."),
+                ("artifact_type", "string", "Artifact type."),
+                ("title", "string", "Artifact title."),
+                ("body", "string", "Artifact body."),
+            ],
+        ),
+        tool(
+            "research_artifacts",
+            "List research artifacts for one deep research run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_artifact_read",
+            "Read one research artifact by id.",
+            [("id", "string", "Research artifact id.")],
+        ),
+        tool(
+            "research_host_search_record",
+            "Record auditable host-native search proof and link selected results into the research source ledger.",
+            [
+                ("run_id", "string", "Research run id."),
+                ("query", "string", "Host-native search query."),
+                (
+                    "results",
+                    "array",
+                    "Search results with rank, title, url, snippet, and selected_for_ingest.",
+                ),
+            ],
+        ),
+        tool(
+            "research_host_searches",
+            "List host-native search proof records for one deep research run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_host_search_read",
+            "Read one host-native search proof record by id.",
+            [("id", "string", "Host search id.")],
+        ),
+        tool(
             "research_task_complete",
             "Complete a daemon-tracked research task with notes.",
             [
@@ -7034,6 +7868,68 @@ fn mcp_tools() -> Vec<Value> {
             "project_status_get",
             "Read a project status report with latest snapshot, live-state availability, and provenance.",
             [("project_id", "string", "Project id.")],
+        ),
+        tool(
+            "controller_route_text",
+            "Route an incoming channel message into project status, work control, or queued workflow actions.",
+            [
+                (
+                    "conversation_id",
+                    "string",
+                    "Channel-local conversation id.",
+                ),
+                ("sender", "string", "Channel-local sender subject."),
+                ("text", "string", "Incoming message text."),
+            ],
+        ),
+        tool(
+            "controller_thread_upsert",
+            "Sync or register a host thread for controller status and routing.",
+            [
+                ("host", "string", "Host name, for example codex."),
+                ("host_thread_id", "string", "Host-native thread id."),
+            ],
+        ),
+        tool(
+            "controller_thread_list",
+            "List known controller host threads, optionally filtered by project or status.",
+            [],
+        ),
+        tool(
+            "controller_run_create",
+            "Register a controller run for a requested host action.",
+            [("requested_action", "string", "Requested action text.")],
+        ),
+        tool(
+            "controller_run_list",
+            "List controller runs, optionally filtered by project or status.",
+            [],
+        ),
+        tool(
+            "controller_stop",
+            "Request cancellation of a controller run; host adapter still must deliver the stop.",
+            [
+                ("run_id", "string", "Controller run id."),
+                ("reason", "string", "Stop reason."),
+            ],
+        ),
+        tool(
+            "controller_event_record",
+            "Record controller activity from a host adapter or worker.",
+            [
+                ("event_type", "string", "Controller event type."),
+                ("summary", "string", "Event summary."),
+            ],
+        ),
+        tool(
+            "controller_event_list",
+            "List recent controller events, optionally filtered by run or project.",
+            [],
+        ),
+        tool(
+            "controller_pending_list",
+            "List queued controller actions waiting for a host adapter or approval.",
+            [],
         ),
         tool(
             "work_run_start",
@@ -7712,21 +8608,40 @@ fn hook_text_from_input(input: &str) -> Option<String> {
 
 #[derive(Debug, Serialize)]
 struct ClaudeImportReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    import_run_id: Option<String>,
+    source_kind: String,
+    source_path: String,
     conversations_seen: usize,
     conversations_sampled: usize,
+    candidates_seen: usize,
+    candidates_sampled: usize,
+    candidates_written: usize,
+    duplicates_suppressed: usize,
     candidates: Vec<ImportCandidate>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct ImportCandidate {
     target: String,
     kind: String,
     content: String,
     sensitivity: String,
     source_ref: String,
+    operation: String,
+    memory_id: Option<String>,
+    user_id: Option<String>,
+    metadata: Value,
 }
 
-fn analyze_claude_export(path: &PathBuf, limit: usize) -> Result<ClaudeImportReport> {
+fn analyze_claude_export(
+    path: &PathBuf,
+    limit: usize,
+    user_id: Option<&str>,
+) -> Result<ClaudeImportReport> {
+    if let Some(canonical_path) = resolve_claude_canonical_export(path) {
+        return analyze_claude_canonical_export(&canonical_path, limit, user_id);
+    }
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let value: Value = serde_json::from_slice(&bytes).context("parsing Claude export JSON")?;
     let conversations = value
@@ -7762,6 +8677,15 @@ fn analyze_claude_export(path: &PathBuf, limit: usize) -> Result<ClaudeImportRep
                 content: "For emotionally sensitive or personalized tasks, consult relevant durable context, choose sufficient reasoning effort, use available tools, and disclose unavailable context rather than guessing.".to_string(),
                 sensitivity: "sensitive".to_string(),
                 source_ref: source_ref.clone(),
+                operation: "ADD".to_string(),
+                memory_id: None,
+                user_id: user_id.map(ToOwned::to_owned),
+                metadata: redact_secret_like_json(json!({
+                    "source": "claude_raw_conversation_import",
+                    "conversation_uuid": uuid,
+                    "title": title,
+                    "summary": summary
+                })),
             });
         }
 
@@ -7772,6 +8696,15 @@ fn analyze_claude_export(path: &PathBuf, limit: usize) -> Result<ClaudeImportRep
                 content: "Writing and style preferences should be maintained as inspectable profile/style documents, not hidden memory.".to_string(),
                 sensitivity: "normal".to_string(),
                 source_ref: source_ref.clone(),
+                operation: "ADD".to_string(),
+                memory_id: None,
+                user_id: user_id.map(ToOwned::to_owned),
+                metadata: redact_secret_like_json(json!({
+                    "source": "claude_raw_conversation_import",
+                    "conversation_uuid": uuid,
+                    "title": title,
+                    "summary": summary
+                })),
             });
         }
 
@@ -7785,6 +8718,15 @@ fn analyze_claude_export(path: &PathBuf, limit: usize) -> Result<ClaudeImportRep
                 content: "Wardrobe and outfit advice should account for inventory, fit, weather, comfort, formality, rotation, and prior decisions.".to_string(),
                 sensitivity: "normal".to_string(),
                 source_ref: source_ref.clone(),
+                operation: "ADD".to_string(),
+                memory_id: None,
+                user_id: user_id.map(ToOwned::to_owned),
+                metadata: redact_secret_like_json(json!({
+                    "source": "claude_raw_conversation_import",
+                    "conversation_uuid": uuid,
+                    "title": title,
+                    "summary": summary
+                })),
             });
         }
 
@@ -7794,10 +8736,330 @@ fn analyze_claude_export(path: &PathBuf, limit: usize) -> Result<ClaudeImportRep
     }
 
     Ok(ClaudeImportReport {
+        import_run_id: None,
+        source_kind: "raw_conversations".to_string(),
+        source_path: path.display().to_string(),
         conversations_seen: conversations.len(),
         conversations_sampled: conversations.len().min(limit),
+        candidates_seen: candidates.len(),
+        candidates_sampled: candidates.len(),
+        candidates_written: 0,
+        duplicates_suppressed: 0,
         candidates,
     })
+}
+
+fn resolve_claude_canonical_export(path: &Path) -> Option<PathBuf> {
+    if path.is_dir() {
+        for candidate in [
+            path.join("out").join("canonical_memories.jsonl"),
+            path.join("canonical_memories.jsonl"),
+            path.join("out").join("mem0").join("mem0_ingest.jsonl"),
+            path.join("mem0_ingest.jsonl"),
+        ] {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        return None;
+    }
+
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    if matches!(name, "canonical_memories.jsonl" | "mem0_ingest.jsonl") {
+        Some(path.to_path_buf())
+    } else {
+        None
+    }
+}
+
+fn analyze_claude_canonical_export(
+    path: &Path,
+    limit: usize,
+    user_id: Option<&str>,
+) -> Result<ClaudeImportReport> {
+    let (candidates_seen, rows) = read_jsonl_values(path, Some(limit))?;
+    let mut candidates = Vec::new();
+    for value in rows {
+        candidates.push(import_candidate_from_claude_memory(value, user_id)?);
+    }
+    Ok(ClaudeImportReport {
+        import_run_id: None,
+        source_kind: "canonical_memories".to_string(),
+        source_path: path.display().to_string(),
+        conversations_seen: 0,
+        conversations_sampled: 0,
+        candidates_seen,
+        candidates_sampled: candidates.len(),
+        candidates_written: 0,
+        duplicates_suppressed: 0,
+        candidates,
+    })
+}
+
+fn read_jsonl_values(path: &Path, sample_limit: Option<usize>) -> Result<(usize, Vec<Value>)> {
+    let file = fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
+    let reader = std::io::BufReader::new(file);
+    let mut seen = 0;
+    let mut rows = Vec::new();
+    for (idx, line) in reader.lines().enumerate() {
+        let line = line.with_context(|| format!("reading {} line {}", path.display(), idx + 1))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(&line)
+            .with_context(|| format!("parsing {} line {}", path.display(), idx + 1))?;
+        seen += 1;
+        if sample_limit.is_none_or(|limit| rows.len() < limit) {
+            rows.push(value);
+        }
+    }
+    Ok((seen, rows))
+}
+
+fn import_candidate_from_claude_memory(
+    value: Value,
+    user_id: Option<&str>,
+) -> Result<ImportCandidate> {
+    if value.get("metadata").is_some() && value.get("memory_id").is_some() {
+        import_candidate_from_mem0_row(value, user_id)
+    } else {
+        import_candidate_from_canonical_row(value, user_id)
+    }
+}
+
+fn import_candidate_from_mem0_row(value: Value, user_id: Option<&str>) -> Result<ImportCandidate> {
+    let memory = redact_secret_like_text(&required_value_string(&value, "memory")?);
+    let memory_id = optional_value_string(&value, "memory_id");
+    let metadata = value.get("metadata").cloned().unwrap_or_else(|| json!({}));
+    let category = metadata
+        .get("category")
+        .and_then(Value::as_str)
+        .unwrap_or("fact");
+    let sensitivity = metadata
+        .get("sensitivity")
+        .and_then(Value::as_str)
+        .unwrap_or("normal");
+    let source_ref = claude_source_ref(memory_id.as_deref(), &metadata);
+    let operation = claude_memory_operation(&value, &metadata);
+    let candidate_memory_id = if matches!(operation.as_str(), "UPDATE" | "DELETE") {
+        memory_id.clone()
+    } else {
+        None
+    };
+    Ok(ImportCandidate {
+        target: "memory".to_string(),
+        kind: claude_memory_kind(category),
+        content: memory,
+        sensitivity: sensitivity.to_string(),
+        source_ref,
+        operation: operation.clone(),
+        memory_id: candidate_memory_id,
+        user_id: user_id
+            .map(ToOwned::to_owned)
+            .or_else(|| import_user_id(&value, &metadata, None)),
+        metadata: add_claude_import_metadata(metadata, memory_id, &operation),
+    })
+}
+
+fn import_candidate_from_canonical_row(
+    value: Value,
+    user_id: Option<&str>,
+) -> Result<ImportCandidate> {
+    let memory = redact_secret_like_text(&required_value_string(&value, "memory")?);
+    let details = optional_value_string(&value, "details");
+    let content = match details.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(details) => format!("{memory}\n\n{}", redact_secret_like_text(details)),
+        None => memory,
+    };
+    let memory_id = optional_value_string(&value, "memory_id");
+    let category = optional_value_string(&value, "category").unwrap_or_else(|| "fact".to_string());
+    let sensitivity =
+        optional_value_string(&value, "sensitivity").unwrap_or_else(|| "normal".to_string());
+    let source_ref = claude_source_ref(memory_id.as_deref(), &value);
+    let operation = claude_memory_operation(&value, &value);
+    let candidate_memory_id = if matches!(operation.as_str(), "UPDATE" | "DELETE") {
+        memory_id.clone()
+    } else {
+        None
+    };
+    Ok(ImportCandidate {
+        target: "memory".to_string(),
+        kind: claude_memory_kind(&category),
+        content,
+        sensitivity,
+        source_ref,
+        operation: operation.clone(),
+        memory_id: candidate_memory_id,
+        user_id: user_id
+            .map(ToOwned::to_owned)
+            .or_else(|| import_user_id(&value, &value, None))
+            .or_else(|| Some("chris".to_string())),
+        metadata: add_claude_import_metadata(value, memory_id, &operation),
+    })
+}
+
+fn add_claude_import_metadata(
+    mut metadata: Value,
+    memory_id: Option<String>,
+    operation: &str,
+) -> Value {
+    if !metadata.is_object() {
+        metadata = json!({ "source_value": metadata });
+    }
+    let object = metadata.as_object_mut();
+    if let Some(object) = object {
+        object.insert("imported_from".to_string(), json!("claude_history_export"));
+        object.insert("operation".to_string(), json!(operation));
+        if let Some(memory_id) = memory_id {
+            object.insert("claude_memory_id".to_string(), json!(memory_id));
+        }
+    }
+    redact_secret_like_json(metadata)
+}
+
+fn required_value_string(value: &Value, key: &str) -> Result<String> {
+    optional_value_string(value, key)
+        .filter(|value| !value.trim().is_empty())
+        .with_context(|| format!("Claude memory row missing string field {key:?}"))
+}
+
+fn optional_value_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn claude_memory_kind(category: &str) -> String {
+    let cleaned = category
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!(
+        "claude_export.{}",
+        cleaned.trim_matches('_').trim().if_empty("fact")
+    )
+}
+
+fn claude_source_ref(memory_id: Option<&str>, value: &Value) -> String {
+    if let Some(memory_id) = memory_id {
+        return format!("claude_export:{memory_id}");
+    }
+    value
+        .get("evidence")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("source_uri"))
+        .and_then(Value::as_str)
+        .unwrap_or("claude_export:unknown")
+        .to_string()
+}
+
+fn candidate_dedupe_key(
+    target: &str,
+    kind: &str,
+    content: &str,
+    source_ref: &str,
+    user_id: Option<&str>,
+) -> String {
+    if source_ref.starts_with("claude_export:") {
+        return format!(
+            "{}\0{}\0{}\0{}",
+            target,
+            kind,
+            user_id.unwrap_or(""),
+            source_ref
+        );
+    }
+    format!(
+        "{}\0{}\0{}\0{}\0{}",
+        target,
+        kind,
+        user_id.unwrap_or(""),
+        source_ref,
+        content
+    )
+}
+
+fn import_user_id(
+    value: &Value,
+    metadata: &Value,
+    default_user_id: Option<&str>,
+) -> Option<String> {
+    default_user_id
+        .map(ToOwned::to_owned)
+        .or_else(|| optional_value_string(value, "user_id"))
+        .or_else(|| optional_value_string(metadata, "user_id"))
+        .or_else(|| optional_value_string(value, "user"))
+        .or_else(|| optional_value_string(metadata, "user"))
+}
+
+fn claude_memory_operation(value: &Value, metadata: &Value) -> String {
+    optional_value_string(value, "operation")
+        .or_else(|| optional_value_string(metadata, "operation"))
+        .or_else(|| optional_value_string(value, "op"))
+        .or_else(|| optional_value_string(metadata, "op"))
+        .map(|value| match value.to_ascii_uppercase().as_str() {
+            "UPDATE" | "UPDATED" => "UPDATE".to_string(),
+            "DELETE" | "DELETED" | "REMOVE" | "REMOVED" => "DELETE".to_string(),
+            "NONE" | "NOOP" | "SKIP" => "NONE".to_string(),
+            _ => "ADD".to_string(),
+        })
+        .unwrap_or_else(|| "ADD".to_string())
+}
+
+fn redact_secret_like_json(value: Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(redact_secret_like_text(&text)),
+        Value::Array(items) => {
+            Value::Array(items.into_iter().map(redact_secret_like_json).collect())
+        }
+        Value::Object(object) => Value::Object(
+            object
+                .into_iter()
+                .map(|(key, value)| {
+                    let value = if is_sensitive_json_key(&key) {
+                        Value::String("[REDACTED]".to_string())
+                    } else {
+                        redact_secret_like_json(value)
+                    };
+                    (key, value)
+                })
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn is_sensitive_json_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    normalized.contains("token")
+        || normalized.contains("secret")
+        || normalized.contains("password")
+        || normalized == "authorization"
+        || normalized == "api_key"
+        || normalized == "apikey"
+}
+
+trait IfEmpty {
+    fn if_empty<'a>(&'a self, fallback: &'a str) -> &'a str;
+}
+
+impl IfEmpty for str {
+    fn if_empty<'a>(&'a self, fallback: &'a str) -> &'a str {
+        if self.is_empty() { fallback } else { self }
+    }
 }
 
 #[cfg(test)]
@@ -7823,6 +9085,192 @@ mod tests {
             "arcwell-cli-test-{name}-{}",
             chrono::Utc::now().timestamp_nanos_opt().unwrap()
         )))
+    }
+
+    #[test]
+    fn claude_import_reads_canonical_memory_export() {
+        let root = std::env::temp_dir().join(format!(
+            "arcwell-cli-claude-import-test-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let out = root.join("out");
+        fs::create_dir_all(&out).unwrap();
+        let path = out.join("canonical_memories.jsonl");
+        fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "memory_id": "mem_123",
+                "memory": "User prefers reviewable imports.",
+                "details": "The import should create candidates rather than apply memories.",
+                "category": "preference",
+                "subject": "memory import",
+                "status": "current",
+                "sensitivity": "normal",
+                "importance": 9,
+                "confidence": 0.91,
+                "review_required": false,
+                "evidence": [
+                    {
+                        "source_uri": "claude://conversation/example",
+                        "quote": "create candidates"
+                    }
+                ]
+            }))
+            .unwrap()
+                + "\n",
+        )
+        .unwrap();
+
+        let report = analyze_claude_export(&root, 10, None).unwrap();
+        assert_eq!(report.source_kind, "canonical_memories");
+        assert_eq!(report.candidates_seen, 1);
+        assert_eq!(report.candidates_sampled, 1);
+        let candidate = &report.candidates[0];
+        assert_eq!(candidate.target, "memory");
+        assert_eq!(candidate.kind, "claude_export.preference");
+        assert_eq!(candidate.operation, "ADD");
+        assert_eq!(candidate.user_id.as_deref(), Some("chris"));
+        assert_eq!(candidate.source_ref, "claude_export:mem_123");
+        assert_eq!(candidate.metadata["claude_memory_id"], "mem_123");
+        assert_eq!(candidate.metadata["imported_from"], "claude_history_export");
+        assert!(
+            candidate
+                .content
+                .contains("User prefers reviewable imports.")
+        );
+        assert!(candidate.content.contains("rather than apply memories."));
+    }
+
+    #[test]
+    fn severe_claude_import_redacts_secrets_and_preserves_update_scope() {
+        // CLAIM: Coalesced Claude import creates reviewable candidates without
+        // leaking secret-like content or losing UPDATE memory/user scope.
+        // ORACLE: candidate fields, redacted content/metadata, and total-vs-sampled counts.
+        // SEVERITY: Severe because imported history is private, inspectable state.
+        let root = std::env::temp_dir().join(format!(
+            "arcwell-cli-claude-import-redaction-test-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let out = root.join("out").join("mem0");
+        fs::create_dir_all(&out).unwrap();
+        let path = out.join("mem0_ingest.jsonl");
+        let token = format!("sk-{}", "a".repeat(48));
+        let refresh = format!("ghp_{}", "b".repeat(48));
+        let row = json!({
+            "memory_id": "mem_update_1",
+            "memory": format!("Rotate the API key {token} before publishing."),
+            "user_id": "row-user",
+            "metadata": {
+                "category": "preference",
+                "sensitivity": "sensitive",
+                "operation": "UPDATE",
+                "access_token": token,
+                "evidence": [
+                    {
+                        "source_uri": "claude://conversation/private",
+                        "quote": format!("Authorization: Bearer {refresh}")
+                    }
+                ]
+            }
+        });
+        let second = json!({
+            "memory_id": "mem_add_2",
+            "memory": "This second row should count but not be sampled.",
+            "metadata": { "category": "fact" }
+        });
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                serde_json::to_string(&row).unwrap(),
+                serde_json::to_string(&second).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let report = analyze_claude_export(&root, 1, Some("configured-user")).unwrap();
+        assert_eq!(report.source_kind, "canonical_memories");
+        assert_eq!(report.candidates_seen, 2);
+        assert_eq!(report.candidates_sampled, 1);
+        let candidate = &report.candidates[0];
+        assert_eq!(candidate.operation, "UPDATE");
+        assert_eq!(candidate.memory_id.as_deref(), Some("mem_update_1"));
+        assert_eq!(candidate.user_id.as_deref(), Some("configured-user"));
+        assert_eq!(candidate.sensitivity, "sensitive");
+        let metadata = serde_json::to_string(&candidate.metadata).unwrap();
+        assert!(!candidate.content.contains(&token));
+        assert!(!metadata.contains(&token));
+        assert!(!metadata.contains(&refresh));
+        assert!(candidate.content.contains("[REDACTED]"));
+        assert_eq!(candidate.metadata["access_token"], "[REDACTED]");
+    }
+
+    #[test]
+    fn severe_claude_import_write_candidates_is_idempotent() {
+        // CLAIM: write-candidates imports coalesced Claude rows into durable
+        // pending candidates exactly once across repeated runs.
+        // ORACLE: second write suppresses the duplicate and durable candidate count remains one.
+        // SEVERITY: Severe because resume/retry must not flood the review queue.
+        let paths = test_paths("claude-import-idempotent");
+        let root = std::env::temp_dir().join(format!(
+            "arcwell-cli-claude-import-idempotent-test-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let out = root.join("out");
+        fs::create_dir_all(&out).unwrap();
+        let canonical_path = out.join("canonical_memories.jsonl");
+        fs::write(
+            &canonical_path,
+            serde_json::to_string(&json!({
+                "memory_id": "mem_idempotent",
+                "memory": "Imports should be idempotent.",
+                "category": "fact",
+                "user_id": "row-user"
+            }))
+            .unwrap()
+                + "\n",
+        )
+        .unwrap();
+
+        let run_import = || {
+            import(
+                Store::open(paths.clone()).unwrap(),
+                ImportCommand {
+                    command: ImportSubcommand::Claude {
+                        path: root.clone(),
+                        dry_run: false,
+                        limit: 10,
+                        user_id: None,
+                        write_candidates: true,
+                    },
+                },
+            )
+        };
+        run_import().unwrap();
+        fs::write(
+            &canonical_path,
+            serde_json::to_string(&json!({
+                "memory_id": "mem_idempotent",
+                "memory": "Imports should be idempotent even if redaction changes content.",
+                "category": "fact",
+                "user_id": "row-user"
+            }))
+            .unwrap()
+                + "\n",
+        )
+        .unwrap();
+        run_import().unwrap();
+
+        let store = Store::open(paths).unwrap();
+        let candidates = store.list_candidates("pending").unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].user_id.as_deref(), Some("row-user"));
+        assert_eq!(candidates[0].metadata["claude_memory_id"], "mem_idempotent");
+        let runs = store.list_import_runs(10).unwrap();
+        assert_eq!(runs.len(), 2);
+        assert!(runs.iter().all(|run| run.status == "completed"));
+        assert!(runs.iter().any(|run| run.candidates_written == 1));
+        assert!(runs.iter().any(|run| run.duplicates_suppressed == 1));
     }
 
     fn test_http_state(name: &str, auth_token: Option<&str>) -> HttpState {
@@ -8871,6 +10319,137 @@ reason = "MCP secret writes are denied for this token"
         let ops = call_mcp_tool(&paths, "ops_snapshot", json!({})).unwrap();
         assert!(ops.get("health").is_some());
         assert!(ops.get("edge_events").is_some());
+    }
+
+    #[test]
+    fn severe_mcp_controller_tools_route_and_expose_state() {
+        let paths = test_paths("mcp-controller");
+        let tool_names: BTreeSet<_> = mcp_tools()
+            .into_iter()
+            .filter_map(|tool| {
+                tool.get("name")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .collect();
+        for expected in [
+            "controller_route_text",
+            "controller_thread_upsert",
+            "controller_run_create",
+            "controller_stop",
+            "controller_pending_list",
+        ] {
+            assert!(tool_names.contains(expected), "missing tool {expected}");
+        }
+
+        let project = call_mcp_tool(
+            &paths,
+            "project_create",
+            json!({
+                "name": "Arcwell",
+                "summary": "Controller project.",
+                "aliases": ["arcwell"]
+            }),
+        )
+        .unwrap();
+        let project_id = project.get("id").and_then(Value::as_str).unwrap();
+        call_mcp_tool(
+            &paths,
+            "project_status_record",
+            json!({
+                "project_id": project_id,
+                "status": "active",
+                "summary": "Foo finished; Bar is working on MCP controller routing."
+            }),
+        )
+        .unwrap();
+        call_mcp_tool(
+            &paths,
+            "channel_authorize",
+            json!({
+                "channel": "telegram",
+                "subject": "telegram:chat:123",
+                "can_read_projects": true,
+                "can_write_projects": true
+            }),
+        )
+        .unwrap();
+        let thread = call_mcp_tool(
+            &paths,
+            "controller_thread_upsert",
+            json!({
+                "host": "codex",
+                "host_thread_id": "thread-1",
+                "project_id": project_id,
+                "title": "Arcwell controller",
+                "latest_summary": "Bar is working on MCP controller routing."
+            }),
+        )
+        .unwrap();
+        let thread_id = thread.get("id").and_then(Value::as_str).unwrap();
+        let run = call_mcp_tool(
+            &paths,
+            "controller_run_create",
+            json!({
+                "thread_id": thread_id,
+                "project_id": project_id,
+                "requested_action": "Implement MCP controller routing",
+                "kind": "feature"
+            }),
+        )
+        .unwrap();
+        let run_id = run.get("id").and_then(Value::as_str).unwrap();
+
+        let routed = call_mcp_tool(
+            &paths,
+            "controller_route_text",
+            json!({
+                "channel": "telegram",
+                "conversation_id": "chat:123",
+                "sender": "chat:123",
+                "text": "hows arcwell doing"
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            routed.get("intent").and_then(Value::as_str),
+            Some("project_status")
+        );
+        assert_eq!(
+            routed.pointer("/project/id").and_then(Value::as_str),
+            Some(project_id)
+        );
+
+        let stopped = call_mcp_tool(
+            &paths,
+            "controller_stop",
+            json!({
+                "run_id": run_id,
+                "reason": "stop requested by test"
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            stopped.get("status").and_then(Value::as_str),
+            Some("stopping")
+        );
+        assert_eq!(
+            stopped.get("cancel_requested").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let resource = dispatch_mcp(
+            &paths,
+            "resources/read",
+            json!({ "uri": "arcwell://controller" }),
+        )
+        .unwrap();
+        let text = resource
+            .pointer("/contents/0/text")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(text.contains(run_id));
+        assert!(text.contains("pending_actions"));
     }
 
     #[test]

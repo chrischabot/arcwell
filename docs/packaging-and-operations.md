@@ -44,9 +44,10 @@ Rationale:
 
 - The worker is long-lived and should drain queues even when no Codex thread is active.
 - The HTTP server is useful for humans, ops UI, and local integrations, but should be localhost-only.
-- The current `/ops/ui` page is read-only. Installers should not expose
-  mutating controls until each action has token auth, same-origin/CSRF checks,
-  policy enforcement, idempotency/replay handling, and severe tests.
+- The current `/ops/ui` page is mostly an inspection surface, with one narrow
+  authenticated edge-event dead-letter action. Installers should not expose
+  broader mutating controls until each action has token auth, same-origin/CSRF
+  checks, policy enforcement, idempotency/replay handling, and severe tests.
 - MCP stdio servers are normally lifecycle-managed by the host agent.
 
 ## macOS LaunchAgent

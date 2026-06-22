@@ -1,6 +1,6 @@
 # Arcwell TODO Execution DAG
 
-Last updated: 2026-06-20
+Last updated: 2026-06-22
 
 This DAG turns `TODO.md` into implementable work. It is intentionally explicit
 about dependencies, write ownership, validation, and adversarial review gates.
@@ -25,15 +25,18 @@ external proof blockers:
 - P2.21: Garderobe is vendored as a package boundary with dry-run checks, but
   live OAuth/MCP deployment, placeholder D1/KV ids, and source-project license
   provenance remain.
-- P2.22/P2.23: Google Workspace strategy and email package boundary are done;
-  no Arcwell Google API package or live Email Routing worker is claimed.
+- P2.22/P2.23: Google Workspace strategy is done; email package boundary,
+  Cloudflare Email Routing ingress, Cloudflare Email Service outbound, and a
+  guarded repeatable smoke harness exist. No Arcwell Google API package,
+  scheduler/digest delivery, or production email monitoring is claimed.
 
 Final local integration gate passed: `cargo fmt -- --check`,
 `cargo test --all --all-features`, Cloudflare worker typecheck/tests,
 Codex plugin/docs verifier+self-test, `scripts/arcwell-dev smoke/sync`,
-email tests, Garderobe typecheck/test/Wrangler dry-run, release-readiness smoke,
-Claude MCP smoke, memory eval corpus, service no-live smoke, and local portions
-of X/Telegram live-smoke scripts.
+email tests plus `scripts/email-live-smoke --no-live`, Garderobe
+typecheck/test/Wrangler dry-run, release-readiness smoke, Claude MCP smoke,
+memory eval corpus, service no-live smoke, and local portions of X/Telegram
+live-smoke scripts.
 
 ## Global Gates
 

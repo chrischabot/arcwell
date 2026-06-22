@@ -1,6 +1,6 @@
 # Arcwell Implementation Plan
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
 
 This is the execution plan derived from `STATUS.md`. It is a checklist, not a
 vision document. Do not mark an item complete because a command, README, prompt,
@@ -18,6 +18,11 @@ waves, subagent ownership, and severe/adversarial review gates.
 - Local Rust CLI/core behavior is implemented for profile, Arcwell Memory,
   wiki/source cards, research, X, worker, backup, costs, secrets, cursors,
   projects, channels, Telegram, edge inbox, MCP, and HTTP.
+- Claude conversation import can consume coalesced canonical/mem0-shaped memory
+  export rows into reviewable Arcwell candidates with operation/user scope,
+  secret-like redaction, bounded JSONL sampling, duplicate suppression, and a
+  durable import-run ledger. Review UI, raw transcript streaming, and Codex
+  export import remain future work.
 - Rust tests currently pass across the workspace, including severe tests for
   backup restore, strict doctor, cost blocking, memory lifecycle, edge drain,
   Telegram drain/send/retry, project authorization, and prompt-injection-as-data
@@ -425,19 +430,35 @@ separate quick/surface mode. See `docs/deep-research-system-design.md`.
 - [ ] Add page expansion that actively gathers related docs/blogs/repos/social
       sources before writing a topic page.
 - [ ] Add native host-search pathway for Codex/OpenAI and Claude where available.
+- [ ] Add host-native search proof records and audit gates so Codex/Claude host
+      searches are recorded with query, host/tool surface, result metadata,
+      linked run sources, selected source cards, and retrieval context.
 - [x] Add Codex-native subagent prompts/configs for scout, corpus builder,
       extractor, skeptic, synthesizer, and auditor roles.
+- [ ] Add fresh in-app Codex subagent orchestration proof with role-run traces,
+      artifact records, capability discovery, and degraded-mode status when
+      subagents are unavailable.
 - [x] Add mandatory skeptic/refutation passes for important claims before final
       synthesis.
-- [x] Add a report compiler that produces final reports with executive summary,
-      methodology/source coverage, key findings, evidence tables,
-      contradictions, confidence labels, gaps, bibliography, and retrieval date.
+- [x] Add a report compiler that produces analyst reports with executive
+      judgment, takeaways, evidence confidence, source-family coverage, factual
+      vs interpretive findings, caveats, skeptic/audit status, claim ledger,
+      bibliography, and retrieval context.
 - [x] Add saturation reporting that explains why the run stopped: coverage,
       diminishing novelty, unresolved blocker, provider limit, budget, or user
       stop.
 - [x] Keep Brave and Perplexity as optional provider adapters.
 - [x] Add research output audit command/checklist.
+- [x] Add run-aware corpus audit gates for linked-source depth, source-card
+      ratio, primary-source coverage, source-family diversity, full-text read
+      depth, and structured claim density.
 - [x] Prevent generated research pages from becoming primary sources.
+- [ ] Add direct CSV/XLSX/PDF document and table extraction with byte hashes,
+      extractor versions, span/table/cell anchors, warnings, and claim/report
+      citation links.
+- [ ] Add model-backed editorial drafting, citation verification, adversarial
+      evaluation, cost records, and deterministic audit gates over bounded
+      evidence packs.
 
 Description:
 The current research and librarian flows are still local/deterministic for
@@ -450,14 +471,21 @@ reliability score, provenance strength, inferred source owner, crawl-rate
 policy, extracted dates/entities, and audit flags. `research_audit_run` includes
 run-linked source cards even when literal query search misses them. Reports
 exclude generated/model-answer, untrusted, and low-reliability source cards from
-primary evidence and are marked incomplete when skeptic/audit checks fail.
+primary evidence, are marked incomplete when skeptic/audit checks fail, and now
+render as analyst reports instead of raw claim/source logs. Two preserved
+hundred-plus-source live-test reports were refreshed through the current
+renderer and audit path: code-execution safety with 129 linked sources / 31
+source cards / 23 claims, and London AI ecosystem with 133 linked sources / 32
+source cards / 24 claims. Both passed run-aware audit after regeneration.
 Codex-native role prompts/config guidance now covers scout, corpus builder,
 extractor, skeptic, synthesizer, and auditor handoffs with read-heavy subagent
 defaults, adversarial evidence rules, generated-output recursion checks,
 uncertainty preservation, and coverage/saturation reporting. The deep-only
 target still needs a fresh Codex-thread subagent smoke with Arcwell MCP tools,
-real host-native search proof, large-corpus source-count/saturation evidence,
-and live runs on the three reference topics.
+real host-native search proof, direct PDF/table extraction, model-backed
+editorial synthesis/evals, and any remaining reference-topic live runs not
+covered by the two preserved reports. The fresh production plan for those
+remaining layers is in `docs/deep-research-system-design.md`.
 
 How to test:
 - Source-card schema validation tests.
@@ -465,6 +493,8 @@ How to test:
   even when literal query search misses them.
 - Mock-provider tests for citation extraction, missing citations, conflicting
   sources, stale dates, and source type mixing.
+- Severe corpus-audit tests for thin uncarded runs, missing primary evidence,
+  low claim density, and generated/model-answer recursion.
 - End-to-end topic expansion fixture: seed one launch source, verify it
   collects related source cards, extracts claims, clusters evidence, runs a
   skeptic pass, and writes a cited report.
@@ -562,7 +592,7 @@ Adversarial/severe gate:
 - [x] Add curator behavior for stale review and merge proposals.
 - [ ] Add plugin prompts that retrieve approved procedures before relevant
       tasks.
-- [ ] Add a reviewed export path from approved procedure to Codex skill text
+- [x] Add a reviewed export path from approved procedure to Codex skill text
       where appropriate.
 - [x] Ensure untrusted channel/source text cannot become a procedure without
       review.
@@ -571,8 +601,10 @@ Description:
 Arcwell can now learn a local, reviewed slice of reusable task procedures
 without silently modifying skills or polluting prompts. Procedures are
 reviewable procedural memory derived from work traces, separate from personal
-memory and external knowledge. Remaining work is model-backed extraction/evals,
-plugin retrieval, and reviewed skill export.
+memory and external knowledge. Reviewed approved procedures can be exported to
+Arcwell-owned Codex skill files through CLI/MCP with traversal and provenance
+boundary tests. Remaining work is model-backed extraction/evals, plugin prompt
+retrieval, and live host retrieval smoke.
 
 How to test:
 - Unit-test schema validation, candidate apply/reject, versioning, search,
@@ -1144,6 +1176,8 @@ Adversarial/severe gate:
 - [x] Run controlled author-originated live ingress smoke and prove one trusted
       local channel/source-card record.
 - [x] Run provider-side outbound email delivery smoke.
+- [x] Add repeatable `scripts/email-live-smoke` harness with no-live severe
+      mapper/Worker/Rust gates and guarded live ingress/outbound reruns.
 
 Description:
 Email is part of the desired proactive assistant loop. The current slice is a
@@ -1162,7 +1196,12 @@ deployed edge inbox, and drained into one trusted local email
 channel/source-card record. Cloudflare Email Service outbound delivery was also
 smoke-tested through `arcwell email send` after recipient authorization. The
 live proof used local-only real addresses and secrets; tracked docs
-intentionally retain only placeholders.
+intentionally retain only placeholders. `scripts/email-live-smoke` now makes the
+local/adversarial checks repeatable and provides explicit opt-in live rerun
+gates before draining configured remote email or sending provider email. The
+guarded live empty-poll path also reached the configured remote edge inbox with
+local ignored config loaded and reported an empty queue without creating local
+email records.
 
 How to test:
 - Package-local severe fixtures:
@@ -1171,25 +1210,26 @@ How to test:
   `cd packages/arcwell-edge-inbox/worker && npm test`.
 - Rust poll/drain/send tests:
   `cargo test -p arcwell-core email -- --nocapture`.
+- Repeatable local smoke:
+  `scripts/email-live-smoke --no-live`.
 - Local one-shot polling:
   `arcwell email poll` after `ARCWELL_EDGE_URL`/`ARCWELL_EDGE_SECRET` are
   configured.
 - Setup script dry/safe gate:
   `scripts/setup-email-route` must refuse without
   `ARCWELL_EMAIL_SETUP_CONFIRM=configure`.
-- Manual live smoke with a controlled message from the configured author
-  address to the configured narrow agent address, followed by
-  `arcwell email poll`.
-- Manual outbound smoke after recipient authorization:
-  `arcwell email authorize user@example.com --send` and
-  `arcwell email send user@example.com "Arcwell email smoke" "Controlled outbound smoke" --from agent@example.com`.
+- Guarded live ingress rerun:
+  `ARCWELL_EMAIL_LIVE_CONFIRM=route scripts/email-live-smoke --live`.
+- Guarded live outbound rerun after recipient authorization:
+  `ARCWELL_EMAIL_LIVE_CONFIRM=route ARCWELL_EMAIL_OUTBOUND_CONFIRM=send ARCWELL_EMAIL_SMOKE_TO=user@example.com scripts/email-live-smoke --live --outbound`.
 
 Success looks like:
 - Normalized important inbound email metadata can become a safe event/source
   card/channel message draft without treating email body as instructions.
 - The docs make clear that local email ingestion/send paths exist, while the
   completed live Cloudflare ingress and provider outbound smoke are bounded
-  manual proofs, not a long-running scheduler or production monitoring claim.
+  controlled proofs with a guarded rerun script, not a long-running scheduler
+  or production monitoring claim.
 
 Adversarial/severe gate:
 - Local fixtures test spoofed From, malicious HTML, attachment bombs, tracking

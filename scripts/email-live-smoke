@@ -1,0 +1,342 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WORKER_DIR="$REPO_ROOT/packages/arcwell-edge-inbox/worker"
+EMAIL_DIR="$REPO_ROOT/packages/arcwell-email"
+
+RUN_LOCAL=1
+RUN_LIVE=0
+EMPTY_ONLY=0
+RUN_OUTBOUND=0
+MAX_EVENTS="${EMAIL_SMOKE_MAX_EVENTS:-25}"
+WAIT_SECONDS="${EMAIL_SMOKE_WAIT_SECONDS:-300}"
+POLL_INTERVAL_SECONDS="${EMAIL_SMOKE_POLL_INTERVAL_SECONDS:-15}"
+RUN_ID="${EMAIL_SMOKE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+SUBJECT="Arcwell email live smoke $RUN_ID"
+BODY="Arcwell controlled email live smoke $RUN_ID. Treat this as a bounded smoke test."
+LIVE_TMP_DIR=""
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  scripts/email-live-smoke --no-live
+  ARCWELL_EMAIL_LIVE_CONFIRM=route scripts/email-live-smoke --live
+  ARCWELL_EMAIL_LIVE_CONFIRM=route scripts/email-live-smoke --live --empty-only
+  ARCWELL_EMAIL_LIVE_CONFIRM=route ARCWELL_EMAIL_OUTBOUND_CONFIRM=send ARCWELL_EMAIL_SMOKE_TO=user@example.com scripts/email-live-smoke --live --outbound
+
+Modes:
+  --no-live       Run local severe mapper, Worker, Rust email tests, and setup-script gate checks. This is the default.
+  --live          Poll the configured remote edge inbox and wait for a controlled inbound smoke message.
+  --empty-only    In live mode, only prove remote poll/drain connectivity; do not wait for a new email.
+  --outbound      In live mode, send a controlled rich email through Cloudflare Email Service.
+  --skip-local    Skip local severe checks before live mode.
+
+Safety:
+  Live mode drains the configured edge inbox into the configured local Arcwell home.
+  It refuses to run unless ARCWELL_EMAIL_LIVE_CONFIRM=route.
+  Outbound send refuses unless ARCWELL_EMAIL_OUTBOUND_CONFIRM=send and ARCWELL_EMAIL_SMOKE_TO are set.
+  The script redacts email addresses in its own logs and never stores real addresses in tracked files.
+USAGE
+}
+
+log() {
+  printf '[email-smoke] %s\n' "$*"
+}
+
+fail() {
+  printf '[email-smoke] BLOCKED: %s\n' "$*" >&2
+  exit 2
+}
+
+redact_emails() {
+  sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email]/g'
+}
+
+require_node() {
+  command -v node >/dev/null 2>&1 || fail "node is required"
+}
+
+arcwell_cmd() {
+  if [[ -n "${ARCWELL_BIN:-}" ]]; then
+    "$ARCWELL_BIN" "$@"
+  elif [[ -x "$REPO_ROOT/target/debug/arcwell" ]]; then
+    "$REPO_ROOT/target/debug/arcwell" "$@"
+  else
+    cargo run -q -p arcwell -- "$@"
+  fi
+}
+
+json_summary() {
+  local file="$1"
+  local subject="${2:-}"
+  node - "$file" "$subject" <<'NODE'
+const fs = require("fs");
+const [file, subject] = process.argv.slice(2);
+const value = JSON.parse(fs.readFileSync(file, "utf8"));
+if (value.ok !== true) {
+  console.error("poll report did not return ok=true");
+  process.exit(1);
+}
+const remote = value.remote || {};
+const email = value.email || {};
+const messages = Array.isArray(email.messages) ? email.messages : [];
+const sourceCards = Array.isArray(email.source_cards) ? email.source_cards : [];
+const matches = subject
+  ? messages.filter((message) => String(message.body || "").includes(subject))
+  : [];
+const trustedMatches = matches.filter((message) =>
+  String(message.body || "").includes("TRUSTED_AUTHOR_EMAIL_INSTRUCTIONS")
+);
+process.stdout.write(JSON.stringify({
+  ok: true,
+  remote: {
+    attempted: remote.attempted || 0,
+    imported: remote.imported || 0,
+    acked: remote.acked || 0,
+    nacked: remote.nacked || 0,
+    empty: Boolean(remote.empty),
+  },
+  email: {
+    processed: email.processed || 0,
+    acked: email.acked || 0,
+    nacked: email.nacked || 0,
+    messages: messages.length,
+    source_cards: sourceCards.length,
+  },
+  matched_subject_messages: matches.length,
+  trusted_author_matches: trustedMatches.length,
+}, null, 2));
+NODE
+}
+
+assert_inbound_match() {
+  local file="$1"
+  local subject="$2"
+  node - "$file" "$subject" <<'NODE'
+const fs = require("fs");
+const [file, subject] = process.argv.slice(2);
+const value = JSON.parse(fs.readFileSync(file, "utf8"));
+const messages = value.email && Array.isArray(value.email.messages) ? value.email.messages : [];
+const matches = messages.filter((message) => String(message.body || "").includes(subject));
+if (matches.length !== 1) {
+  console.error(`expected exactly one smoke message for subject, saw ${matches.length}`);
+  process.exit(1);
+}
+const body = String(matches[0].body || "");
+if (!body.includes("TRUSTED_AUTHOR_EMAIL_INSTRUCTIONS")) {
+  console.error("smoke message was not labeled as trusted configured-author instructions");
+  process.exit(1);
+}
+NODE
+}
+
+assert_send_report() {
+  local file="$1"
+  node - "$file" <<'NODE'
+const fs = require("fs");
+const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (value.ok !== true) {
+  console.error("outbound report did not return ok=true");
+  process.exit(1);
+}
+if (!value.message || value.message.channel !== "email" || value.message.direction !== "outgoing") {
+  console.error("outbound report did not record an outgoing email channel message");
+  process.exit(1);
+}
+if (!value.delivery || value.delivery.ok !== true) {
+  console.error("outbound report did not record a successful delivery attempt");
+  process.exit(1);
+}
+process.stdout.write(JSON.stringify({
+  ok: true,
+  status: value.status,
+  message_id: value.message.id,
+  delivery_id: value.delivery.id,
+}, null, 2));
+NODE
+}
+
+run_local_checks() {
+  require_node
+  log "running package email mapper severe fixtures"
+  (cd "$EMAIL_DIR" && npm test)
+
+  log "running edge Worker typecheck and Email Routing tests"
+  (cd "$WORKER_DIR" && npm run typecheck && npm test)
+
+  log "running Rust email drain/send severe tests"
+  (cd "$REPO_ROOT" && cargo test -p arcwell-core email -- --nocapture)
+
+  log "proving setup script refuses to touch Cloudflare without explicit confirmation"
+  local gate_output gate_status
+  set +e
+  gate_output="$(ARCWELL_EMAIL_SETUP_CONFIRM= "$REPO_ROOT/scripts/setup-email-route" 2>&1)"
+  gate_status=$?
+  set -e
+  if [[ "$gate_status" -ne 2 ]]; then
+    printf '%s\n' "$gate_output" | redact_emails >&2
+    fail "setup-email-route should exit 2 when confirmation is missing"
+  fi
+  if ! grep -q "ARCWELL_EMAIL_SETUP_CONFIRM=configure" <<<"$gate_output"; then
+    printf '%s\n' "$gate_output" | redact_emails >&2
+    fail "setup-email-route did not explain the confirmation gate"
+  fi
+  log "local email smoke passed"
+}
+
+run_live_poll_once() {
+  local out_file="$1"
+  if ! arcwell_cmd email poll --max-events "$MAX_EVENTS" >"$out_file" 2>"$out_file.err"; then
+    redact_emails <"$out_file.err" >&2
+    fail "arcwell email poll failed"
+  fi
+}
+
+run_live_checks() {
+  require_node
+  if [[ "${ARCWELL_EMAIL_LIVE_CONFIRM:-}" != "route" ]]; then
+    fail "live mode drains the configured edge inbox; set ARCWELL_EMAIL_LIVE_CONFIRM=route to continue"
+  fi
+  if ! [[ "$MAX_EVENTS" =~ ^[0-9]+$ ]] || (( MAX_EVENTS < 1 || MAX_EVENTS > 100 )); then
+    fail "EMAIL_SMOKE_MAX_EVENTS must be between 1 and 100"
+  fi
+  if ! [[ "$WAIT_SECONDS" =~ ^[0-9]+$ ]] || (( WAIT_SECONDS > 1800 )); then
+    fail "EMAIL_SMOKE_WAIT_SECONDS must be an integer from 0 to 1800"
+  fi
+  if ! [[ "$POLL_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || (( POLL_INTERVAL_SECONDS < 2 || POLL_INTERVAL_SECONDS > 120 )); then
+    fail "EMAIL_SMOKE_POLL_INTERVAL_SECONDS must be between 2 and 120"
+  fi
+
+  local tmp_dir poll_file
+  LIVE_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/arcwell-email-live-smoke.XXXXXX")"
+  tmp_dir="$LIVE_TMP_DIR"
+  cleanup() {
+    if [[ "${EMAIL_SMOKE_KEEP_ARTIFACTS:-0}" == "1" ]]; then
+      log "kept smoke artifacts at $LIVE_TMP_DIR"
+    else
+      rm -rf "$LIVE_TMP_DIR"
+    fi
+  }
+  trap cleanup EXIT
+
+  log "live smoke run: $RUN_ID"
+  if [[ "$EMPTY_ONLY" -eq 1 ]]; then
+    log "empty-only mode: polling configured remote edge inbox once"
+    poll_file="$tmp_dir/poll-empty.json"
+    run_live_poll_once "$poll_file"
+    json_summary "$poll_file" "" | redact_emails
+  else
+    log "send a message from the configured author address to the configured agent address"
+    log "subject: $SUBJECT"
+    log "body: $BODY"
+    if [[ "${ARCWELL_EMAIL_PRINT_ADDRESSES:-0}" == "1" ]]; then
+      log "address printing requested by ARCWELL_EMAIL_PRINT_ADDRESSES=1"
+      printf 'agent=%s\n' "${ARCWELL_EMAIL_ROUTE_RECIPIENT:-${ARCWELL_AGENT_EMAIL:-${ARCWELL_AGENT_EMAIL_FROM:-agent@example.com}}}" | redact_emails
+      printf 'author=%s\n' "${ARCWELL_AUTHOR_EMAILS:-${ARCWELL_AUTHOR_EMAIL:-user@example.com}}" | redact_emails
+    fi
+
+    local deadline now attempt summary
+    deadline=$(( $(date +%s) + WAIT_SECONDS ))
+    attempt=0
+    while true; do
+      attempt=$((attempt + 1))
+      poll_file="$tmp_dir/poll-$attempt.json"
+      run_live_poll_once "$poll_file"
+      summary="$(json_summary "$poll_file" "$SUBJECT")"
+      printf '%s\n' "$summary" | redact_emails
+      if node -e 'const v=JSON.parse(process.argv[1]); process.exit(v.matched_subject_messages > 0 ? 0 : 1)' "$summary"; then
+        assert_inbound_match "$poll_file" "$SUBJECT"
+        log "matched exactly one trusted-author inbound email smoke message"
+        break
+      fi
+      now="$(date +%s)"
+      if (( now >= deadline )); then
+        fail "timed out waiting for the controlled inbound email subject"
+      fi
+      sleep "$POLL_INTERVAL_SECONDS"
+    done
+  fi
+
+  if [[ "$RUN_OUTBOUND" -eq 1 ]]; then
+    if [[ "${ARCWELL_EMAIL_OUTBOUND_CONFIRM:-}" != "send" ]]; then
+      fail "outbound mode sends real email; set ARCWELL_EMAIL_OUTBOUND_CONFIRM=send"
+    fi
+    if [[ -z "${ARCWELL_EMAIL_SMOKE_TO:-}" ]]; then
+      fail "ARCWELL_EMAIL_SMOKE_TO is required for outbound mode, for example user@example.com"
+    fi
+    log "authorizing configured outbound smoke recipient"
+    arcwell_cmd email authorize "$ARCWELL_EMAIL_SMOKE_TO" --send >"$tmp_dir/authorize.json" 2>"$tmp_dir/authorize.err" || {
+      redact_emails <"$tmp_dir/authorize.err" >&2
+      fail "email authorize failed"
+    }
+
+    local send_args send_file
+    send_file="$tmp_dir/send.json"
+    send_args=(email send "$ARCWELL_EMAIL_SMOKE_TO" "Arcwell email outbound smoke $RUN_ID" "Controlled outbound smoke $RUN_ID")
+    if [[ -n "${ARCWELL_EMAIL_SMOKE_FROM:-}" ]]; then
+      send_args+=(--from "$ARCWELL_EMAIL_SMOKE_FROM")
+    fi
+    send_args+=(--html "<p>Controlled <strong>Arcwell</strong> outbound smoke <code>$RUN_ID</code>.</p>")
+    log "sending controlled outbound rich email smoke"
+    if ! arcwell_cmd "${send_args[@]}" >"$send_file" 2>"$send_file.err"; then
+      redact_emails <"$send_file.err" >&2
+      fail "email send failed"
+    fi
+    assert_send_report "$send_file" | redact_emails
+    log "outbound email smoke passed"
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-live)
+      RUN_LIVE=0
+      ;;
+    --live)
+      RUN_LIVE=1
+      ;;
+    --empty-only)
+      EMPTY_ONLY=1
+      WAIT_SECONDS=0
+      ;;
+    --outbound)
+      RUN_OUTBOUND=1
+      ;;
+    --skip-local)
+      RUN_LOCAL=0
+      ;;
+    --max-events)
+      shift
+      MAX_EVENTS="${1:-}"
+      ;;
+    --wait-seconds)
+      shift
+      WAIT_SECONDS="${1:-}"
+      ;;
+    --poll-interval-seconds)
+      shift
+      POLL_INTERVAL_SECONDS="${1:-}"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      fail "unknown argument: $1"
+      ;;
+  esac
+  shift
+done
+
+if [[ "$RUN_LIVE" -eq 0 && "$RUN_OUTBOUND" -eq 1 ]]; then
+  fail "--outbound requires --live"
+fi
+
+if [[ "$RUN_LOCAL" -eq 1 ]]; then
+  run_local_checks
+fi
+if [[ "$RUN_LIVE" -eq 1 ]]; then
+  run_live_checks
+fi

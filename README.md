@@ -40,10 +40,13 @@ The Codex plugin slash-command and `$skill` catalog is documented in [docs/codex
 The personal-memory lifecycle and Codex/mem0 integration notes are documented in
 [docs/memory-integration.md](docs/memory-integration.md).
 
-Live proof still missing: authenticated Cloudflare ingress/drain semantics
-against the deployed worker, real Telegram bot/webhook behavior, fresh-thread
-Codex command/hook smoke, and authenticated Claude host MCP validation. Treat package
-READMEs as current implementation notes, not production readiness claims.
+Live proof still missing: fresh real Telegram client-message drain, fresh-thread
+Codex command/hook smoke, authenticated Claude host MCP validation, broad
+production monitoring, and published release artifacts. Authenticated
+Cloudflare edge ingress/drain is proven with synthetic staging events, and
+Email Routing has controlled live ingress/outbound proof plus a guarded replay
+script. Treat package READMEs as current implementation notes, not production
+readiness claims.
 
 ## Current Features
 
@@ -425,7 +428,13 @@ docs/                  Architecture, functionality, implementation, reviews, run
 
 ## Status
 
-This is an early but working implementation. It has a broad first-pass surface area and severe tests for key failure modes, but several parts still need production depth: authenticated Cloudflare edge ingress/drain smoke, real Telegram webhook/send smoke, richer project/thread sync, model-backed librarian synthesis, model-backed memory extraction/evals, backup forget policy, and interactive ops controls beyond the read-only browser UI.
+This is an early but working implementation. It has a broad first-pass surface
+area and severe tests for key failure modes, but several parts still need
+production depth: fresh real Telegram client-message drain, richer
+project/thread sync, model-backed librarian synthesis, model-backed memory
+extraction/evals, backup forget policy, scheduler/digest delivery, production
+monitoring, and broader interactive ops controls beyond the current narrow
+authenticated edge-event dead-letter action.
 
 Packaging is release-readiness-smoked locally, but Homebrew/tap publication,
 signed release artifacts, checksum-verifying installers, and Linux systemd

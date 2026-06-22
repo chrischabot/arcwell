@@ -563,6 +563,438 @@ Quality metrics:
 - cost per successful run
 - time to first useful progress update
 
+## Production Completion Plan
+
+This section is the fresh plan for the remaining production work. It separates
+what Arcwell can do locally from what must be proven inside Codex, because a
+local deterministic pass is not the same thing as a working in-app research
+system.
+
+### Assumptions
+
+- Deep Research remains one mode: a user invokes it intentionally, and it does
+  not auto-run for ordinary factual questions.
+- Codex remains the host/orchestrator. Arcwell stores durable truth, evidence,
+  traces, reports, costs, and audit state.
+- Host-native capabilities vary by environment. Arcwell must detect and record
+  the actual tool surface used in a run instead of assuming a stable Codex API.
+- Subagents are useful for role separation, but generated role outputs are not
+  evidence. They are proposals until checked against source cards, claims, and
+  audits.
+- PDF/table extraction is source acquisition and evidence extraction, not model
+  synthesis. Claims must cite extracted spans/tables with stable anchors.
+
+### Production Success Criteria
+
+A production-grade run is done only when all of these are true:
+
+- A fresh Codex thread can invoke `$deep-research`, create a durable run, fan out
+  the scout/corpus/extractor/skeptic/synthesizer/auditor roles, and record which
+  roles ran as real Codex subagents versus sequential host phases.
+- Host-native search has proof records: query text, host/tool surface, timestamp,
+  result rank/title/URL/snippet when available, retrieval date, originating role,
+  and linked source ids/cards.
+- PDF, CSV, XLSX, and table-like source material can be ingested into document
+  artifacts with byte hashes, media type, extractor version, page/sheet/table
+  anchors, warnings, and evidence links.
+- Model-backed editorial and evaluator passes operate only over bounded evidence
+  packs, cite claim/source-card/table/span ids, preserve caveats, and cannot mark
+  a report complete unless deterministic audit and eval gates pass.
+- Failures are explicit. Missing subagent support, unavailable host search,
+  encrypted/scanned PDFs, weak table extraction, model-budget exhaustion, and
+  evaluator rejection must show up in run status and final report caveats.
+
+## Fresh In-App Codex Subagent Orchestration
+
+The current repository has Codex role prompt/config guidance. Production needs
+fresh in-app proof that those roles work inside Codex with Arcwell tools.
+
+### Orchestration Contract
+
+The main Codex thread owns durable writes. It creates the run, records role
+assignments, checks role outputs, writes accepted evidence/claims, compiles the
+report, and decides completion. Role subagents are read-heavy workers that return
+structured proposals.
+
+Add durable role execution state:
+
+- `research_role_runs`: `run_id`, `role`, `host`, `host_thread_id`,
+  `host_subagent_id`, `tool_surface`, `prompt_version`, `prompt_hash`,
+  `input_artifact_ids`, `output_artifact_id`, `status`, `started_at`,
+  `finished_at`, `error_kind`, `error_message_redacted`.
+- `research_trace_events`: extend existing planned trace state with
+  `role_run_id`, `event_kind`, `host_tool_name`, `artifact_id`, `cost_decision_id`,
+  and `redacted_payload_json`.
+- `research_artifacts`: durable role output envelopes for source maps, corpus
+  proposals, extraction proposals, skeptic findings, synthesis drafts, evaluator
+  reviews, and rejected outputs.
+
+The host prompt should first perform capability discovery:
+
+- discover whether Codex exposes callable subagent/multi-agent tools
+- record the discovered surface name and version when available
+- record `subagent_unavailable` when no usable surface is present
+- continue as explicit sequential role phases only if the user accepts degraded
+  proof language in the run status
+
+The durable run must distinguish:
+
+- `role_execution_mode=codex_subagent_live`
+- `role_execution_mode=host_sequential`
+- `role_execution_mode=simulated_test`
+
+Only `codex_subagent_live` can satisfy the production proof requirement.
+
+### Role Handoff Shape
+
+Every role receives:
+
+- run id and normalized question
+- scope constraints, excluded sources, and freshness requirements
+- current `research_status` and relevant `research_read` snapshot
+- allowed tools and prohibited actions
+- shared evidence rules
+- one requested artifact type
+- expected JSON or Markdown-with-frontmatter output schema
+
+Every role returns:
+
+- artifact type and schema version
+- source ids or candidate URLs it touched
+- factual claims only when tied to source-card/span/table anchors
+- caveats and uncertainty that must be preserved
+- self-audit notes for prompt-injection, missing evidence, stale material, and
+  invented citations
+
+The main thread rejects a role output if it contains unsupported factual claims,
+new durable-state instructions, invented source ids, secret requests, hidden
+scope changes, or caveats lost from the source material.
+
+### Implementation Tasks
+
+1. Add role-run and artifact tables with migrations, Rust models, CLI/MCP
+   read/write helpers, and ops visibility.
+2. Add `research role-start`, `research role-complete`, and
+   `research artifact-read` CLI/MCP surfaces for the Codex host to record
+   actual role execution.
+3. Update `$deep-research` skill text so the main agent performs capability
+   discovery, launches real subagents when available, and records degraded
+   sequential mode when not.
+4. Add fixture tests where simulated role artifacts attempt prompt injection,
+   invented source ids, caveat deletion, unsupported claims, and durable-write
+   escalation.
+5. Run a fresh Codex thread smoke in the app with the dev plugin installed,
+   using a disposable `ARCWELL_HOME`, and preserve the run id, role-run records,
+   artifacts, report, and audit output.
+
+### Adversarial Review Gate
+
+Before treating subagent orchestration as done, verify:
+
+- each role-run record corresponds to a real host action, not a hand-written log
+- subagent outputs never become evidence without source-card/span/table links
+- the main thread can reject a bad subagent artifact and record the rejection
+- role failures are visible in status/read/audit/report output
+- a fresh Codex thread can reproduce the smoke without using this development
+  conversation as hidden context
+
+## Host-Native Search Proof
+
+The current `host-native` provider boundary correctly refuses to fake host
+search inside the daemon. Production needs a host-side proof protocol that lets
+Codex perform native search and Arcwell record auditable provenance.
+
+### Search Proof Data Model
+
+Add `research_host_searches`:
+
+- `id`, `run_id`, `role_run_id`, `host`, `tool_surface`, `query`,
+  `query_intent`, `requested_recency`, `requested_domains`, `executed_at`,
+  `retrieved_at`, `cost_decision_id`, `result_count`, `status`,
+  `error_kind`, `error_message_redacted`.
+
+Add `research_host_search_results`:
+
+- `host_search_id`, `rank`, `title`, `url`, `canonical_url`, `snippet`,
+  `published_at`, `source_family_guess`, `provider_metadata_json`,
+  `selected_for_ingest`, `research_source_id`, `source_card_id`.
+
+Search proof is not a source card by itself. A result becomes evidence only
+after the source is fetched/read or a source card is created with explicit
+retrieval context.
+
+### Host Recording Surface
+
+Add a narrow CLI/MCP command:
+
+```text
+arcwell research host-search-record --run-id ... --role ... --host codex \
+  --tool-surface ... --query ... --results-json ...
+```
+
+The command should:
+
+- validate URL schemes and canonicalize result URLs
+- dedupe against existing run sources
+- create or link `research_sources` rows
+- record selected versus ignored results
+- attach provider metadata without trusting it as source text
+- redact secrets from query/result metadata
+- fail if called without a run id or with unparseable result shape
+
+### Audit Requirements
+
+`research_audit_run` should add findings for:
+
+- a run claiming host-native search with no `research_host_searches` records
+- search proof records with zero linked run sources
+- all search results coming from one domain or source family on a broad topic
+- stale/currentness-sensitive claims without a fresh search proof record
+- selected results that never became read sources/source cards
+- daemon-side `host-native` provider use attempting to masquerade as host proof
+
+### Implementation Tasks
+
+1. Add host-search tables, migrations, Rust models, and CLI/MCP record/read
+   commands.
+2. Keep `research web-search --provider host-native` fail-closed inside core
+   unless it is invoked through the host recording path.
+3. Update role prompts so scouts and corpus builders record every host-native
+   search before using discovered URLs.
+4. Add severe tests for forged host labels, malformed URLs, duplicate results,
+   secret-bearing query strings, zero-linked proof, and single-domain saturation.
+5. Run a fresh Codex host-search smoke where the agent uses the actual in-app
+   search surface, records results, ingests selected sources, and passes audit.
+
+## Direct PDF And Table Extraction
+
+The current URL/wiki extraction path is strongest for readable HTML and source
+cards. Production research also needs first-class document and table artifacts,
+especially for papers, standards, filings, benchmarks, and government datasets.
+
+### Document Artifact Model
+
+Add `research_documents`:
+
+- `id`, `run_id`, `research_source_id`, `source_card_id`, `url`, `local_path`,
+  `media_type`, `byte_sha256`, `byte_len`, `retrieved_at`, `extractor_name`,
+  `extractor_version`, `extraction_status`, `page_count`, `sheet_count`,
+  `table_count`, `warning_flags`, `error_message_redacted`.
+
+Add `research_document_spans`:
+
+- `document_id`, `span_id`, `page_number`, `section_label`, `char_start`,
+  `char_end`, `text_sha256`, `text_excerpt`, `bbox_json`, `confidence`,
+  `warning_flags`.
+
+Add `research_tables`:
+
+- `document_id`, `table_id`, `page_number`, `sheet_name`, `caption`,
+  `bbox_json`, `row_count`, `column_count`, `extraction_method`, `confidence`,
+  `warning_flags`.
+
+Add `research_table_cells`:
+
+- `table_id`, `row_index`, `column_index`, `row_header`, `column_header`,
+  `raw_text`, `normalized_text`, `numeric_value`, `unit`, `footnote_refs`,
+  `bbox_json`, `confidence`.
+
+Claims can then cite `source_card_id`, `document_id`, `span_id`, `table_id`,
+`row_index`, and `column_index` rather than vague PDF URLs.
+
+### Extractor Strategy
+
+Implement extractors in stages:
+
+1. CSV and TSV: direct parser, stable row/column anchors, formula-injection
+   escaping in rendered reports, numeric/unit normalization where obvious.
+2. XLSX: use a structured workbook parser, preserve sheet names, formulas as
+   untrusted source text, cached values when present, hidden-sheet warnings, and
+   merged-cell warnings.
+3. Text PDFs: bounded external or Rust-backed extraction path with page anchors,
+   text hashes, encrypted/password detection, page limits, byte limits, and
+   explicit scanned-PDF detection.
+4. PDF tables: table-candidate extraction with confidence and warnings. Do not
+   claim precise table support for difficult PDFs until fixture tests prove
+   merged cells, wrapped headers, footnotes, rotated pages, and negative numbers.
+5. OCR: opt-in only. Scanned PDFs should be marked `blocked_scanned_pdf` unless
+   an explicit OCR provider and cost/policy decision are recorded.
+
+### Safety Rules
+
+- Never execute embedded PDF actions, JavaScript, attachments, macros, or links.
+- Enforce byte, page, sheet, row, and cell caps before extraction.
+- Treat formulas, PDF text, captions, and footnotes as untrusted evidence.
+- Preserve extraction warnings in final report caveats.
+- Store byte hashes and extractor versions so later report readers know what was
+  actually inspected.
+- Mark low-confidence table extraction as usable for leads, not final numeric
+  claims, unless corroborated by another source or manually verified.
+
+### Implementation Tasks
+
+1. Add document/table/span schema, migrations, models, and CLI/MCP read surfaces.
+2. Add CSV/TSV extractor first with severe tests for formula injection, huge
+   files, bad encodings, duplicate headers, multiline cells, and unit parsing.
+3. Add XLSX extractor with tests for hidden sheets, formulas, merged cells,
+   dates, numbers, and sheet selection.
+4. Add PDF text extraction with tests for encrypted, malformed, huge, scanned,
+   rotated, and multi-page documents.
+5. Add PDF table candidate extraction only after fixtures demonstrate acceptable
+   precision. Until then, PDF tables must be caveated.
+6. Extend claim ingestion so claims can link to document spans and table cells.
+7. Extend report rendering and audit so numeric/table claims require table-cell
+   or span evidence and warnings are surfaced.
+
+### Adversarial Review Gate
+
+Before marking document extraction production-ready, run fixture and live tests
+against:
+
+- a text-heavy academic PDF
+- a government statistical PDF with tables
+- a benchmark paper PDF with figures/tables
+- CSV with formula-injection payloads
+- XLSX with hidden sheets and formulas
+- malformed and encrypted PDFs
+- a scanned PDF that must fail closed without OCR
+
+## Model-Backed Editorial And Eval Loops
+
+The current system can ingest bounded model outputs and compile deterministic
+reports. Production needs a model-backed editorial loop that improves narrative
+quality without weakening evidence discipline.
+
+### Editorial Pipeline
+
+Add `research_editorial_runs`:
+
+- `id`, `run_id`, `stage`, `model_provider`, `model_name`, `prompt_version`,
+  `input_artifact_hash`, `output_artifact_id`, `cost_decision_id`, `status`,
+  `score_json`, `error_message_redacted`, `created_at`.
+
+Stages:
+
+1. Evidence pack builder: deterministic, bounded input containing source-card
+   ids, claim ids, cluster ids, contradiction ids, document/span/table anchors,
+   audit findings, caveats, and freshness metadata.
+2. Editorial drafter: model writes narrative sections using only pack ids. It
+   must label factual findings, interpretation, implications, recommendations,
+   uncertainty, and open questions.
+3. Citation verifier: deterministic and optionally model-assisted. It checks
+   every factual sentence against claim/source-card/span/table ids and rejects
+   unsupported prose.
+4. Adversarial evaluator: model reviews for missing primary sources, smoothed
+   contradictions, hype, stale claims, weak evidence, overconfidence, numeric
+   mistakes, and narrative gaps.
+5. Final deterministic audit: `research_audit_run` reruns after editorial fixes.
+
+Model editorial output is `generated_synthesis`. It cannot become source
+evidence, cannot create primary claims without extraction/claim-ingest, and
+cannot override deterministic audit failure.
+
+### Eval Suite
+
+Add fixed eval corpora and mutation tests:
+
+- remove a primary source and verify the evaluator catches unsupported
+  conclusions
+- flip dates and verify freshness/currentness checks fail
+- add fake citations and verify citation verifier rejects them
+- add conflicting benchmark results and verify the report preserves the
+  contradiction
+- add low-reliability hype sources and verify confidence is downgraded
+- remove PDF/table anchors for numeric claims and verify audit fails
+- inject source instructions that try to change scope or ask for secrets
+- force model budget exhaustion and verify the report is incomplete, not silent
+
+Metrics:
+
+- unsupported factual sentence rate
+- citation precision and recall
+- contradiction preservation
+- caveat preservation
+- source-family coverage
+- primary-source coverage
+- freshness accuracy
+- numeric/table claim support
+- evaluator catch rate
+- analyst usefulness score
+- cost per accepted report
+
+### Completion Gates
+
+A model-backed report may be marked complete only when:
+
+- the evidence pack was generated from durable Arcwell state
+- the editorial model output cites only valid claim/source-card/span/table ids
+- the citation verifier finds no unsupported factual sentences above the
+  configured severity threshold
+- the evaluator score meets the configured minimum
+- deterministic `research_audit_run` passes or the report is explicitly marked
+  incomplete with visible caveats
+- cost and model/provider records are attached to the run
+
+### Implementation Tasks
+
+1. Add editorial-run/artifact schema, prompt versions, and cost/policy records.
+2. Build deterministic evidence-pack generation with size bounds and redaction.
+3. Add model-backed editorial drafter behind explicit provider config and test
+   with mock providers by default.
+4. Add citation verifier over report sentences, claim ids, source cards, spans,
+   and table cells.
+5. Add adversarial evaluator prompts and fixture mutation tests.
+6. Wire final report status to editorial/eval/audit gates.
+7. Run live editorial/eval smokes only after deterministic fixtures pass.
+
+## Production Rollout Milestones
+
+### Milestone 8: Subagent Trace And Proof
+
+- Add role-run/artifact tables and CLI/MCP surfaces.
+- Update Codex skill prompts for capability discovery and role-run recording.
+- Add severe artifact validation tests.
+- Prove one fresh in-app Codex run with real role fan-out or explicitly record
+  unavailable subagent support.
+
+### Milestone 9: Host Search Proof
+
+- Add host-search proof tables and recording command.
+- Link search results to run sources and source cards.
+- Add audit gates for missing/weak host-search proof.
+- Prove one fresh Codex host-native search run.
+
+### Milestone 10: Documents And Tables
+
+- Add document/span/table/cell schema.
+- Ship CSV/TSV and XLSX extraction first.
+- Ship bounded PDF text extraction.
+- Add PDF table candidates only with warnings until fixture precision is strong.
+- Link document/table anchors into claims, reports, and audits.
+
+### Milestone 11: Editorial And Eval Loop
+
+- Add evidence packs and editorial-run records.
+- Add model-backed drafter, citation verifier, adversarial evaluator, and final
+  deterministic audit gate.
+- Add mutation evals and live smoke under explicit provider/cost config.
+
+### Milestone 12: Saturated Production Proof
+
+Run three preserved, reproducible production proofs:
+
+- market/ecosystem: AI startup scene in London, refreshed with fresh host search
+- technical/literature: most effective image compression algorithms, including
+  papers, codecs, benchmarks, and table extraction
+- security/architecture: safe cloud code execution with compile-time constraint
+  verification, including standards, threat models, sandbox literature, and
+  adversarial skeptic review
+
+Each proof must preserve run state, role traces, host-search proof, source
+ledger, source cards, document/table artifacts where relevant, structured
+claims, skeptic findings, editorial/eval runs, audit output, report artifact,
+cost/policy records, and saturation reason.
+
 ## Implementation Milestones
 
 ### Milestone 1: One-Mode Product Contract
