@@ -18584,19 +18584,10 @@ impl Store {
             .cloned()
             .unwrap_or_default();
         for selector in selectors {
-            if radar_selector_kind(&selector).as_deref() != Some("source_card_query") {
+            if !radar_selector_is_source_card_backed(&selector) {
                 continue;
             }
-            let query = selector
-                .get("query")
-                .or_else(|| selector.get("locator"))
-                .and_then(Value::as_str)
-                .unwrap_or("*");
-            let mut cards = if query == "*" {
-                self.list_source_cards()?
-            } else {
-                self.search_source_cards(query)?
-            };
+            let mut cards = self.radar_source_cards_for_selector(&selector)?;
             source_cards.append(&mut cards);
         }
         source_cards.sort_by(|left, right| left.id.cmp(&right.id));
@@ -18995,6 +18986,32 @@ impl Store {
             |row| row.get(0),
         )?;
         Ok(count as usize)
+    }
+
+    fn radar_source_cards_for_selector(&self, selector: &Value) -> Result<Vec<SourceCard>> {
+        let kind = radar_selector_kind(selector).context("radar selector requires kind")?;
+        let locator = selector
+            .get("query")
+            .or_else(|| selector.get("locator"))
+            .or_else(|| selector.get("handle"))
+            .and_then(Value::as_str)
+            .unwrap_or("*")
+            .trim()
+            .trim_start_matches('@')
+            .to_string();
+        if kind == "source_card_query" {
+            return if locator == "*" {
+                self.list_source_cards()
+            } else {
+                self.search_source_cards(&locator)
+            };
+        }
+        let cards = self
+            .list_source_cards()?
+            .into_iter()
+            .filter(|card| radar_source_card_matches_selector(card, &kind, &locator))
+            .collect();
+        Ok(cards)
     }
 
     pub fn librarian_expand_topic(&self, topic: &str) -> Result<String> {
@@ -27052,12 +27069,13 @@ fn normalize_radar_profile_input(mut input: RadarProfileInput) -> Result<RadarPr
     for selector in input.source_selectors.as_array().unwrap_or(&Vec::new()) {
         let kind = radar_selector_kind(selector).context("radar selector requires kind")?;
         validate_key(&kind)?;
-        if kind == "source_card_query" {
+        if radar_selector_is_source_card_backed(selector) {
             let query = selector
                 .get("query")
                 .or_else(|| selector.get("locator"))
+                .or_else(|| selector.get("handle"))
                 .and_then(Value::as_str)
-                .context("source_card_query selector requires query or locator")?;
+                .context("source-card-backed radar selector requires query, locator, or handle")?;
             validate_query(query)?;
         }
     }
@@ -27078,9 +27096,9 @@ fn radar_profile_status(source_selectors: &Value) -> String {
     let supported = source_selectors
         .as_array()
         .map(|selectors| {
-            selectors.iter().any(|selector| {
-                radar_selector_kind(selector).as_deref() == Some("source_card_query")
-            })
+            selectors
+                .iter()
+                .any(|selector| radar_selector_is_source_card_backed(selector))
         })
         .unwrap_or(false);
     match (supported, unsupported.is_empty()) {
@@ -27106,13 +27124,95 @@ fn unsupported_radar_selectors(source_selectors: &Value) -> Vec<Value> {
         .map(|selectors| {
             selectors
                 .iter()
-                .filter(|selector| {
-                    radar_selector_kind(selector).as_deref() != Some("source_card_query")
-                })
+                .filter(|selector| !radar_selector_is_source_card_backed(selector))
                 .cloned()
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn radar_selector_is_source_card_backed(selector: &Value) -> bool {
+    matches!(
+        radar_selector_kind(selector).as_deref(),
+        Some("source_card_query")
+            | Some("rss")
+            | Some("github")
+            | Some("github_release")
+            | Some("github_owner")
+            | Some("arxiv")
+            | Some("x")
+            | Some("x_handle")
+    )
+}
+
+fn radar_source_card_matches_selector(card: &SourceCard, kind: &str, locator: &str) -> bool {
+    let locator = locator.trim().trim_start_matches('@').to_ascii_lowercase();
+    let url = card.url.to_ascii_lowercase();
+    let provider = card.provider.to_ascii_lowercase();
+    let source_type = card.source_type.to_ascii_lowercase();
+    let title = card.title.to_ascii_lowercase();
+    let source_kind = card
+        .metadata
+        .get("source_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let metadata_text = serde_json::to_string(&card.metadata)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let source_detail = card
+        .metadata
+        .get("source_detail")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim_start_matches('@')
+        .to_ascii_lowercase();
+    let author = card
+        .metadata
+        .get("author")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim_start_matches('@')
+        .to_ascii_lowercase();
+    let locator_matches = locator == "*"
+        || url.contains(&locator)
+        || title.contains(&locator)
+        || metadata_text.contains(&locator)
+        || source_detail == locator
+        || author == locator;
+    match kind {
+        "rss" => {
+            locator_matches
+                && (source_kind.contains("rss")
+                    || source_kind.contains("atom")
+                    || source_type.contains("rss")
+                    || provider.contains("rss"))
+        }
+        "github" | "github_release" | "github_owner" => {
+            locator_matches
+                && (url.contains("github.com")
+                    || source_kind.contains("github")
+                    || source_type.contains("github")
+                    || provider.contains("github"))
+        }
+        "arxiv" => {
+            locator_matches
+                && (url.contains("arxiv.org")
+                    || source_kind.contains("arxiv")
+                    || source_type.contains("arxiv")
+                    || provider.contains("arxiv"))
+        }
+        "x" | "x_handle" => {
+            locator_matches
+                && (url.contains("x.com/")
+                    || url.contains("twitter.com/")
+                    || source_kind == "x"
+                    || source_kind.contains("watch_monitor")
+                    || source_type == "x"
+                    || provider.contains("x-import"))
+        }
+        _ => false,
+    }
 }
 
 fn radar_item_from_source_card(run_id: &str, card: &SourceCard) -> Result<RadarItem> {
@@ -39316,6 +39416,116 @@ reason = "X OAuth disabled during policy test"
     }
 
     #[test]
+    fn severe_radar_existing_source_family_selectors_project_only_matching_cards() {
+        // CLAIM: radar can reuse already-ingested Arcwell source-card families
+        // before new network adapters exist.
+        // ORACLE: RSS, GitHub, arXiv, and X selectors select only matching durable
+        // source cards, while an unimplemented selector remains visible as partial.
+        // SEVERITY: Severe because saying "RSS/GitHub/X radar" while only running
+        // a broad text query would be a production-data mirage.
+        let store = test_store("radar-existing-source-families");
+        for input in [
+            SourceCardInput {
+                title: "RSS agent launch".to_string(),
+                url: "https://example.com/feed/agent-launch".to_string(),
+                source_type: "rss".to_string(),
+                provider: "rss".to_string(),
+                summary: "RSS feed reports an agent launch.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-23T00:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "rss", "source_detail": "https://example.com/feed.xml" }),
+            },
+            SourceCardInput {
+                title: "GitHub agent release".to_string(),
+                url: "https://github.com/example/agent/releases/tag/v1".to_string(),
+                source_type: "github_release".to_string(),
+                provider: "github".to_string(),
+                summary: "GitHub release for an agent project.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-23T00:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "github_release", "source_detail": "example/agent" }),
+            },
+            SourceCardInput {
+                title: "arXiv agent paper".to_string(),
+                url: "https://arxiv.org/abs/2606.00001".to_string(),
+                source_type: "arxiv".to_string(),
+                provider: "arxiv".to_string(),
+                summary: "arXiv paper about agent benchmarks.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-23T00:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "arxiv", "source_detail": "cat:cs.AI" }),
+            },
+            SourceCardInput {
+                title: "X agent discussion".to_string(),
+                url: "https://x.com/sawyerhood/status/1".to_string(),
+                source_type: "x".to_string(),
+                provider: "x-import".to_string(),
+                summary: "X post discusses agent workflows.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-23T00:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "watch_monitor", "source_detail": "sawyerhood", "author": "sawyerhood" }),
+            },
+            SourceCardInput {
+                title: "Unrelated source".to_string(),
+                url: "https://example.net/unrelated".to_string(),
+                source_type: "web".to_string(),
+                provider: "manual".to_string(),
+                summary: "This should not match family selectors.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-23T00:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "manual" }),
+            },
+        ] {
+            store.add_source_card(input).unwrap();
+        }
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "family-radar".to_string(),
+                description: "Existing source family radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([
+                    { "kind": "rss", "locator": "example.com/feed.xml" },
+                    { "kind": "github_release", "locator": "example/agent" },
+                    { "kind": "arxiv", "locator": "cat:cs.AI" },
+                    { "kind": "x_handle", "handle": "sawyerhood" },
+                    { "kind": "hackernews", "locator": "frontpage" }
+                ]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+        assert_eq!(profile.status, "partial");
+
+        let report = store.run_radar_profile(&profile.id, None).unwrap();
+        assert_eq!(report.unsupported_selectors.len(), 1);
+        assert_eq!(report.items_inserted, 4);
+        assert_eq!(report.run.normalized_count, 4);
+        let stage = store.read_radar_stage(&report.run.id).unwrap();
+        let titles = stage
+            .items
+            .iter()
+            .map(|item| item.title.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(titles.contains("RSS agent launch"));
+        assert!(titles.contains("GitHub agent release"));
+        assert!(titles.contains("arXiv agent paper"));
+        assert!(titles.contains("X agent discussion"));
+        assert!(!titles.contains("Unrelated source"));
+        let audit = store.audit_radar_run(&report.run.id).unwrap();
+        assert!(audit.ok, "{audit:?}");
+        assert!(
+            audit
+                .findings
+                .iter()
+                .any(|finding| finding.code == "radar_unsupported_selectors")
+        );
+    }
+
+    #[test]
     fn severe_radar_audit_detects_fts_drift_and_unscored_items() {
         // CLAIM: radar audit catches broken pipeline state instead of trusting run status.
         // PRECONDITIONS: a valid run exists, then FTS and score rows are tampered.
@@ -44275,6 +44485,56 @@ reason = "network blocked for resident poll test"
         let stats = store.x_stats().unwrap();
         assert_eq!(stats.compatibility.x_items, 0);
         assert_eq!(stats.canonical.tweets, 0);
+        assert_eq!(stats.canonical.sync_runs, 1);
+        assert_eq!(stats.latest_sync_runs[0].stream, "import_archive");
+        assert_eq!(stats.latest_sync_runs[0].status, "failed");
+    }
+
+    #[test]
+    fn severe_x_import_archive_rejects_compressed_bomb_before_rows() {
+        // CLAIM: archive import rejects tiny-compressed/huge-uncompressed members
+        // before reading payload bytes or committing earlier selected rows.
+        // PRECONDITIONS: ZIP contains a valid selected tweet member followed by a
+        // deflated selected tweet member whose uncompressed size exceeds the per-file
+        // archive budget.
+        // POSTCONDITIONS: import fails with a size-budget error and no compatibility,
+        // canonical, or projection rows survive from the earlier valid member.
+        // SEVERITY: Severe because local archives are untrusted files and a
+        // decompression bomb can otherwise turn a "safe local import" into a resource
+        // exhaustion path.
+        let store = test_store("x-archive-compressed-bomb");
+        let archive_path =
+            std::env::temp_dir().join(format!("arcwell-x-archive-bomb-{}.zip", Uuid::new_v4()));
+        {
+            let file = fs::File::create(&archive_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let stored = zip::write::SimpleFileOptions::default();
+            zip.start_file("data/tweets.js", stored).unwrap();
+            zip.write_all(
+                br#"window.YTD.tweets.part0 = [{
+                  "tweet": {
+                    "id_str": "zip-bomb-previous-row",
+                    "full_text": "This earlier row must not survive a later archive bomb."
+                  }
+                }]"#,
+            )
+            .unwrap();
+            let compressed = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("data/tweets-part1.js", compressed).unwrap();
+            let mut repeated = std::io::repeat(b'[').take(X_ARCHIVE_MAX_FILE_BYTES + 1);
+            std::io::copy(&mut repeated, &mut zip).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let error = store
+            .import_x_archive(&archive_path, &["tweets".to_string()], 100)
+            .expect_err("compressed archive bomb must fail");
+        assert!(error.to_string().contains("X archive member is too large"));
+        let stats = store.x_stats().unwrap();
+        assert_eq!(stats.compatibility.x_items, 0);
+        assert_eq!(stats.canonical.tweets, 0);
+        assert_eq!(stats.canonical.projections, 0);
         assert_eq!(stats.canonical.sync_runs, 1);
         assert_eq!(stats.latest_sync_runs[0].stream, "import_archive");
         assert_eq!(stats.latest_sync_runs[0].status, "failed");

@@ -108,6 +108,34 @@ Every radar capability must carry one of these labels:
 
 No item may jump from `Scaffold` or `Local Fixture Proof` to `Done`.
 
+## Proof Log
+
+### 2026-06-23 Source-Card Radar Slice
+
+Status: `Production Data Proof` for copied-home `source_card_query` projection
+only; `Partial` for the overall Horizon-inspired system.
+
+Evidence:
+
+- `cargo test --all --all-features` passed.
+- `scripts/verify-codex-plugin-docs` passed with 126 commands, 15 skills, 213
+  MCP tools, and 156 docs/prompts checked.
+- `scripts/arcwell-dev sync` rebuilt and synced the dev plugin.
+- Copied-home proof at `/tmp/arcwell-radar-proof-20260623T184338Z` used a
+  SQLite backup of the real local Arcwell home. `arcwell radar run
+  horizon-real-source-cards` with `source_card_query=agent` produced 368
+  normalized rows, 368 FTS rows, 368 heuristic scores, and 25 selected items.
+  `arcwell radar audit` returned `ok=true` with no findings.
+
+Still not proven by this slice:
+
+- Live RSS/GitHub/arXiv/X/Hacker News/Reddit/public Telegram/OSS/OpenBB fetch.
+- Cursor/source-health advancement for radar-owned live adapters.
+- Exact/semantic dedupe, category/source balancing, source-quality decay.
+- Model-backed interestingness, enrichment, summaries, and delivery attempts.
+- Scheduled worker operation, retry/recovery, ops UI controls, and full
+  production multi-source proof.
+
 ## Product Surfaces
 
 ### CLI

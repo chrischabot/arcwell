@@ -158,14 +158,15 @@ Current scoring is intentionally transparent and simple. Rich clustering and mod
 ### Radar
 
 The radar package is the Horizon-inspired staged digest substrate. It can create
-validated profiles, run a local source-card-backed radar pass, normalize source
-cards into `radar_items`, index them with FTS, apply transparent heuristic
-interestingness scores, read run stages, rebuild radar FTS, and audit for drift,
-missing provenance, unscored rows, empty output, and unsupported selectors.
+validated profiles, run local radar passes over existing source cards and
+source-card-backed RSS/GitHub/arXiv/X selectors, normalize source cards into
+`radar_items`, index them with FTS, apply transparent heuristic interestingness
+scores, read run stages, rebuild radar FTS, and audit for drift, missing
+provenance, unscored rows, empty output, and unsupported selectors.
 
-This is local proof over existing Arcwell source cards. Live RSS/GitHub/arXiv/X,
-HN, Reddit, enrichment, summaries, delivery, and production-data gates remain
-future work.
+This is copied-home production-data proof over existing Arcwell source-card
+outputs. Radar-owned live RSS/GitHub/arXiv/X fetching, HN, Reddit, enrichment,
+summaries, delivery, and scheduled operation remain future work.
 
 ### Worker And Ops
 

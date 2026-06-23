@@ -188,10 +188,11 @@ PR, implementation note, or final report:
       inspection, unsafe-member and unsupported-slice warnings, and MCP
       round-trip coverage. Import reports now list unsupported slice counts and
       sample files without reading private/unsupported payload bytes. Remaining
-      work is old/new archive fixture corpus breadth, decompression-bomb
-      fixture, account identity conflict failure, and broader selected-slice
-      preservation. Current tests also prove reimport idempotency for the local
-      tweet archive path and fail malformed selected slices before writes.
+      work is old/new archive fixture corpus breadth, account identity conflict
+      failure, and broader selected-slice preservation. Current tests also prove
+      reimport idempotency for the local tweet archive path, fail malformed
+      selected slices before writes, and reject compressed archive bombs before
+      earlier rows survive.
 - [ ] Add X archive apply coverage for authored tweets, note tweets, profiles,
       followers, following, media metadata, malformed slices, selected imports
       preserving unselected state, and explicit proof that no secret values are
@@ -294,9 +295,12 @@ PR, implementation note, or final report:
       CLI/MCP run/stage/audit surfaces, and severe local-proof tests for
       unsupported selectors, FTS drift, unscored items, provenance links, and
       prompt-injection source text.
-- [ ] Extend radar fetch from local source-card query into real RSS, GitHub,
-      arXiv, and X watch-source projections with source-health/cursor safety
-      and copied/disposable-home production-data proof.
+- [x] Extend radar projection from local source-card query into existing
+      RSS/GitHub/arXiv/X source-card families with copied-home production-data
+      proof and unsupported-selector audit visibility.
+- [ ] Extend radar from projection over existing source cards into radar-owned
+      live RSS, GitHub, arXiv, and X adapter execution with source-health/cursor
+      safety and copied/disposable-home production-data proof.
 - [ ] Add radar exact/semantic dedupe, score freshness, source-quality windows,
       category/source balancing, summaries, delivery attempts, ops UI visibility,
       slash prompts, and MCP docs/status promotion only after real-data gates

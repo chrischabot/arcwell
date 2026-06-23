@@ -1643,7 +1643,7 @@ review should report demonstrated findings, not long speculative lists.
       source cards.
 - [ ] Prompt injection: tweet/profile/DM/link text never becomes instructions.
 - [ ] URL safety: SSRF, redirect, content-type, size, timeout, private hosts.
-- [ ] Archive safety: zip slip, decompression bombs, wrapper parsing, huge
+- [x] Archive safety: zip slip, decompression bombs, wrapper parsing, huge
       files, malformed slices.
 - [ ] Multi-account correctness: no cross-account reads/writes/cursors.
 - [ ] Policy/cost: guard before credentials/network/mutation, reservations
@@ -2282,7 +2282,7 @@ Severe tests:
 
 - [ ] CLAIM: wrapper JS is not executed.
 - [ ] CLAIM: zip slip path is rejected.
-- [ ] CLAIM: decompression bomb is rejected by configured budget.
+- [x] CLAIM: decompression bomb is rejected by configured budget.
 - [ ] CLAIM: duplicate JSON keys are handled predictably.
 - [ ] CLAIM: malformed slice reports file path and slice.
 - [ ] CLAIM: selected import skips unselected files.
@@ -3840,7 +3840,7 @@ Implementation tasks:
 
 - [ ] Add explicit path import.
 - [ ] Add discovery command.
-- [ ] Add file count, size, and decompression limits.
+- [x] Add file count, size, and decompression limits.
 - [ ] Add path traversal rejection.
 - [ ] Add wrapper parser.
 - [ ] Add fixtures for older Twitter and newer X archive shapes.
@@ -3855,7 +3855,7 @@ Required tests:
 
 - [ ] `severe_x_archive_discovery_performs_no_database_writes`.
 - [ ] `severe_x_archive_rejects_zip_slip_before_writes`.
-- [ ] `severe_x_archive_rejects_decompression_bomb_before_memory_blowup`.
+- [x] `severe_x_import_archive_rejects_compressed_bomb_before_rows`.
 - [ ] `severe_x_archive_wrapper_js_is_parsed_not_executed`.
 - [ ] `severe_x_archive_account_mismatch_aborts_before_writes`.
 - [ ] `severe_x_archive_selected_bookmarks_preserve_existing_tweets`.
@@ -4789,9 +4789,9 @@ Claim:
 - [ ] Imports selected local X/Twitter archive slices safely, idempotently, and
       without network or secret access.
       - Local proof now exists for tweets/bookmarks/likes, canonical writes,
-        wrapper parsing, zip-slip rejection before writes, and MCP reachability.
-        Full fixture corpus breadth, account identity conflicts, decompression
-        bomb fixtures, and secret-read instrumentation remain open.
+        wrapper parsing, zip-slip/decompression-bomb rejection before writes,
+        and MCP reachability. Full fixture corpus breadth, account identity
+        conflicts, and secret-read instrumentation remain open.
 
 Acceptance checks:
 
@@ -5205,10 +5205,10 @@ Judgement:
       passes.
       - Current judgement: Local Proof for the narrow MVP only
         (`tweets`, `bookmarks`, `likes`); hold the full archive phase at
-        Partial until profiles/follows/media/DM boundaries, decompression-bomb
-        fixture, identity-conflict gate, broader selected-slice preservation,
-        and portable export are proven. No-write shallow discovery is now
-        locally proven.
+        Partial until profiles/follows/media/DM boundaries, identity-conflict
+        gate, broader selected-slice preservation, and portable export are
+        proven. No-write shallow discovery and decompression-bomb rejection are
+        now locally proven.
 - [ ] Hold if only one archive format is supported.
 - [ ] Block if traversal/identity mismatch can write.
 
@@ -5439,7 +5439,7 @@ Evidence required for storage requirements:
 - [ ] RX-IMP-007: archive import validates account identity before writes.
 - [ ] RX-IMP-008: archive parser never executes JavaScript wrapper files.
 - [ ] RX-IMP-009: archive parser rejects path traversal.
-- [ ] RX-IMP-010: archive parser rejects decompression bombs.
+- [x] RX-IMP-010: archive parser rejects decompression bombs.
 - [ ] RX-IMP-011: archive parser rejects nested archive recursion.
 - [ ] RX-IMP-012: archive selected-slice import preserves unselected state.
 - [ ] RX-IMP-013: archive import is idempotent.
@@ -5747,7 +5747,7 @@ implementation it should catch.
 - [ ] `severe_x_archive_rejects_nested_archive`
       - Refutes: recursive archive expansion.
       - Oracle: nested entry skipped/rejected by documented rule.
-- [ ] `severe_x_archive_rejects_decompression_bomb`
+- [x] `severe_x_import_archive_rejects_compressed_bomb_before_rows`
       - Refutes: unbounded decompression.
       - Oracle: size cap failure.
 - [ ] `severe_x_archive_wrapper_js_not_executed`
