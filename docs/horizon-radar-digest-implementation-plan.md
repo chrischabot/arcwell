@@ -112,8 +112,9 @@ No item may jump from `Scaffold` or `Local Fixture Proof` to `Done`.
 
 ### 2026-06-23 Source-Card Radar Slice
 
-Status: `Production Data Proof` for copied-home `source_card_query` projection
-only; `Partial` for the overall Horizon-inspired system.
+Status: `Production Data Proof` for copied-home `source_card_query`
+projection, existing source-family projection, and exact canonical-URL dedupe;
+`Partial` for the overall Horizon-inspired system.
 
 Evidence:
 
@@ -133,13 +134,21 @@ Evidence:
   `hackernews=frontpage` selector. It produced 1,374 normalized rows, 1,374
   FTS rows, 1,374 heuristic scores, and 50 selected items. `arcwell radar audit`
   returned `ok=true` with only the expected medium unsupported-HN finding.
+- Rebuilt copied-home proof at `/tmp/arcwell-radar-dedupe-proof-20260623T`
+  used a copy of the real local Arcwell home containing 2,500 source cards.
+  `ARCWELL_HOME=/tmp/arcwell-radar-dedupe-proof-20260623T/home target/debug/arcwell radar audit e0a9de84-2c4c-401d-acb9-6da826076a5c`
+  returned `ok=true`, 2,500 items, 2,500 FTS rows, 2,500 scored rows, 26
+  dedupe groups, and no findings. Direct SQLite status checks showed 50
+  `selected`, 26 `duplicate_url`, and 2,424 `over_profile_limit` score rows;
+  `radar stage` preserved all 2,500 item rows and listed the 26
+  `canonical_url` dedupe groups.
 
 Still not proven by this slice:
 
 - Radar-owned live RSS/GitHub/arXiv/X/Hacker News/Reddit/public
   Telegram/OSS/OpenBB fetch.
 - Cursor/source-health advancement for radar-owned live adapters.
-- Exact/semantic dedupe, category/source balancing, source-quality decay.
+- Semantic dedupe, category/source balancing, source-quality decay.
 - Model-backed interestingness, enrichment, summaries, and delivery attempts.
 - Scheduled worker operation, retry/recovery, ops UI controls, and full
   production multi-source proof.
@@ -806,8 +815,10 @@ Anti-mirage gate:
 
 Production-data proof:
 
-- [ ] Run on real production sources where the same story appears in at least
-      two source families.
+- [x] Run on real production sources where repeated canonical URLs exist across
+      existing source-card rows; copied-home run recorded 26 exact dedupe groups.
+- [ ] Run semantic/topic dedupe on real production sources where the same story
+      appears in at least two source families.
 - [ ] Inspect dedup groups and verify both kept and duplicate source evidence
       remain readable.
 - [ ] Seed production run with real common topics, not synthetic duplicates,

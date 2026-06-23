@@ -5441,7 +5441,7 @@ Evidence required for storage requirements:
 - [ ] RX-IMP-009: archive parser rejects path traversal.
 - [x] RX-IMP-010: archive parser rejects decompression bombs.
 - [x] RX-IMP-011: archive parser rejects nested archive recursion.
-- [ ] RX-IMP-012: archive selected-slice import preserves unselected state.
+- [x] RX-IMP-012: archive selected-slice import preserves unselected state.
 - [ ] RX-IMP-013: archive import is idempotent.
 - [ ] RX-IMP-014: archive import reports malformed selected slices precisely.
 - [ ] RX-IMP-015: archive import supports old Twitter and newer X archive names.
@@ -5766,6 +5766,10 @@ implementation it should catch.
 - [ ] `severe_x_archive_selected_bookmarks_preserve_existing_tweets`
       - Refutes: bookmark-only import creates broken/missing tweet refs.
       - Oracle: existing tweets remain and bookmark rows link.
+- [x] `severe_x_import_archive_selected_tweets_skip_unselected_private_malformed_slices`
+      - Refutes: selected import parses unselected private or malformed files.
+      - Oracle: selected tweet import succeeds; DM/profile payload secrets and
+        malformed bookmark text never appear in report/search/error state.
 - [ ] `severe_x_archive_reimport_idempotent`
       - Refutes: rerun duplicate rows.
       - Oracle: row counts stable except seen timestamps where documented.

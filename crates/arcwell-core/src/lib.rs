@@ -730,6 +730,21 @@ pub struct RadarStageReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarSummary {
+    pub id: String,
+    pub run_id: String,
+    pub language: String,
+    pub format: String,
+    pub title: String,
+    pub body_markdown: String,
+    pub item_ids: Vec<String>,
+    pub source_card_ids: Vec<String>,
+    pub audit_status: String,
+    pub metadata: Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RadarAuditFinding {
     pub severity: String,
     pub code: String,
@@ -18724,6 +18739,194 @@ impl Store {
         })
     }
 
+    pub fn summarize_radar_run(
+        &self,
+        run_id: &str,
+        language: &str,
+        format: &str,
+    ) -> Result<RadarSummary> {
+        validate_id(run_id)?;
+        let language = normalize_radar_summary_language(language)?;
+        let format = normalize_radar_summary_format(format)?;
+        let run = self
+            .read_radar_run(run_id)?
+            .with_context(|| format!("radar run not found: {run_id}"))?;
+        let profile = self
+            .read_radar_profile(&run.profile_id)?
+            .with_context(|| format!("radar profile not found: {}", run.profile_id))?;
+        let scores = self.list_radar_scores(run_id)?;
+        let selected_scores = scores
+            .iter()
+            .filter(|score| score.status == "selected")
+            .cloned()
+            .collect::<Vec<_>>();
+        if selected_scores.is_empty() {
+            bail!("radar summary requires at least one selected score");
+        }
+        let item_by_id = self
+            .list_radar_items(run_id)?
+            .into_iter()
+            .map(|item| (item.id.clone(), item))
+            .collect::<BTreeMap<_, _>>();
+        let mut selected = Vec::new();
+        for score in selected_scores {
+            let item = item_by_id.get(&score.item_id).with_context(|| {
+                format!(
+                    "selected score references missing radar item: {}",
+                    score.item_id
+                )
+            })?;
+            selected.push((score, item.clone()));
+        }
+        selected.sort_by(|left, right| {
+            right
+                .0
+                .score
+                .partial_cmp(&left.0.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.1.title.cmp(&right.1.title))
+        });
+        let item_ids = selected
+            .iter()
+            .map(|(_, item)| item.id.clone())
+            .collect::<Vec<_>>();
+        let source_card_ids = selected
+            .iter()
+            .filter_map(|(_, item)| item.source_card_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let status_counts = radar_score_status_counts(&scores);
+        let dedup_groups = self.list_radar_dedup_groups(run_id)?;
+        let audit = self.audit_radar_run(run_id)?;
+        let existing_summary_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM radar_summaries WHERE run_id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )?;
+        let summary_already_exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM radar_summaries WHERE run_id = ?1 AND language = ?2 AND format = ?3",
+            params![run_id, &language, &format],
+            |row| row.get(0),
+        )?;
+        let mut render_run = run.clone();
+        render_run.summary_count = if summary_already_exists > 0 {
+            existing_summary_count
+        } else {
+            existing_summary_count + 1
+        };
+        let audit_status = if audit.ok {
+            "audit_ok"
+        } else {
+            "audit_findings"
+        }
+        .to_string();
+        let title = format!("Radar Summary: {}", profile.name);
+        let body_markdown = render_radar_summary_markdown(
+            &render_run,
+            &profile,
+            &selected,
+            &status_counts,
+            dedup_groups.len(),
+            &audit,
+        );
+        let id = format!(
+            "radar-summary-{}",
+            &sha256(format!("{run_id}\n{language}\n{format}").as_bytes())[..32]
+        );
+        let created_at = now();
+        let metadata = json!({
+            "proof_level": "deterministic_local_summary",
+            "provenance_boundary": "summary is generated from radar_items and radar_scores; it is not source evidence",
+            "selected_items": item_ids.len(),
+            "source_cards": source_card_ids.len(),
+            "dedup_group_count": dedup_groups.len(),
+            "score_status_counts": status_counts,
+            "not_delivery": true,
+            "not_model_backed": true,
+            "semantic_dedupe": "not_run"
+        });
+        self.conn.execute(
+            r#"
+            INSERT INTO radar_summaries
+              (id, run_id, language, format, title, body_markdown, item_ids_json,
+               source_card_ids_json, audit_status, metadata_json, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            ON CONFLICT(run_id, language, format) DO UPDATE SET
+              title = excluded.title,
+              body_markdown = excluded.body_markdown,
+              item_ids_json = excluded.item_ids_json,
+              source_card_ids_json = excluded.source_card_ids_json,
+              audit_status = excluded.audit_status,
+              metadata_json = excluded.metadata_json,
+              created_at = excluded.created_at
+            "#,
+            params![
+                id,
+                run_id,
+                language,
+                format,
+                title,
+                body_markdown,
+                serde_json::to_string(&item_ids)?,
+                serde_json::to_string(&source_card_ids)?,
+                audit_status,
+                serde_json::to_string(&metadata)?,
+                created_at
+            ],
+        )?;
+        let summary_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM radar_summaries WHERE run_id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )?;
+        let updated_at = now();
+        self.conn.execute(
+            r#"
+            UPDATE radar_runs
+            SET status = CASE
+                    WHEN status IN ('scored', 'summarized') THEN 'summarized'
+                    ELSE status
+                END,
+                stage = CASE
+                    WHEN stage IN ('scored', 'summarized') THEN 'summarized'
+                    ELSE stage
+                END,
+                summary_count = ?2,
+                updated_at = ?3
+            WHERE id = ?1
+            "#,
+            params![run_id, summary_count, updated_at],
+        )?;
+        self.read_radar_summary(run_id, &language, &format)?
+            .with_context(|| format!("radar summary not found after write: {run_id}"))
+    }
+
+    pub fn read_radar_summary(
+        &self,
+        run_id: &str,
+        language: &str,
+        format: &str,
+    ) -> Result<Option<RadarSummary>> {
+        validate_id(run_id)?;
+        let language = normalize_radar_summary_language(language)?;
+        let format = normalize_radar_summary_format(format)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, run_id, language, format, title, body_markdown,
+                       item_ids_json, source_card_ids_json, audit_status,
+                       metadata_json, created_at
+                FROM radar_summaries
+                WHERE run_id = ?1 AND language = ?2 AND format = ?3
+                "#,
+                params![run_id, language, format],
+                radar_summary_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn list_radar_items(&self, run_id: &str) -> Result<Vec<RadarItem>> {
         validate_id(run_id)?;
         let mut stmt = self.conn.prepare(
@@ -27298,6 +27501,25 @@ fn radar_dedup_group_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Radar
     })
 }
 
+fn radar_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RadarSummary> {
+    let item_ids_json: String = row.get(6)?;
+    let source_card_ids_json: String = row.get(7)?;
+    let metadata_json: String = row.get(9)?;
+    Ok(RadarSummary {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        language: row.get(2)?,
+        format: row.get(3)?,
+        title: row.get(4)?,
+        body_markdown: row.get(5)?,
+        item_ids: parse_json_string_vec_column(&item_ids_json, 6)?,
+        source_card_ids: parse_json_string_vec_column(&source_card_ids_json, 7)?,
+        audit_status: row.get(8)?,
+        metadata: parse_json_column(&metadata_json, 9)?,
+        created_at: row.get(10)?,
+    })
+}
+
 fn normalize_radar_profile_input(mut input: RadarProfileInput) -> Result<RadarProfileInput> {
     validate_key(&input.name)?;
     input.name = input.name.trim().to_string();
@@ -27527,6 +27749,137 @@ fn radar_exact_dedup_group(
         cost_decision_id: None,
         created_at: now(),
     })
+}
+
+fn normalize_radar_summary_language(language: &str) -> Result<String> {
+    let language = language.trim().to_ascii_lowercase();
+    if language.is_empty() || language.len() > 16 {
+        bail!("radar summary language must be 1-16 characters");
+    }
+    if !language
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        bail!("radar summary language contains unsupported characters");
+    }
+    Ok(language)
+}
+
+fn normalize_radar_summary_format(format: &str) -> Result<String> {
+    let format = format.trim().to_ascii_lowercase();
+    match format.as_str() {
+        "markdown" => Ok(format),
+        _ => bail!("radar summary format must be markdown"),
+    }
+}
+
+fn radar_score_status_counts(scores: &[RadarScore]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for score in scores {
+        *counts.entry(score.status.clone()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn render_radar_summary_markdown(
+    run: &RadarRun,
+    profile: &RadarProfile,
+    selected: &[(RadarScore, RadarItem)],
+    status_counts: &BTreeMap<String, usize>,
+    dedup_group_count: usize,
+    audit: &RadarAuditReport,
+) -> String {
+    let mut markdown = String::new();
+    markdown.push_str(&format!(
+        "# {}\n\n",
+        escape_research_report_text(&format!("Radar Summary: {}", profile.name))
+    ));
+    markdown.push_str("> Trust label: GENERATED_RADAR_SUMMARY. This report is generated from local radar item and score records. It is not source evidence, not a live fetch, not model-backed synthesis, not semantic dedupe, and not delivery.\n\n");
+    markdown.push_str("## Run\n\n");
+    markdown.push_str(&format!(
+        "- Run: `{}`\n- Profile: `{}`\n- Window: `{}` to `{}`\n- Status: `{}` / stage `{}`\n- Counts: raw {}, normalized {}, indexed {}, scored {}, selected {}, dedupe groups {}, summaries {}, deliveries {}\n- Audit: `{}` with {} finding(s)\n\n",
+        run.id,
+        profile.name,
+        run.window_start,
+        run.window_end,
+        run.status,
+        run.stage,
+        run.raw_count,
+        run.normalized_count,
+        run.indexed_count,
+        run.scored_count,
+        run.filtered_count,
+        dedup_group_count,
+        run.summary_count,
+        run.delivery_count,
+        if audit.ok { "ok" } else { "findings" },
+        audit.findings.len()
+    ));
+    if !status_counts.is_empty() {
+        markdown.push_str("Score statuses: ");
+        let statuses = status_counts
+            .iter()
+            .map(|(status, count)| format!("`{}` {}", escape_markdown_line(status), count))
+            .collect::<Vec<_>>();
+        markdown.push_str(&statuses.join(", "));
+        markdown.push_str(".\n\n");
+    }
+    markdown.push_str("## Selected Items\n\n");
+    for (index, (score, item)) in selected.iter().enumerate() {
+        let label = escape_markdown_link_text(&item.title);
+        if let Some(url) = &item.canonical_url {
+            markdown.push_str(&format!("{}. [{}]({})\n", index + 1, label, url));
+        } else {
+            markdown.push_str(&format!("{}. {}\n", index + 1, label));
+        }
+        markdown.push_str(&format!(
+            "   - Score: {:.2} via `{}`; status `{}`.\n",
+            score.score,
+            escape_markdown_line(&score.score_kind),
+            escape_markdown_line(&score.status)
+        ));
+        markdown.push_str(&format!(
+            "   - Reason: {}.\n",
+            escape_untrusted_markdown_text(&score.reason)
+        ));
+        markdown.push_str(&format!(
+            "   - Source: provider `{}`, kind `{}`, item `{}`{}.\n",
+            escape_markdown_line(&item.provider),
+            escape_markdown_line(&item.source_kind),
+            item.id,
+            item.source_card_id
+                .as_ref()
+                .map(|id| format!(", source card `{id}`"))
+                .unwrap_or_default()
+        ));
+        markdown.push_str(&format!(
+            "   - Evidence excerpt: {}.\n\n",
+            escape_untrusted_markdown_text(&excerpt(&item.content_text, 360))
+        ));
+    }
+    if !audit.findings.is_empty() {
+        markdown.push_str("## Audit Findings\n\n");
+        for finding in &audit.findings {
+            markdown.push_str(&format!(
+                "- `{}` `{}`: {} Evidence: {}.\n",
+                escape_markdown_line(&finding.severity),
+                escape_markdown_line(&finding.code),
+                escape_untrusted_markdown_text(&finding.message),
+                escape_untrusted_markdown_text(&finding.evidence)
+            ));
+        }
+        markdown.push('\n');
+    }
+    markdown.push_str("## Boundaries\n\n");
+    markdown.push_str("- This artifact did not fetch new sources.\n");
+    markdown.push_str("- This artifact did not run model scoring or model summarization.\n");
+    markdown.push_str(
+        "- This artifact did not deliver a message to email, Telegram, or any channel.\n",
+    );
+    markdown.push_str(
+        "- Generated summary text must not be cited as primary evidence in later research.\n",
+    );
+    markdown
 }
 
 fn radar_item_from_source_card(run_id: &str, card: &SourceCard) -> Result<RadarItem> {
@@ -40003,6 +40356,97 @@ reason = "X OAuth disabled during policy test"
     }
 
     #[test]
+    fn severe_radar_summary_is_generated_report_not_delivery_or_source_evidence() {
+        // CLAIM: radar summary writes a local report artifact over selected
+        // scored items, with source-card provenance and explicit boundaries.
+        // ORACLE: summary row cites the selected item/source card, run summary
+        // count advances, delivery count stays zero, and empty selection fails.
+        // SEVERITY: Severe because "a summary exists" is easy to mistake for
+        // source ingestion, model synthesis, or outbound delivery.
+        let store = test_store("radar-summary-boundary");
+        let card = store
+            .add_source_card(SourceCardInput {
+                title: "Radar summary agent launch".to_string(),
+                url: "https://example.com/radar-summary-agent-launch".to_string(),
+                source_type: "web".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Agent launch source card supports radar summary proof.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-23T00:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "manual" }),
+            })
+            .unwrap();
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "summary-radar".to_string(),
+                description: "Summary radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "summary agent" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+        let report = store.run_radar_profile(&profile.id, None).unwrap();
+        let summary = store
+            .summarize_radar_run(&report.run.id, "en", "markdown")
+            .unwrap();
+        assert_eq!(summary.audit_status, "audit_ok");
+        assert_eq!(summary.item_ids.len(), 1);
+        assert_eq!(summary.source_card_ids, vec![card.id.clone()]);
+        assert!(summary.body_markdown.contains("GENERATED_RADAR_SUMMARY"));
+        assert!(summary.body_markdown.contains("not source evidence"));
+        assert!(summary.body_markdown.contains("did not deliver"));
+        assert!(summary.body_markdown.contains(&card.id));
+        assert_eq!(
+            summary
+                .metadata
+                .get("not_delivery")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let run = store.read_radar_run(&report.run.id).unwrap().unwrap();
+        assert_eq!(run.stage, "summarized");
+        assert_eq!(run.summary_count, 1);
+        assert_eq!(run.delivery_count, 0);
+        assert_eq!(
+            store
+                .read_radar_summary(&report.run.id, "en", "markdown")
+                .unwrap()
+                .unwrap()
+                .id,
+            summary.id
+        );
+
+        let empty_profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "summary-empty-radar".to_string(),
+                description: "Summary empty radar".to_string(),
+                window_hours: 24,
+                min_score: 10.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "summary agent" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+        let empty_report = store.run_radar_profile(&empty_profile.id, None).unwrap();
+        let error = store
+            .summarize_radar_run(&empty_report.run.id, "en", "markdown")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("requires at least one selected score"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn severe_radar_audit_rejects_corrupt_dedupe_groups() {
         // CLAIM: an apparently scored run is not healthy when its dedupe ledger
         // references missing members or omits the primary from the member list.
@@ -45136,6 +45580,82 @@ reason = "network blocked for resident poll test"
         assert_eq!(stats.canonical.sync_runs, 1);
         assert_eq!(stats.latest_sync_runs[0].stream, "import_archive");
         assert_eq!(stats.latest_sync_runs[0].status, "failed");
+    }
+
+    #[test]
+    fn severe_x_import_archive_selected_tweets_skip_unselected_private_malformed_slices() {
+        // CLAIM: explicit archive selection is a parsing boundary, not only a
+        // reporting filter after every local archive file has been read.
+        // PRECONDITIONS: ZIP contains one selected tweet file plus malformed
+        // unselected bookmarks and private/profile slices with token-shaped text.
+        // POSTCONDITIONS: import succeeds, only the selected tweet is searchable,
+        // unsupported private/profile slices are counted by filename, and unselected
+        // payload text is not read into errors, warnings, rows, or search indexes.
+        // SEVERITY: Severe because local archives contain private DMs/profile data,
+        // and selected imports are unsafe if unselected files are parsed anyway.
+        let store = test_store("x-archive-selected-slices");
+        let archive_path = std::env::temp_dir().join(format!(
+            "arcwell-x-archive-selected-slices-{}.zip",
+            Uuid::new_v4()
+        ));
+        {
+            let file = fs::File::create(&archive_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("data/tweets.js", options).unwrap();
+            zip.write_all(
+                br#"window.YTD.tweets.part0 = [{
+                  "tweet": {
+                    "id_str": "selected-tweet-1",
+                    "screen_name": "archive_author",
+                    "full_text": "Only this selected tweet should be imported."
+                  }
+                }]"#,
+            )
+            .unwrap();
+            zip.start_file("data/bookmark.js", options).unwrap();
+            zip.write_all(b"window.YTD.bookmark.part0 = [{ malformed")
+                .unwrap();
+            zip.start_file("data/direct-messages.js", options).unwrap();
+            zip.write_all(b"\xff\xfe private dm sk-unselected-private-secret")
+                .unwrap();
+            zip.start_file("data/profile.js", options).unwrap();
+            zip.write_all(br#"window.YTD.profile.part0 = [{"bio":"sk-profile-not-read"}]"#)
+                .unwrap();
+            zip.finish().unwrap();
+        }
+
+        let report = store
+            .import_x_archive(&archive_path, &["tweets".to_string()], 100)
+            .unwrap();
+        assert_eq!(report.files_seen, 1);
+        assert_eq!(report.files_imported, 1);
+        assert_eq!(report.import.imported, 1);
+        assert_eq!(
+            report.unsupported_slices.get("direct_messages").copied(),
+            Some(1)
+        );
+        assert_eq!(report.unsupported_slices.get("profiles").copied(), Some(1));
+        let visible = serde_json::to_string(&report).unwrap();
+        assert!(
+            !visible.contains("sk-unselected-private-secret"),
+            "{visible}"
+        );
+        assert!(!visible.contains("sk-profile-not-read"), "{visible}");
+        assert!(!visible.contains("malformed"), "{visible}");
+        assert_eq!(
+            store.search_x_tweets("selected tweet", 10).unwrap().len(),
+            1
+        );
+        assert_eq!(
+            store.search_x_tweets("private secret", 10).unwrap().len(),
+            0
+        );
+        let stats = store.x_stats().unwrap();
+        assert_eq!(stats.canonical.tweets, 1);
+        assert_eq!(stats.canonical.sync_runs, 1);
+        assert_eq!(stats.latest_sync_runs[0].stream, "import_archive");
+        assert_eq!(stats.latest_sync_runs[0].status, "completed");
     }
 
     #[test]

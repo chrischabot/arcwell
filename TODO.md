@@ -188,15 +188,18 @@ PR, implementation note, or final report:
       inspection, unsafe-member and unsupported-slice warnings, and MCP
       round-trip coverage. Import reports now list unsupported slice counts and
       sample files without reading private/unsupported payload bytes. Remaining
-      work is old/new archive fixture corpus breadth, account identity conflict
-      failure, and broader selected-slice preservation. Current tests also prove
-      reimport idempotency for the local tweet archive path, fail malformed
-      selected slices before writes, and reject compressed archive bombs plus
-      nested archives before earlier rows survive.
+      work is old/new archive fixture corpus breadth and account identity
+      conflict failure. Current tests also prove reimport idempotency for the
+      local tweet archive path, fail malformed selected slices before writes,
+      reject compressed archive bombs plus nested archives before earlier rows
+      survive, and skip unselected malformed/private slices without reading
+      their payload text.
 - [ ] Add X archive apply coverage for authored tweets, note tweets, profiles,
-      followers, following, media metadata, malformed slices, selected imports
-      preserving unselected state, and explicit proof that no secret values are
-      read. Likes/bookmarks/tweets have a first local fixture path only.
+      followers, following, media metadata, malformed slices, richer selected
+      import fixtures, and explicit proof that no secret values are read.
+      Likes/bookmarks/tweets have a first local fixture path only, and selected
+      tweet imports now prove unselected malformed/private slices are skipped
+      without payload reads.
 - [ ] Extend the implemented X URL/link index beyond the current local
       extraction and explicit expansion layers. `x extract-links` /
       `x_extract_links` index safe URL occurrences without fetching; `x links`

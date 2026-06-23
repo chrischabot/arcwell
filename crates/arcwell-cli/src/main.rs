@@ -970,6 +970,8 @@ const SLASH_COMMAND_ALIASES: &[(&str, SlashAliasTarget)] = &[
     ("radar-run", SlashAliasTarget::Mcp("radar_run")),
     ("radar-runs", SlashAliasTarget::Mcp("radar_runs")),
     ("radar-stage", SlashAliasTarget::Mcp("radar_stage_read")),
+    ("radar-summarize", SlashAliasTarget::Mcp("radar_summarize")),
+    ("radar-summary", SlashAliasTarget::Mcp("radar_summary_read")),
     ("radar-audit", SlashAliasTarget::Mcp("radar_audit_run")),
     (
         "radar-repair-fts",
@@ -2219,6 +2221,20 @@ enum RadarSubcommand {
     Runs,
     Stage {
         run_id: String,
+    },
+    Summarize {
+        run_id: String,
+        #[arg(long, default_value = "en")]
+        language: String,
+        #[arg(long, default_value = "markdown")]
+        format: String,
+    },
+    Summary {
+        run_id: String,
+        #[arg(long, default_value = "en")]
+        language: String,
+        #[arg(long, default_value = "markdown")]
+        format: String,
     },
     Audit {
         run_id: String,
@@ -3617,6 +3633,16 @@ fn radar(store: Store, args: RadarCommand) -> Result<()> {
         } => print_json(&store.run_radar_profile(&profile, window_hours)?),
         RadarSubcommand::Runs => print_json(&store.list_radar_runs()?),
         RadarSubcommand::Stage { run_id } => print_json(&store.read_radar_stage(&run_id)?),
+        RadarSubcommand::Summarize {
+            run_id,
+            language,
+            format,
+        } => print_json(&store.summarize_radar_run(&run_id, &language, &format)?),
+        RadarSubcommand::Summary {
+            run_id,
+            language,
+            format,
+        } => print_json(&store.read_radar_summary(&run_id, &language, &format)?),
         RadarSubcommand::Audit { run_id } => print_json(&store.audit_radar_run(&run_id)?),
         RadarSubcommand::RepairFts { run_id } => {
             print_json(&json!({ "rebuilt": store.rebuild_radar_fts(run_id.as_deref())? }))
@@ -8443,6 +8469,22 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
             let run_id = required_string(&arguments, "run_id")?;
             Ok(json!(store.read_radar_stage(&run_id)?))
         }
+        "radar_summarize" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            let language = optional_string(&arguments, "language", "en");
+            let format = optional_string(&arguments, "format", "markdown");
+            Ok(json!(
+                store.summarize_radar_run(&run_id, &language, &format)?
+            ))
+        }
+        "radar_summary_read" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            let language = optional_string(&arguments, "language", "en");
+            let format = optional_string(&arguments, "format", "markdown");
+            Ok(json!(
+                store.read_radar_summary(&run_id, &language, &format)?
+            ))
+        }
         "radar_audit_run" => {
             let run_id = required_string(&arguments, "run_id")?;
             Ok(json!(store.audit_radar_run(&run_id)?))
@@ -9851,12 +9893,38 @@ fn mcp_tools() -> Vec<Value> {
         tool("radar_runs", "List radar runs.", []),
         tool(
             "radar_stage_read",
-            "Read normalized radar items and score overlays for a run.",
+            "Read normalized radar items, score overlays, and dedupe groups for a run.",
             [("run_id", "string", "Radar run id.")],
         ),
         tool(
+            "radar_summarize",
+            "Write a deterministic local Markdown radar summary artifact over selected scored items. This does not deliver messages or run model summarization.",
+            [
+                ("run_id", "string", "Radar run id."),
+                ("language", "string", "Language code, default en."),
+                (
+                    "format",
+                    "string",
+                    "Summary format; only markdown is supported.",
+                ),
+            ],
+        ),
+        tool(
+            "radar_summary_read",
+            "Read a deterministic local radar summary artifact for a run.",
+            [
+                ("run_id", "string", "Radar run id."),
+                ("language", "string", "Language code, default en."),
+                (
+                    "format",
+                    "string",
+                    "Summary format; only markdown is supported.",
+                ),
+            ],
+        ),
+        tool(
             "radar_audit_run",
-            "Audit a radar run for FTS drift, missing provenance, unscored items, empty output, and unsupported selectors.",
+            "Audit a radar run for FTS drift, missing provenance, unscored items, corrupt dedupe groups, empty output, and unsupported selectors.",
             [("run_id", "string", "Radar run id.")],
         ),
         tool(
@@ -11544,7 +11612,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         command_names.sort();
-        assert_eq!(command_names.len(), 126);
+        assert_eq!(command_names.len(), 128);
         let missing = command_names
             .into_iter()
             .filter(|name| slash_alias_target(name).is_none() && !slash_alias_is_dynamic(name))
@@ -12907,6 +12975,41 @@ reason = "MCP secret writes are denied for this token"
         let audit = call_mcp_tool(&paths, "radar_audit_run", json!({ "run_id": run_id })).unwrap();
         assert_eq!(audit.get("ok").and_then(Value::as_bool), Some(true));
 
+        let summary = call_mcp_tool(
+            &paths,
+            "radar_summarize",
+            json!({ "run_id": run_id, "language": "en" }),
+        )
+        .unwrap();
+        assert_eq!(
+            summary.get("audit_status").and_then(Value::as_str),
+            Some("audit_ok")
+        );
+        assert!(
+            summary
+                .get("body_markdown")
+                .and_then(Value::as_str)
+                .unwrap()
+                .contains("GENERATED_RADAR_SUMMARY")
+        );
+        assert_eq!(
+            summary
+                .pointer("/metadata/not_delivery")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let summary_read = call_mcp_tool(
+            &paths,
+            "radar_summary_read",
+            json!({ "run_id": run_id, "language": "en" }),
+        )
+        .unwrap();
+        assert_eq!(
+            summary_read.get("id").and_then(Value::as_str),
+            summary.get("id").and_then(Value::as_str)
+        );
+
         let profiles = dispatch_mcp(
             &paths,
             "resources/read",
@@ -12935,6 +13038,8 @@ reason = "MCP secret writes are denied for this token"
             "radar_profile_create",
             "radar_run",
             "radar_stage_read",
+            "radar_summarize",
+            "radar_summary_read",
             "radar_audit_run",
         ] {
             assert!(tool_names.contains(expected), "missing MCP tool {expected}");

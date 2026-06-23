@@ -156,6 +156,8 @@ typing part of the name. Use the displayed command name from the picker.
 - `/radar-run` uses `radar_run`.
 - `/radar-runs` uses `radar_runs`.
 - `/radar-stage` uses `radar_stage_read`.
+- `/radar-summarize` uses `radar_summarize`.
+- `/radar-summary` uses `radar_summary_read`.
 - `/radar-audit` uses `radar_audit_run`.
 - `/radar-repair-fts` uses `radar_rebuild_fts`.
 

@@ -192,8 +192,8 @@ Future work:
   tweets/bookmarks/likes remains intentionally unimplemented for profiles,
   followers, following, DMs, and media. Discovery and import now report
   unsupported slices explicitly; import rejects unsafe paths, compressed archive
-  bombs, and nested archive members before writes, and does not read
-  unsupported/private payload bytes.
+  bombs, and nested archive members before writes, treats explicit selection as
+  a parse boundary, and does not read unsupported/private payload bytes.
 - Portable export is implemented for canonical tweet rows. Remaining work is
   scheduled backup integration, richer freshness/ops visibility, and broader X
   entity coverage beyond tweets.
