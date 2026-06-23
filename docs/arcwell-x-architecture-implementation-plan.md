@@ -2629,7 +2629,7 @@ Implementation checklist:
 - [ ] Add projection failures.
 - [ ] Add digest candidate counts.
 - [ ] Add archive import runs.
-- [ ] Add portable export freshness.
+- [x] Add portable export freshness.
 - [ ] Add stale-state summary.
 - [ ] Add doctor warnings for stale/failed X monitors.
 - [ ] Add doctor warnings for expired/missing user-context tokens when X
@@ -4067,7 +4067,7 @@ Claims:
 - [ ] Export is deterministic, token-free, JSONL-sharded, and independently
       validated.
 - [ ] Import is idempotent and provenance-preserving.
-- [ ] Backup/recovery story is explicit for X data.
+- [x] Backup/recovery story is explicit for X data.
 
 Implementation tasks:
 
@@ -4077,9 +4077,9 @@ Implementation tasks:
 - [ ] Add hashes and row counts.
 - [ ] Add validator.
 - [ ] Add import.
-- [ ] Add disposable recovery drill.
-- [ ] Add backup manifest X summary.
-- [ ] Add docs for export privacy.
+- [x] Add disposable recovery drill.
+- [x] Add backup manifest X summary.
+- [x] Add docs for export privacy.
 
 Required tests:
 
@@ -5544,7 +5544,8 @@ Evidence required for read requirements:
 - [ ] RX-OPS-006: ops shows projection backlog.
 - [ ] RX-OPS-007: ops shows digest candidate queue.
 - [ ] RX-OPS-008: ops shows credential expiry and scope state.
-- [ ] RX-OPS-009: ops shows archive import/export freshness.
+- [x] RX-OPS-009: ops shows portable export freshness. Broader archive import
+      freshness remains future work.
 - [ ] RX-OPS-010: doctor flags stale monitors.
 - [ ] RX-OPS-011: doctor flags expired/missing user-context token when monitors
       are configured.
@@ -5556,7 +5557,7 @@ Evidence required for read requirements:
 - [ ] RX-OPS-017: ops UI desktop layout has no critical overlap/clipping.
 - [ ] RX-OPS-018: ops UI mobile layout has no critical overlap/clipping.
 - [ ] RX-OPS-019: POST controls require auth/origin/CSRF/idempotency.
-- [ ] RX-OPS-020: portable export validates and restores into disposable home.
+- [x] RX-OPS-020: portable export validates and restores into disposable home.
 
 Evidence required for ops/recovery requirements:
 
@@ -5565,7 +5566,7 @@ Evidence required for ops/recovery requirements:
 - [ ] Ops UI XSS tests.
 - [ ] Browser desktop/mobile artifacts.
 - [ ] Repair/rebuild idempotency tests.
-- [ ] Export/validate/import drill.
+- [x] Export/validate/import drill.
 
 ### Privacy, Security, And Social Write Requirements
 

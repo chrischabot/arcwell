@@ -121,7 +121,10 @@ Boundary:
   the canonical import path with an `import_portable` sync run. The current
   portable format excludes OAuth tokens, SQLite secret values, FTS/cache rows,
   and raw DMs; it does not yet export media, profiles, followers, following, or
-  non-tweet archive slices.
+  non-tweet archive slices. Portable export itself records `export_portable`
+  sync runs for successful and failed exports; `x stats` reports the latest
+  completed bundle path/row count and marks the export stale when canonical
+  tweets have changed after the latest completed export.
 - `/ops`, `/ops/ui`, `ops_snapshot`, and strict `doctor` surface X drift,
   failed projections, non-healthy X source-health rows, and failed X sync runs
   so local X corruption is operator-visible without knowing to run `x stats`.

@@ -371,6 +371,7 @@ $arcwell-codex:memory-review
 $arcwell-codex:wiki-research
 $arcwell-codex:deep-research
 $arcwell-codex:research-audit
+$arcwell-codex:anti-mirage
 $arcwell-codex:research-brief
 $arcwell-codex:x-research
 $arcwell-codex:tidal-control
@@ -390,6 +391,7 @@ Intent:
 - `$wiki-research`: search and write source-backed wiki pages.
 - `$deep-research`: plan, gather, audit, and brief multi-source research.
 - `$research-audit`: adversarially check sources and claims.
+- `$anti-mirage`: require explicit claims, refutation tests, production-data proof gates, ops visibility, and honest status before substantial work is promoted.
 - `$x-research`: import/search/report X evidence.
 - `$tidal-control`: manage TIDAL playlists and favorites from an existing TIDAL desktop session.
 - `$lumin-control`: discover/inspect LUMIN/OpenHome renderers and send explicit LUMIN UDP/SOAP control commands.

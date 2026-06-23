@@ -6263,6 +6263,10 @@ fn render_ops_summary(snapshot: &OpsSnapshot, score: &OpsHealthScore) -> String 
             "X source statuses",
             summarize_count_map(&snapshot.x_stats.source_health_by_status),
         ),
+        (
+            "X portable export",
+            summarize_x_portable_export(&snapshot.x_stats),
+        ),
     ] {
         html.push_str(&format!(
             "<div class=\"metric\"><span>{}</span><b>{}</b></div>",
@@ -6573,6 +6577,24 @@ fn summarize_x_drift(stats: &XStatsReport) -> String {
         "ok".to_string()
     } else {
         summary.join(", ")
+    }
+}
+
+fn summarize_x_portable_export(stats: &XStatsReport) -> String {
+    let export = &stats.portable_export;
+    match &export.latest_completed_at {
+        Some(completed_at) if export.stale => format!(
+            "stale since {completed_at}; {} changed tweet(s)",
+            export.tweets_updated_after_export
+        ),
+        Some(completed_at) => format!(
+            "fresh at {completed_at}; {} row(s)",
+            export.latest_rows_exported.unwrap_or(0)
+        ),
+        None if export.latest_failed_at.is_some() => {
+            "no completed export; latest failed".to_string()
+        }
+        None => "not exported".to_string(),
     }
 }
 
@@ -8730,10 +8752,14 @@ fn mcp_tools() -> Vec<Value> {
             "Apply a review candidate.",
             [("id", "string", "Candidate id.")],
         ),
-        tool("backup_create", "Create a local backup snapshot.", []),
+        tool(
+            "backup_create",
+            "Create a local backup snapshot with an explicit X recovery/portable-export summary in the manifest.",
+            [],
+        ),
         tool(
             "backup_verify",
-            "Verify the latest local backup snapshot.",
+            "Verify the latest local backup snapshot, including the recorded X recovery/portable-export manifest summary.",
             [],
         ),
         tool(
@@ -9758,7 +9784,7 @@ fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "x_export_portable",
-            "Export canonical local X data as deterministic portable JSONL shards with a hashed manifest and token-like value checks.",
+            "Export canonical local X data as deterministic portable JSONL shards with a hashed manifest, token-like value checks, and an export_portable freshness ledger.",
             [(
                 "out",
                 "string",
@@ -9927,7 +9953,7 @@ fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "x_stats",
-            "Inspect canonical X counts, compatibility drift, FTS drift, projections, sync runs, source health, and watch-source status.",
+            "Inspect canonical X counts, compatibility drift, FTS drift, projections, sync runs, source health, watch-source status, and portable export freshness.",
             [],
         ),
         tool(
@@ -12786,6 +12812,25 @@ reason = "MCP secret writes are denied for this token"
         .unwrap();
         assert_eq!(validation.get("valid").and_then(Value::as_bool), Some(true));
         assert_eq!(validation.get("rows").and_then(Value::as_u64), Some(1));
+        let stats = call_mcp_tool(&source_paths, "x_stats", json!({})).unwrap();
+        assert_eq!(
+            stats
+                .pointer("/portable_export/status")
+                .and_then(Value::as_str),
+            Some("fresh")
+        );
+        assert_eq!(
+            stats
+                .pointer("/portable_export/latest_rows_exported")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert!(
+            stats
+                .pointer("/portable_export/latest_manifest_sha256")
+                .and_then(Value::as_str)
+                .is_some()
+        );
 
         let imported = call_mcp_tool(
             &destination_paths,
@@ -13975,6 +14020,45 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
         assert!(html.contains("failed:2"));
         assert!(html.contains("failed X sync run"));
         assert!(html.contains("X FTS drift"));
+    }
+
+    #[test]
+    fn severe_ops_ui_summary_surfaces_x_portable_export_freshness() {
+        // CLAIM: The rendered ops UI makes stale portable X recovery state visible.
+        // ORACLE: Real store state with a completed export followed by newer tweet
+        // data renders the portable export metric and health warning.
+        // SEVERITY: Severe because backup/recovery freshness must be visible to an
+        // operator, not only hidden in JSON.
+        let paths = test_paths("ops-ui-x-portable");
+        let store = Store::open(paths).unwrap();
+        store
+            .import_x_json_value(&json!([
+                {
+                    "id": "ops-portable-1",
+                    "author": "arcwell",
+                    "text": "Ops portable export freshness proof.",
+                    "url": "https://x.com/arcwell/status/ops-portable-1",
+                    "source_kind": "json_import"
+                }
+            ]))
+            .unwrap();
+        store
+            .export_x_portable(&store.paths().home.join("portable-x"))
+            .unwrap();
+        let conn = rusqlite::Connection::open(&store.paths().db).unwrap();
+        conn.execute(
+            "UPDATE x_tweets SET updated_at = ?1 WHERE x_id = ?2",
+            rusqlite::params!["9999-01-03T00:00:00Z", "ops-portable-1"],
+        )
+        .unwrap();
+
+        let snapshot = store.ops_snapshot().unwrap();
+        assert_eq!(snapshot.x_stats.portable_export.status, "stale");
+        let html = render_ops_ui(&snapshot);
+        assert!(html.contains("X portable export"));
+        assert!(html.contains("stale since"));
+        assert!(html.contains("changed tweet"));
+        assert!(html.contains("X portable export is stale"));
     }
 
     #[tokio::test]

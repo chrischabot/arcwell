@@ -237,9 +237,14 @@ PR, implementation note, or final report:
       path rejection, FTS/cache exclusion, and raw DM exclusion by default.
       Current tests prove disposable restore searchability and MCP round trip;
       broader entity coverage remains separate from this MVP.
-- [ ] Add X backup/recovery drill integration proving portable export freshness,
-      scheduled backup policy, and provenance/source-card reference behavior are
-      reported explicitly for real backup/restore workflows.
+- [x] Add X backup/recovery drill integration proving portable export freshness
+      is visible in `x stats`, `/ops`, `/ops/ui`, `ops_snapshot`, strict
+      `doctor`, and backup manifests. Current backup manifests explicitly state
+      that SQLite backups contain canonical X rows while portable bundles are
+      separate unless exported/stored deliberately; disposable restore tests
+      prove restored canonical X rows remain searchable with source-card links.
+- [ ] Add scheduled-backup policy for optional automatic portable X export to a
+      known backup-adjacent path before backup creation.
 - [ ] Add X follow graph only as snapshots/current edges/events with complete
       vs partial snapshot semantics, duplicate snapshot idempotency, account
       scoping, profile-entity extraction as data, and no silent switch to full

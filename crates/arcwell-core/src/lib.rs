@@ -26,7 +26,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 pub const APP_NAME: &str = "arcwell";
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 pub const SOURCE_CARD_SCHEMA_VERSION: u64 = 1;
 const MAX_COST_USD: f64 = 1_000_000.0;
 const SOURCE_CARD_STALE_DAYS: i64 = 180;
@@ -592,6 +592,145 @@ pub struct SourceCard {
     pub metadata: Value,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarProfileInput {
+    pub name: String,
+    pub description: String,
+    pub window_hours: i64,
+    pub min_score: f64,
+    pub max_items: Option<i64>,
+    pub languages: Vec<String>,
+    pub source_selectors: Value,
+    pub delivery_policy: Value,
+    pub model_policy: Value,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarProfile {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub status: String,
+    pub window_hours: i64,
+    pub min_score: f64,
+    pub max_items: Option<i64>,
+    pub languages: Vec<String>,
+    pub category_groups: Value,
+    pub source_selectors: Value,
+    pub delivery_policy: Value,
+    pub model_policy: Value,
+    pub metadata: Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarRun {
+    pub id: String,
+    pub profile_id: String,
+    pub status: String,
+    pub window_start: String,
+    pub window_end: String,
+    pub stage: String,
+    pub source_selection: Value,
+    pub raw_count: i64,
+    pub normalized_count: i64,
+    pub indexed_count: i64,
+    pub scored_count: i64,
+    pub filtered_count: i64,
+    pub enriched_count: i64,
+    pub summary_count: i64,
+    pub delivery_count: i64,
+    pub error: Option<String>,
+    pub metadata: Value,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarItem {
+    pub id: String,
+    pub run_id: String,
+    pub stable_key: String,
+    pub source_kind: String,
+    pub provider: String,
+    pub source_locator: String,
+    pub native_id: Option<String>,
+    pub canonical_url: Option<String>,
+    pub title: String,
+    pub author: Option<String>,
+    pub published_at: Option<String>,
+    pub fetched_at: String,
+    pub content_text: String,
+    pub content_sha256: String,
+    pub metadata: Value,
+    pub source_card_id: Option<String>,
+    pub wiki_page_id: Option<String>,
+    pub canonical_entity_ref: Option<String>,
+    pub trust_level: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarScore {
+    pub id: String,
+    pub run_id: String,
+    pub item_id: String,
+    pub score_kind: String,
+    pub score: f64,
+    pub reason: String,
+    pub tags: Vec<String>,
+    pub model_provider: Option<String>,
+    pub model_name: Option<String>,
+    pub cost_decision_id: Option<String>,
+    pub input_artifact_id: Option<String>,
+    pub output_artifact_id: Option<String>,
+    pub schema_version: i64,
+    pub status: String,
+    pub error: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarFetchReport {
+    pub run: RadarRun,
+    pub profile: RadarProfile,
+    pub items_inserted: usize,
+    pub scores_inserted: usize,
+    pub selected_items: usize,
+    pub unsupported_selectors: Vec<Value>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarStageReport {
+    pub run: RadarRun,
+    pub items: Vec<RadarItem>,
+    pub scores: Vec<RadarScore>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarAuditFinding {
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarAuditReport {
+    pub run_id: String,
+    pub checked_at: String,
+    pub ok: bool,
+    pub item_count: i64,
+    pub fts_count: i64,
+    pub scored_count: i64,
+    pub findings: Vec<RadarAuditFinding>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1954,6 +2093,7 @@ pub struct XStatsReport {
     pub compatibility: XCompatibilityStats,
     pub canonical: XCanonicalStats,
     pub drift: XStatsDrift,
+    pub portable_export: XPortableExportFreshness,
     pub projections_by_status: BTreeMap<String, i64>,
     pub sync_runs_by_status: BTreeMap<String, i64>,
     pub source_health_by_status: BTreeMap<String, i64>,
@@ -1991,6 +2131,24 @@ pub struct XStatsDrift {
     pub fts_without_tweets: i64,
     pub projection_failures: i64,
     pub non_healthy_sources: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XPortableExportFreshness {
+    pub status: String,
+    pub missing: bool,
+    pub stale: bool,
+    pub latest_completed_at: Option<String>,
+    pub latest_out_dir: Option<String>,
+    pub latest_manifest_path: Option<String>,
+    pub latest_manifest_sha256: Option<String>,
+    pub latest_rows_exported: Option<usize>,
+    pub latest_failed_at: Option<String>,
+    pub latest_error: Option<String>,
+    pub current_tweet_count: i64,
+    pub latest_tweet_updated_at: Option<String>,
+    pub tweets_updated_after_export: i64,
+    pub row_count_mismatch: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4046,6 +4204,10 @@ impl Store {
             rebuild_x_tweets_fts_on(conn)?;
             Ok(())
         })?;
+        self.apply_schema_migration(8, "radar_core_schema", false, None, |conn| {
+            ensure_radar_schema_on(conn)?;
+            Ok(())
+        })?;
         self.conn.execute(
             "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
             params![SCHEMA_VERSION.to_string()],
@@ -4826,6 +4988,7 @@ impl Store {
                     "SELECT COUNT(*) FROM source_health WHERE (provider = 'x' OR key LIKE 'x:%') AND status != 'healthy'",
                 )?,
             },
+            portable_export: self.x_portable_export_freshness()?,
             projections_by_status: self.grouped_counts(
                 "SELECT status, COUNT(*) FROM x_projections GROUP BY status ORDER BY status",
             )?,
@@ -4839,6 +5002,145 @@ impl Store {
                 "SELECT status, COUNT(*) FROM watch_sources WHERE source_kind = 'x_handle' GROUP BY status ORDER BY status",
             )?,
             latest_sync_runs,
+        })
+    }
+
+    fn x_portable_export_freshness(&self) -> Result<XPortableExportFreshness> {
+        let current_tweet_count = self.count("x_tweets")?;
+        let latest_completed: Option<(String, usize, Value)> = self
+            .conn
+            .query_row(
+                r#"
+                SELECT completed_at, seen, metadata_json
+                FROM x_sync_runs
+                WHERE stream = 'export_portable' AND status = 'completed'
+                ORDER BY completed_at DESC
+                LIMIT 1
+                "#,
+                [],
+                |row| {
+                    let metadata_json: String = row.get(2)?;
+                    let metadata =
+                        serde_json::from_str(&metadata_json).unwrap_or_else(|_| json!({}));
+                    Ok((
+                        row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                        nonnegative_usize(row.get(1)?),
+                        metadata,
+                    ))
+                },
+            )
+            .optional()?;
+        let latest_failed: Option<(String, String)> = self
+            .conn
+            .query_row(
+                r#"
+                SELECT completed_at, COALESCE(error, '')
+                FROM x_sync_runs
+                WHERE stream = 'export_portable' AND status = 'failed'
+                ORDER BY completed_at DESC
+                LIMIT 1
+                "#,
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                        row.get::<_, String>(1)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let latest_tweet_updated_at: Option<String> =
+            self.conn
+                .query_row("SELECT MAX(updated_at) FROM x_tweets", [], |row| row.get(0))?;
+        let tweets_updated_after_export = if let Some((completed_at, _, _)) = &latest_completed {
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM x_tweets WHERE updated_at > ?1",
+                params![completed_at],
+                |row| row.get(0),
+            )?
+        } else {
+            0
+        };
+        let (
+            latest_completed_at,
+            latest_rows_exported,
+            latest_out_dir,
+            latest_manifest_path,
+            latest_manifest_sha256,
+        ) = latest_completed
+            .map(|(completed_at, rows, metadata)| {
+                let out_dir = metadata
+                    .get("out_dir")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                let manifest_path = metadata
+                    .get("manifest_path")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                let manifest_sha256 = metadata
+                    .get("manifest_sha256")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .or_else(|| {
+                        manifest_path.as_ref().and_then(|path| {
+                            fs::read(path).ok().map(|bytes| sha256(&bytes)).or_else(|| {
+                                out_dir.as_ref().and_then(|dir| {
+                                    fs::read(Path::new(dir).join("manifest.json"))
+                                        .ok()
+                                        .map(|bytes| sha256(&bytes))
+                                })
+                            })
+                        })
+                    });
+                (
+                    Some(completed_at),
+                    Some(rows),
+                    out_dir,
+                    manifest_path,
+                    manifest_sha256,
+                )
+            })
+            .unwrap_or((None, None, None, None, None));
+        let (latest_failed_at, latest_error) = latest_failed
+            .map(|(failed_at, error)| (Some(failed_at), Some(redact_secret_like_text(&error))))
+            .unwrap_or((None, None));
+        let missing = current_tweet_count > 0 && latest_completed_at.is_none();
+        let row_count_mismatch = latest_rows_exported
+            .map(|rows| rows as i64 != current_tweet_count)
+            .unwrap_or(false);
+        let stale = tweets_updated_after_export > 0 || row_count_mismatch;
+        let latest_failed_after_completed = match (&latest_failed_at, &latest_completed_at) {
+            (Some(failed_at), Some(completed_at)) => failed_at > completed_at,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        let status = if missing {
+            "missing"
+        } else if stale {
+            "stale"
+        } else if latest_failed_after_completed {
+            "failed"
+        } else if latest_completed_at.is_some() {
+            "fresh"
+        } else {
+            "empty"
+        }
+        .to_string();
+        Ok(XPortableExportFreshness {
+            status,
+            missing,
+            stale,
+            latest_completed_at,
+            latest_out_dir,
+            latest_manifest_path,
+            latest_manifest_sha256,
+            latest_rows_exported,
+            latest_failed_at,
+            latest_error,
+            current_tweet_count,
+            latest_tweet_updated_at,
+            tweets_updated_after_export,
+            row_count_mismatch,
         })
     }
 
@@ -4884,6 +5186,20 @@ impl Store {
             && *failed > 0
         {
             warnings.push(format!("X sync failures: {failed} failed sync run(s)"));
+        }
+        if stats.portable_export.missing {
+            warnings.push(format!(
+                "X portable export missing: {} canonical tweet row(s) have no completed portable export",
+                stats.portable_export.current_tweet_count
+            ));
+        } else if stats.portable_export.stale {
+            warnings.push(format!(
+                "X portable export is stale: {} tweet row(s) changed since latest export; row count mismatch: {}",
+                stats.portable_export.tweets_updated_after_export,
+                stats.portable_export.row_count_mismatch
+            ));
+        } else if stats.portable_export.status == "failed" {
+            warnings.push("X portable export failed after the latest completed export".to_string());
         }
         warnings
     }
@@ -7457,6 +7773,7 @@ impl Store {
             local_secret_value_count,
             policy: "local backups include the SQLite database for restore fidelity; protect or encrypt backups when this flag is true".to_string(),
         };
+        manifest.x = self.backup_x_summary()?;
         let manifest_json = serde_json::to_string_pretty(&manifest)?;
         let manifest_sha = sha256(manifest_json.as_bytes());
         fs::write(dest.join("manifest.json"), manifest_json)?;
@@ -7488,6 +7805,21 @@ impl Store {
 
     pub fn verify_backup_path(&self, path: &Path) -> Result<BackupVerification> {
         verify_backup_path(path)
+    }
+
+    fn backup_x_summary(&self) -> Result<BackupXSummary> {
+        let stats = self.x_stats()?;
+        Ok(BackupXSummary {
+            canonical_tweets: stats.canonical.tweets,
+            portable_export_status: stats.portable_export.status.clone(),
+            portable_export_missing: stats.portable_export.missing,
+            portable_export_stale: stats.portable_export.stale,
+            portable_rows_exported: stats.portable_export.latest_rows_exported,
+            portable_generated_at: stats.portable_export.latest_completed_at.clone(),
+            portable_manifest_sha256: stats.portable_export.latest_manifest_sha256.clone(),
+            portable_bundle_included: false,
+            recovery_note: "SQLite backup includes canonical X rows; portable X bundles are separate recovery/review artifacts unless explicitly exported and stored alongside the backup.".to_string(),
+        })
     }
 
     pub fn restore_backup_path(
@@ -7559,6 +7891,7 @@ impl Store {
             backup_path: backup_path.to_string_lossy().to_string(),
             target_home: target_paths.home.to_string_lossy().to_string(),
             restored_files,
+            x: manifest.x,
         })
     }
 
@@ -12097,7 +12430,67 @@ impl Store {
     }
 
     pub fn export_x_portable(&self, out_dir: &Path) -> Result<XPortableExportReport> {
-        export_x_portable(&self.conn, out_dir)
+        let started_at = now();
+        let result = export_x_portable(&self.conn, out_dir);
+        let completed_at = now();
+        match &result {
+            Ok(report) => {
+                let latest_tweet_updated_at: Option<String> =
+                    self.conn
+                        .query_row("SELECT MAX(updated_at) FROM x_tweets", [], |row| row.get(0))?;
+                let manifest_sha256 = fs::read(&report.manifest_path)
+                    .ok()
+                    .map(|bytes| sha256(&bytes));
+                self.record_x_sync_run(XSyncRunInsert {
+                    account_id: None,
+                    stream: "export_portable",
+                    transport: "local_portable",
+                    status: "completed",
+                    started_at: &started_at,
+                    completed_at: &completed_at,
+                    seen: report.rows_exported,
+                    inserted: 0,
+                    updated: 0,
+                    skipped_duplicates: 0,
+                    rejected: 0,
+                    cursor_key: None,
+                    previous_cursor: None,
+                    new_cursor: None,
+                    error: None,
+                    metadata: json!({
+                        "out_dir": report.out_dir,
+                        "manifest_path": report.manifest_path,
+                        "manifest_sha256": manifest_sha256,
+                        "generated_at": report.generated_at,
+                        "rows_exported": report.rows_exported,
+                        "current_tweet_count": self.count("x_tweets")?,
+                        "latest_tweet_updated_at": latest_tweet_updated_at,
+                        "shards": report.shards,
+                    }),
+                })?;
+            }
+            Err(error) => {
+                self.record_x_sync_run(XSyncRunInsert {
+                    account_id: None,
+                    stream: "export_portable",
+                    transport: "local_portable",
+                    status: "failed",
+                    started_at: &started_at,
+                    completed_at: &completed_at,
+                    seen: 0,
+                    inserted: 0,
+                    updated: 0,
+                    skipped_duplicates: 0,
+                    rejected: 0,
+                    cursor_key: None,
+                    previous_cursor: None,
+                    new_cursor: None,
+                    error: Some(&redact_secret_like_text(&error.to_string())),
+                    metadata: json!({ "out_dir": out_dir.display().to_string() }),
+                })?;
+            }
+        }
+        result
     }
 
     pub fn validate_x_portable(&self, dir: &Path) -> Result<XPortableValidateReport> {
@@ -20808,12 +21201,14 @@ impl Store {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupManifest {
     pub version: u32,
     pub created_at: DateTime<Utc>,
     #[serde(default)]
     pub sensitivity: BackupSensitivity,
+    #[serde(default)]
+    pub x: BackupXSummary,
     pub files: Vec<BackupFile>,
 }
 
@@ -20824,29 +21219,44 @@ pub struct BackupSensitivity {
     pub policy: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BackupXSummary {
+    pub canonical_tweets: i64,
+    pub portable_export_status: String,
+    pub portable_export_missing: bool,
+    pub portable_export_stale: bool,
+    pub portable_rows_exported: Option<usize>,
+    pub portable_generated_at: Option<String>,
+    pub portable_manifest_sha256: Option<String>,
+    pub portable_bundle_included: bool,
+    pub recovery_note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupFile {
     pub path: String,
     pub bytes: u64,
     pub sha256: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupVerification {
     pub ok: bool,
     pub path: String,
     pub created_at: String,
     pub sensitivity: BackupSensitivity,
+    pub x: BackupXSummary,
     pub checked_files: usize,
     pub errors: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupRestoreReport {
     pub ok: bool,
     pub backup_path: String,
     pub target_home: String,
     pub restored_files: usize,
+    pub x: BackupXSummary,
 }
 
 impl BackupManifest {
@@ -20875,6 +21285,11 @@ impl BackupManifest {
             sensitivity: BackupSensitivity {
                 policy: "local backup may contain private Arcwell data; SQLite snapshots are sensitive when secret values exist".to_string(),
                 ..BackupSensitivity::default()
+            },
+            x: BackupXSummary {
+                portable_export_status: "unknown".to_string(),
+                recovery_note: "Backup manifest predates X recovery metadata or was created outside Arcwell's current backup writer.".to_string(),
+                ..BackupXSummary::default()
             },
             files,
         })
@@ -20922,12 +21337,14 @@ pub fn verify_backup_path(path: &Path) -> Result<BackupVerification> {
         }
     }
 
+    let checked_files = manifest.files.len();
     Ok(BackupVerification {
         ok: errors.is_empty(),
         path: path.to_string_lossy().to_string(),
         created_at: manifest.created_at.to_rfc3339(),
         sensitivity: manifest.sensitivity,
-        checked_files: manifest.files.len(),
+        x: manifest.x,
+        checked_files,
         errors,
     })
 }
@@ -24998,6 +25415,173 @@ fn ensure_x_canonical_schema_on(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_x_collections_kind ON x_collections(account_id, collection_kind, last_seen_at DESC);
         CREATE INDEX IF NOT EXISTS idx_x_sync_runs_started ON x_sync_runs(started_at DESC);
         CREATE INDEX IF NOT EXISTS idx_x_projections_status ON x_projections(status, updated_at DESC);
+        "#,
+    )?;
+    Ok(())
+}
+
+fn ensure_radar_schema_on(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS radar_profiles (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          window_hours INTEGER NOT NULL,
+          min_score REAL NOT NULL,
+          max_items INTEGER,
+          languages_json TEXT NOT NULL,
+          category_groups_json TEXT NOT NULL,
+          source_selectors_json TEXT NOT NULL,
+          delivery_policy_json TEXT NOT NULL,
+          model_policy_json TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK(window_hours > 0),
+          CHECK(min_score >= 0 AND min_score <= 10)
+        );
+
+        CREATE TABLE IF NOT EXISTS radar_runs (
+          id TEXT PRIMARY KEY,
+          profile_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          window_start TEXT NOT NULL,
+          window_end TEXT NOT NULL,
+          stage TEXT NOT NULL,
+          source_selection_json TEXT NOT NULL,
+          raw_count INTEGER NOT NULL DEFAULT 0,
+          normalized_count INTEGER NOT NULL DEFAULT 0,
+          indexed_count INTEGER NOT NULL DEFAULT 0,
+          scored_count INTEGER NOT NULL DEFAULT 0,
+          filtered_count INTEGER NOT NULL DEFAULT 0,
+          enriched_count INTEGER NOT NULL DEFAULT 0,
+          summary_count INTEGER NOT NULL DEFAULT 0,
+          delivery_count INTEGER NOT NULL DEFAULT 0,
+          error TEXT,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          started_at TEXT NOT NULL,
+          finished_at TEXT,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(profile_id) REFERENCES radar_profiles(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_radar_runs_profile_updated ON radar_runs(profile_id, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_radar_runs_status ON radar_runs(status);
+
+        CREATE TABLE IF NOT EXISTS radar_items (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          stable_key TEXT NOT NULL,
+          source_kind TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          source_locator TEXT NOT NULL,
+          native_id TEXT,
+          canonical_url TEXT,
+          title TEXT NOT NULL,
+          author TEXT,
+          published_at TEXT,
+          fetched_at TEXT NOT NULL,
+          content_text TEXT NOT NULL DEFAULT '',
+          content_sha256 TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          source_card_id TEXT,
+          wiki_page_id TEXT,
+          canonical_entity_ref TEXT,
+          trust_level TEXT NOT NULL DEFAULT 'untrusted_external_evidence',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(run_id, stable_key),
+          FOREIGN KEY(run_id) REFERENCES radar_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(source_card_id) REFERENCES source_cards(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_radar_items_run ON radar_items(run_id);
+        CREATE INDEX IF NOT EXISTS idx_radar_items_source ON radar_items(source_kind, provider);
+        CREATE INDEX IF NOT EXISTS idx_radar_items_source_card ON radar_items(source_card_id);
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS radar_item_fts
+        USING fts5(id UNINDEXED, title, content_text, author, source_kind);
+
+        CREATE TABLE IF NOT EXISTS radar_scores (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          item_id TEXT NOT NULL,
+          score_kind TEXT NOT NULL,
+          score REAL NOT NULL,
+          reason TEXT NOT NULL,
+          tags_json TEXT NOT NULL DEFAULT '[]',
+          model_provider TEXT,
+          model_name TEXT,
+          cost_decision_id TEXT,
+          input_artifact_id TEXT,
+          output_artifact_id TEXT,
+          schema_version INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(item_id, score_kind, schema_version),
+          FOREIGN KEY(run_id) REFERENCES radar_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(item_id) REFERENCES radar_items(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_radar_scores_run_status ON radar_scores(run_id, status);
+
+        CREATE TABLE IF NOT EXISTS radar_summaries (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          language TEXT NOT NULL,
+          format TEXT NOT NULL,
+          title TEXT NOT NULL,
+          body_markdown TEXT NOT NULL,
+          item_ids_json TEXT NOT NULL,
+          source_card_ids_json TEXT NOT NULL,
+          audit_status TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          UNIQUE(run_id, language, format),
+          FOREIGN KEY(run_id) REFERENCES radar_runs(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS radar_deliveries (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          summary_id TEXT NOT NULL,
+          channel TEXT NOT NULL,
+          recipient_ref TEXT NOT NULL,
+          status TEXT NOT NULL,
+          policy_decision_id TEXT,
+          cost_decision_id TEXT,
+          delivery_attempt_id TEXT,
+          quiet_hours_deferred_until TEXT,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(run_id) REFERENCES radar_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(summary_id) REFERENCES radar_summaries(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS radar_source_quality (
+          id TEXT PRIMARY KEY,
+          source_kind TEXT NOT NULL,
+          locator TEXT NOT NULL,
+          window_start TEXT NOT NULL,
+          window_end TEXT NOT NULL,
+          raw_count INTEGER NOT NULL,
+          accepted_count INTEGER NOT NULL,
+          average_score REAL,
+          score_p50 REAL,
+          score_p90 REAL,
+          signal_to_noise REAL,
+          duplicate_rate REAL,
+          delivery_contribution_count INTEGER NOT NULL DEFAULT 0,
+          failure_count INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(source_kind, locator, window_start, window_end)
+        );
         "#,
     )?;
     Ok(())
@@ -38466,6 +39050,102 @@ ARXIV=( "cat:cs.AI" )
     }
 
     #[test]
+    fn severe_backup_manifest_records_x_portable_recovery_state_and_restore_search() {
+        // CLAIM: backups make X recovery state explicit instead of implying a
+        // portable bundle was included.
+        // PRECONDITIONS: canonical X rows exist but no portable export has run.
+        // POSTCONDITIONS: backup manifest/verification/restore report flag missing
+        // portable export while a disposable restore can still search canonical X
+        // rows from the SQLite backup.
+        // SEVERITY: Severe because backup success and portable export success are
+        // different recovery claims.
+        let store = test_store("backup-x-portable-missing");
+        store
+            .import_x_json_value(&json!([
+                {
+                    "id": "backup-x-1",
+                    "author": "arcwell",
+                    "text": "Backup X portable recovery proof searchable after restore.",
+                    "url": "https://x.com/arcwell/status/backup-x-1",
+                    "source_kind": "json_import"
+                }
+            ]))
+            .unwrap();
+
+        let backup_path = store.create_backup().unwrap();
+        let manifest: BackupManifest =
+            serde_json::from_slice(&fs::read(backup_path.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest.x.canonical_tweets, 1);
+        assert_eq!(manifest.x.portable_export_status, "missing");
+        assert!(manifest.x.portable_export_missing);
+        assert!(!manifest.x.portable_bundle_included);
+        assert!(manifest.x.recovery_note.contains("SQLite backup includes"));
+
+        let verification = store.verify_backup_path(&backup_path).unwrap();
+        assert!(verification.ok);
+        assert_eq!(verification.x.portable_export_status, "missing");
+
+        let target_paths = AppPaths::new(
+            std::env::temp_dir().join(format!("arcwell-test-backup-x-target-{}", Uuid::new_v4())),
+        );
+        let report = Store::restore_backup_path(&backup_path, &target_paths, false).unwrap();
+        assert!(report.ok);
+        assert_eq!(report.x.portable_export_status, "missing");
+
+        let restored = Store::open(target_paths).unwrap();
+        let search = restored
+            .search_x_tweets("portable recovery proof", 10)
+            .unwrap();
+        assert_eq!(search.len(), 1);
+        assert_eq!(search[0].x_id, "backup-x-1");
+        assert!(search[0].source_card_id.is_some());
+    }
+
+    #[test]
+    fn severe_backup_manifest_flags_stale_x_portable_export() {
+        // CLAIM: backup manifests preserve the portable export freshness judgment
+        // at backup time.
+        // PRECONDITIONS: a portable export succeeded, then canonical tweet state
+        // changed before backup.
+        // POSTCONDITIONS: backup verification reports stale portable export status,
+        // row counts, and manifest hash without bundling portable bytes.
+        // SEVERITY: Severe because a fresh backup must not hide stale review/export
+        // artifacts.
+        let store = test_store("backup-x-portable-stale");
+        store
+            .import_x_json_value(&json!([
+                {
+                    "id": "backup-x-stale",
+                    "author": "arcwell",
+                    "text": "Backup stale portable export proof.",
+                    "url": "https://x.com/arcwell/status/backup-x-stale",
+                    "source_kind": "json_import"
+                }
+            ]))
+            .unwrap();
+        store
+            .export_x_portable(&store.paths().home.join("portable-x"))
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE x_tweets SET updated_at = ?1 WHERE x_id = ?2",
+                params!["9999-01-02T00:00:00Z", "backup-x-stale"],
+            )
+            .unwrap();
+
+        let backup_path = store.create_backup().unwrap();
+        let verification = store.verify_backup_path(&backup_path).unwrap();
+        assert!(verification.ok);
+        assert_eq!(verification.x.canonical_tweets, 1);
+        assert_eq!(verification.x.portable_export_status, "stale");
+        assert!(verification.x.portable_export_stale);
+        assert_eq!(verification.x.portable_rows_exported, Some(1));
+        assert!(verification.x.portable_manifest_sha256.is_some());
+        assert!(!verification.x.portable_bundle_included);
+    }
+
+    #[test]
     fn severe_backup_restore_refuses_non_empty_target_without_replace() {
         let store = test_store("backup-restore-refuse");
         store
@@ -42804,6 +43484,163 @@ reason = "network blocked for resident poll test"
                 .contains("tweet row contains token-like text"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn severe_x_portable_export_records_freshness_and_staleness() {
+        // CLAIM: portable export freshness is operator-visible instead of being a
+        // hidden manual side effect.
+        // PRECONDITIONS: a canonical tweet exists, a portable export succeeds, then
+        // the canonical tweet changes after the export timestamp.
+        // POSTCONDITIONS: x_stats reports the latest export metadata, and health
+        // warns once local X rows are newer than the export.
+        // SEVERITY: Severe because backup/recovery status must not look current
+        // after local X data has moved on.
+        let store = test_store("x-portable-freshness");
+        store
+            .import_x_json_value(&json!([
+                {
+                    "id": "portable-freshness",
+                    "author": "arcwell",
+                    "text": "Portable freshness proof.",
+                    "url": "https://x.com/arcwell/status/portable-freshness",
+                    "source_kind": "json_import"
+                }
+            ]))
+            .unwrap();
+        let before_export = store.x_stats().unwrap();
+        assert!(before_export.portable_export.latest_completed_at.is_none());
+        assert!(!before_export.portable_export.stale);
+
+        let out_dir = store.paths().home.join("portable-x");
+        let export = store.export_x_portable(&out_dir).unwrap();
+        assert_eq!(export.rows_exported, 1);
+        let fresh = store.x_stats().unwrap();
+        assert_eq!(
+            fresh
+                .sync_runs_by_status
+                .get("completed")
+                .copied()
+                .unwrap_or(0),
+            2
+        );
+        assert_eq!(fresh.latest_sync_runs[0].stream, "export_portable");
+        assert_eq!(fresh.latest_sync_runs[0].transport, "local_portable");
+        assert_eq!(fresh.portable_export.latest_rows_exported, Some(1));
+        assert_eq!(
+            fresh.portable_export.latest_manifest_path.as_deref(),
+            Some(export.manifest_path.as_str())
+        );
+        assert!(!fresh.portable_export.stale);
+
+        store
+            .conn
+            .execute(
+                "UPDATE x_tweets SET updated_at = ?1 WHERE x_id = ?2",
+                params!["9999-01-01T00:00:00Z", "portable-freshness"],
+            )
+            .unwrap();
+        let stale = store.x_stats().unwrap();
+        assert!(stale.portable_export.stale);
+        assert_eq!(stale.portable_export.tweets_updated_after_export, 1);
+        let health = store.health().unwrap();
+        assert!(
+            health
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("X portable export is stale")),
+            "{:?}",
+            health.warnings
+        );
+    }
+
+    #[test]
+    fn severe_x_portable_export_row_count_mismatch_is_stale_without_newer_timestamp() {
+        // CLAIM: portable export freshness compares exported rows to current
+        // canonical tweet count and does not trust timestamps alone.
+        // PRECONDITIONS: export succeeds, then the ledger's exported row count is
+        // corrupted while tweet timestamps remain unchanged.
+        // POSTCONDITIONS: x_stats marks portable export stale via row-count
+        // mismatch even though no tweet has a newer updated_at.
+        // SEVERITY: Severe because forged or damaged ledgers must not certify an
+        // incomplete portable recovery artifact.
+        let store = test_store("x-portable-count-mismatch");
+        store
+            .import_x_json_value(&json!([
+                {
+                    "id": "portable-count-mismatch",
+                    "author": "arcwell",
+                    "text": "Portable count mismatch proof.",
+                    "url": "https://x.com/arcwell/status/portable-count-mismatch",
+                    "source_kind": "json_import"
+                }
+            ]))
+            .unwrap();
+        store
+            .export_x_portable(&store.paths().home.join("portable-x"))
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE x_sync_runs SET seen = 99 WHERE stream = 'export_portable'",
+                [],
+            )
+            .unwrap();
+
+        let stats = store.x_stats().unwrap();
+        assert!(stats.portable_export.stale);
+        assert!(stats.portable_export.row_count_mismatch);
+        assert_eq!(stats.portable_export.tweets_updated_after_export, 0);
+        assert_eq!(stats.portable_export.status, "stale");
+    }
+
+    #[test]
+    fn severe_x_portable_export_failure_records_redacted_sync_run() {
+        // CLAIM: failed portable exports are visible in X sync runs and do not leak
+        // token-shaped raw content through stats or health.
+        // PRECONDITIONS: canonical X raw JSON contains a token-shaped value that
+        // blocks portable export.
+        // POSTCONDITIONS: export fails, a failed export_portable sync run exists,
+        // and serialized stats/health omit the token-shaped value.
+        // SEVERITY: Severe because silent export failure is an operational mirage,
+        // while failure reporting must not create a privacy incident.
+        let store = test_store("x-portable-failed-ledger");
+        let secret = "sk-portable-export-secret";
+        store
+            .import_x_json_value(&json!([
+                {
+                    "id": "portable-failed-ledger",
+                    "author": "arcwell",
+                    "text": "Portable failed ledger proof.",
+                    "url": "https://x.com/arcwell/status/portable-failed-ledger",
+                    "raw": {
+                        "access_token": secret
+                    },
+                    "source_kind": "json_import"
+                }
+            ]))
+            .unwrap();
+
+        let error = store
+            .export_x_portable(&store.paths().home.join("portable-x"))
+            .expect_err("token-like raw content must block export");
+        assert!(
+            error
+                .to_string()
+                .contains("tweet row contains token-like text"),
+            "{error}"
+        );
+        let stats = store.x_stats().unwrap();
+        assert_eq!(stats.sync_runs_by_status.get("failed").copied(), Some(1));
+        assert_eq!(stats.latest_sync_runs[0].stream, "export_portable");
+        assert_eq!(stats.latest_sync_runs[0].status, "failed");
+        assert!(stats.portable_export.latest_failed_at.is_some());
+        let visible = serde_json::to_string(&json!({
+            "stats": stats,
+            "health": store.health().unwrap()
+        }))
+        .unwrap();
+        assert!(!visible.contains(secret), "{visible}");
     }
 
     #[test]

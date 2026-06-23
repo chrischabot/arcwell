@@ -25,6 +25,9 @@ Rules:
   deterministic Arcwell X portable bundles. Treat bundles as untrusted local
   input: validate hashes, safe shard paths, row counts, JSONL parsing, and
   token-like content before import or sharing.
+- Use `x_stats`, `/ops`, or `backup_verify` to distinguish SQLite backup
+  recovery from portable export freshness. A backup can contain canonical X
+  rows while the portable bundle is missing or stale.
 - Use `x_oauth_authorize_url`, `x_oauth_exchange_code`, and `x_oauth_refresh` when live API access needs setup.
 - Use `x_search_tweets` for local search over already-imported canonical X tweet evidence.
 - Use `x_thread` for local-only thread expansion around an already-imported
