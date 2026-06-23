@@ -114,14 +114,14 @@ No item may jump from `Scaffold` or `Local Fixture Proof` to `Done`.
 
 Status: `Production Data Proof` for copied-home `source_card_query`
 projection, existing source-family projection, exact canonical-URL dedupe, and
-foreground live RSS/GitHub/arXiv adapter execution; `Partial` for the overall
-Horizon-inspired system.
+foreground live RSS/GitHub/arXiv/Hacker News adapter execution; `Partial` for
+the overall Horizon-inspired system.
 
 Evidence:
 
 - `cargo test --all --all-features` passed.
-- `scripts/verify-codex-plugin-docs` passed with 126 commands, 15 skills, 213
-  MCP tools, and 156 docs/prompts checked.
+- `scripts/verify-codex-plugin-docs` passed with 128 commands, 15 skills, 215
+  MCP tools, and 158 docs/prompts checked.
 - `scripts/arcwell-dev sync` rebuilt and synced the dev plugin.
 - Copied-home proof at `/tmp/arcwell-radar-proof-20260623T184338Z` used a
   SQLite backup of the real local Arcwell home. `arcwell radar run
@@ -161,11 +161,20 @@ Evidence:
   `radar-summary-e655496f9cde91bc80c054f5915e6fad` over 20 selected items /
   20 source cards with `not_delivery=true`, and `radar summary` read back the
   same artifact.
+- Disposable Hacker News proof at `/tmp/arcwell-radar-hn-proof-20260623T192659Z`
+  used real current HN top stories through a `hackernews=frontpage` selector.
+  The foreground `hackernews_fetch` job completed, wrote 5 source cards with
+  bounded top-level comment evidence, advanced cursor `hackernews:topstories`,
+  recorded healthy source-health, wrote 5 radar items/FTS rows/scores, selected
+  5 items, `radar audit` returned `ok=true`, and
+  `radar-summary-7276ea4ad8fd0d8d0ae243f65a0a4eb5` read back with
+  `not_delivery=true`.
 
 Still not proven by this slice:
 
-- Radar-owned live X/Hacker News/Reddit/public Telegram/OSS/OpenBB fetch.
+- Radar-owned live X/Reddit/public Telegram/OSS/OpenBB fetch.
 - Scheduled radar worker fetch/retry/recovery and ops UI controls.
+- Full recursive HN/Reddit community-thread capture.
 - Semantic dedupe, category/source balancing, source-quality decay.
 - Model-backed interestingness, enrichment/synthesis, and delivery attempts.
 - Full production multi-source proof including authenticated/private sources.
@@ -680,7 +689,8 @@ Source adapters:
 - X handles: reuse existing X recent-search/watch-source paths where
   authorized, with copied/disposable-home proof before promotion.
 - Source-card query: read existing local source cards.
-- Hacker News: new adapter inspired by Horizon, including story comments.
+- Hacker News: implemented via the official Firebase API with bounded
+  top-level comment evidence.
 - Reddit: new adapter inspired by Horizon, including top comments and RSS
   fallback where appropriate.
 - Public Telegram channels: optional new adapter inspired by Horizon web preview
@@ -701,8 +711,9 @@ Checklist:
       existing Arcwell jobs before source-card projection.
 - [x] Implement X projection from source-card projections.
 - [ ] Implement X projection directly from canonical X rows.
-- [ ] Add Hacker News adapter with real Firebase API, comment capture, and
-      rate-limit/error classification.
+- [x] Add Hacker News adapter with real Firebase API, bounded top-level comment
+      capture, source-card persistence, cursor/source-health safety,
+      watch-source enqueue support, and adapter-failure audit visibility.
 - [ ] Add Reddit adapter with public JSON, RSS fallback, top-comment capture,
       rate-limit/error classification, and user-agent discipline.
 - [ ] Add public Telegram adapter with explicit `telegram_public` source kind,
@@ -735,7 +746,7 @@ Production-data proof:
 - [x] Run against real arXiv query data.
 - [ ] Run against real X watch sources in a copied/disposable home when
       authenticated user-context data is involved.
-- [ ] Run against real Hacker News top stories.
+- [x] Run against real Hacker News top stories.
 - [ ] Run against real Reddit subreddits/users configured by profile.
 - [ ] Run against at least one real public Telegram channel only if that source
       kind is enabled.
@@ -1407,7 +1418,8 @@ Exit gate:
 
 ### Phase 3: Horizon-Inspired New Adapters
 
-- [ ] Hacker News.
+- [x] Hacker News foreground adapter for top/new/best/ask/show/jobs feeds with
+      bounded top-level comment evidence.
 - [ ] Reddit.
 - [ ] Public Telegram.
 - [ ] OSS Insight.

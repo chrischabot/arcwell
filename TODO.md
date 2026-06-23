@@ -310,6 +310,10 @@ PR, implementation note, or final report:
       foreground live RSS, GitHub, and arXiv adapter execution with
       source-health/cursor safety, CLI/MCP/slash surfaces, severe failure tests,
       and disposable-home production-data proof.
+- [x] Extend radar live execution to Hacker News top/frontpage stories through
+      the official Firebase API with bounded top-level comment capture,
+      source-health/cursor safety, watch-source enqueue support, severe tests,
+      and disposable-home production-data proof.
 - [ ] Extend radar live execution to authenticated X watch/recent-search data
       with copied/disposable-home source-health/cursor proof before promotion.
 - [x] Add radar exact URL/source-native dedupe groups with preserved source

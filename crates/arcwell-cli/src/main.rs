@@ -9897,7 +9897,7 @@ fn mcp_tools() -> Vec<Value> {
         ),
         tool_with_schema(
             "radar_run",
-            "Run a radar profile. By default this uses the locally proven source-card projection, FTS, and heuristic scoring stages; fetch_live=true first invokes existing Arcwell RSS/GitHub/arXiv/X adapters and records adapter jobs/source health.",
+            "Run a radar profile. By default this uses the locally proven source-card projection, FTS, and heuristic scoring stages; fetch_live=true first invokes existing Arcwell RSS/GitHub/arXiv/Hacker News/X adapters and records adapter jobs/source health.",
             json!({
                 "profile": string_schema("Radar profile id or name."),
                 "window_hours": integer_schema("Optional run window override in hours."),
