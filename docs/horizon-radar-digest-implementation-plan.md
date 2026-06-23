@@ -784,11 +784,11 @@ Outputs:
 
 Checklist:
 
-- [ ] Implement exact URL dedupe.
-- [ ] Implement source-native dedupe for same X id, same GitHub release, same
-      RSS entry id/link, same HN item, same Reddit post, same Telegram public
-      message.
-- [ ] Implement cross-source canonical URL merging while preserving all sources.
+- [x] Implement exact URL dedupe.
+- [x] Implement source-native dedupe for same X id, same GitHub release, same
+      RSS entry id/link, and same provider/native id where existing projected
+      source cards expose it.
+- [x] Implement cross-source canonical URL merging while preserving all sources.
 - [ ] Implement semantic topic dedupe only after initial scoring and only with
       preserved evidence.
 - [ ] Add model semantic-dedupe output schema with primary id, duplicate ids,
@@ -799,7 +799,7 @@ Checklist:
 
 Anti-mirage gate:
 
-- [ ] Dedupe cannot delete source evidence.
+- [x] Dedupe cannot delete source evidence.
 - [ ] Dedupe cannot collapse "same product, different event" without explicit
       evidence.
 - [ ] Model semantic dedupe failure cannot silently drop items.
@@ -1389,9 +1389,9 @@ Exit gate:
 
 ### Phase 4: Ranking, Dedupe, Balance
 
-- [ ] Heuristic scoring.
-- [ ] Score explanations.
-- [ ] Exact URL/native dedupe.
+- [x] Heuristic scoring.
+- [x] Score explanations.
+- [x] Exact URL/native dedupe.
 - [ ] Category/source balancing.
 - [ ] Optional model scoring.
 - [ ] Optional semantic dedupe.

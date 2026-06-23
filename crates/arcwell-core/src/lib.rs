@@ -26,7 +26,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 pub const APP_NAME: &str = "arcwell";
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 pub const SOURCE_CARD_SCHEMA_VERSION: u64 = 1;
 const MAX_COST_USD: f64 = 1_000_000.0;
 const SOURCE_CARD_STALE_DAYS: i64 = 180;
@@ -697,6 +697,20 @@ pub struct RadarScore {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarDedupGroup {
+    pub id: String,
+    pub run_id: String,
+    pub dedup_kind: String,
+    pub primary_item_id: String,
+    pub member_item_ids: Vec<String>,
+    pub reason: String,
+    pub confidence: f64,
+    pub model_provider: Option<String>,
+    pub cost_decision_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RadarFetchReport {
     pub run: RadarRun,
     pub profile: RadarProfile,
@@ -712,6 +726,7 @@ pub struct RadarStageReport {
     pub run: RadarRun,
     pub items: Vec<RadarItem>,
     pub scores: Vec<RadarScore>,
+    pub dedup_groups: Vec<RadarDedupGroup>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -730,6 +745,7 @@ pub struct RadarAuditReport {
     pub item_count: i64,
     pub fts_count: i64,
     pub scored_count: i64,
+    pub dedup_group_count: i64,
     pub findings: Vec<RadarAuditFinding>,
 }
 
@@ -4207,6 +4223,10 @@ impl Store {
             Ok(())
         })?;
         self.apply_schema_migration(8, "radar_core_schema", false, None, |conn| {
+            ensure_radar_schema_on(conn)?;
+            Ok(())
+        })?;
+        self.apply_schema_migration(9, "radar_dedup_groups", false, None, |conn| {
             ensure_radar_schema_on(conn)?;
             Ok(())
         })?;
@@ -18600,6 +18620,7 @@ impl Store {
             items_inserted += 1;
         }
         self.rebuild_radar_fts(Some(&run_id))?;
+        let _dedup_groups = self.dedupe_radar_run(&run_id)?;
         let scores_inserted = self.score_radar_run(&run_id)?;
         let selected_items = self.count_radar_selected_scores(&run_id)?;
         let raw_count = source_cards.len() as i64;
@@ -18698,6 +18719,7 @@ impl Store {
         Ok(RadarStageReport {
             items: self.list_radar_items(run_id)?,
             scores: self.list_radar_scores(run_id)?,
+            dedup_groups: self.list_radar_dedup_groups(run_id)?,
             run,
         })
     }
@@ -18731,6 +18753,20 @@ impl Store {
             "#,
         )?;
         rows(stmt.query_map(params![run_id], radar_score_from_row)?)
+    }
+
+    pub fn list_radar_dedup_groups(&self, run_id: &str) -> Result<Vec<RadarDedupGroup>> {
+        validate_id(run_id)?;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, run_id, dedup_kind, primary_item_id, member_item_ids_json,
+                   reason, confidence, model_provider, cost_decision_id, created_at
+            FROM radar_dedup_groups
+            WHERE run_id = ?1
+            ORDER BY created_at ASC, dedup_kind ASC, id ASC
+            "#,
+        )?;
+        rows(stmt.query_map(params![run_id], radar_dedup_group_from_row)?)
     }
 
     pub fn rebuild_radar_fts(&self, run_id: Option<&str>) -> Result<usize> {
@@ -18802,6 +18838,16 @@ impl Store {
             params![run_id],
             |row| row.get(0),
         )?;
+        let dedup_group_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM radar_dedup_groups WHERE run_id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )?;
+        let duplicate_score_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM radar_scores WHERE run_id = ?1 AND status LIKE 'duplicate_%'",
+            params![run_id],
+            |row| row.get(0),
+        )?;
         let missing_source_cards: i64 = self.conn.query_row(
             r#"
             SELECT COUNT(*)
@@ -18837,6 +18883,53 @@ impl Store {
                 evidence: format!("missing_source_cards={missing_source_cards}"),
             });
         }
+        if duplicate_score_count > 0 && dedup_group_count == 0 {
+            findings.push(RadarAuditFinding {
+                severity: "high".to_string(),
+                code: "radar_duplicate_scores_without_groups".to_string(),
+                message: "Radar scores mark duplicate items without auditable dedupe groups."
+                    .to_string(),
+                evidence: format!("duplicate_scores={duplicate_score_count} dedup_groups=0"),
+            });
+        }
+        let item_ids = self
+            .list_radar_items(run_id)?
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<BTreeSet<_>>();
+        for group in self.list_radar_dedup_groups(run_id)? {
+            if group.member_item_ids.len() < 2 {
+                findings.push(RadarAuditFinding {
+                    severity: "high".to_string(),
+                    code: "radar_dedup_group_too_small".to_string(),
+                    message: "A radar dedupe group has fewer than two members.".to_string(),
+                    evidence: format!(
+                        "group_id={} member_count={}",
+                        group.id,
+                        group.member_item_ids.len()
+                    ),
+                });
+            }
+            if !group.member_item_ids.contains(&group.primary_item_id) {
+                findings.push(RadarAuditFinding {
+                    severity: "high".to_string(),
+                    code: "radar_dedup_primary_missing_from_group".to_string(),
+                    message: "A radar dedupe group primary is not listed as a member.".to_string(),
+                    evidence: format!("group_id={} primary={}", group.id, group.primary_item_id),
+                });
+            }
+            for member_id in &group.member_item_ids {
+                if !item_ids.contains(member_id) {
+                    findings.push(RadarAuditFinding {
+                        severity: "high".to_string(),
+                        code: "radar_dedup_missing_member".to_string(),
+                        message: "A radar dedupe group references a missing radar item."
+                            .to_string(),
+                        evidence: format!("group_id={} member_id={member_id}", group.id),
+                    });
+                }
+            }
+        }
         let unsupported = unsupported_radar_selectors(&run.source_selection);
         if !unsupported.is_empty() {
             findings.push(RadarAuditFinding {
@@ -18863,6 +18956,7 @@ impl Store {
             item_count,
             fts_count,
             scored_count,
+            dedup_group_count,
             findings,
         })
     }
@@ -18913,6 +19007,128 @@ impl Store {
         Ok(())
     }
 
+    fn dedupe_radar_run(&self, run_id: &str) -> Result<usize> {
+        validate_id(run_id)?;
+        self.conn.execute(
+            "DELETE FROM radar_dedup_groups WHERE run_id = ?1",
+            params![run_id],
+        )?;
+        let items = self.list_radar_items(run_id)?;
+        let mut grouped_item_ids = BTreeSet::new();
+        let mut inserted = 0usize;
+
+        let mut url_buckets: BTreeMap<String, Vec<RadarItem>> = BTreeMap::new();
+        for item in &items {
+            if let Some(url) = item.canonical_url.as_deref().and_then(radar_exact_url_key) {
+                url_buckets.entry(url).or_default().push(item.clone());
+            }
+        }
+        for (url, members) in url_buckets {
+            if members.len() < 2 {
+                continue;
+            }
+            let group = radar_exact_dedup_group(
+                run_id,
+                "canonical_url",
+                &format!("same canonical URL: {url}"),
+                members,
+            )?;
+            for member_id in &group.member_item_ids {
+                grouped_item_ids.insert(member_id.clone());
+            }
+            self.insert_radar_dedup_group(&group)?;
+            inserted += 1;
+        }
+
+        let mut native_buckets: BTreeMap<String, Vec<RadarItem>> = BTreeMap::new();
+        for item in &items {
+            if grouped_item_ids.contains(&item.id) {
+                continue;
+            }
+            let Some(native_id) = item.native_id.as_deref() else {
+                continue;
+            };
+            let native_id = native_id.trim();
+            if native_id.is_empty() {
+                continue;
+            }
+            native_buckets
+                .entry(format!(
+                    "{}\u{001f}{}\u{001f}{}",
+                    item.source_kind,
+                    item.provider,
+                    native_id.to_ascii_lowercase()
+                ))
+                .or_default()
+                .push(item.clone());
+        }
+        for (_key, members) in native_buckets {
+            if members.len() < 2 {
+                continue;
+            }
+            let group = radar_exact_dedup_group(
+                run_id,
+                "same_native_id",
+                "same source/provider/native id",
+                members,
+            )?;
+            self.insert_radar_dedup_group(&group)?;
+            inserted += 1;
+        }
+
+        Ok(inserted)
+    }
+
+    fn insert_radar_dedup_group(&self, group: &RadarDedupGroup) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO radar_dedup_groups
+              (id, run_id, dedup_kind, primary_item_id, member_item_ids_json,
+               reason, confidence, model_provider, cost_decision_id, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "#,
+            params![
+                group.id,
+                group.run_id,
+                group.dedup_kind,
+                group.primary_item_id,
+                serde_json::to_string(&group.member_item_ids)?,
+                group.reason,
+                group.confidence,
+                group.model_provider,
+                group.cost_decision_id,
+                group.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn radar_duplicate_status_by_item(
+        &self,
+        run_id: &str,
+    ) -> Result<BTreeMap<String, (String, String, String)>> {
+        let mut duplicates = BTreeMap::new();
+        for group in self.list_radar_dedup_groups(run_id)? {
+            let status = match group.dedup_kind.as_str() {
+                "canonical_url" => "duplicate_url",
+                "same_native_id" => "duplicate_native_id",
+                _ => "duplicate_exact",
+            };
+            for member_id in &group.member_item_ids {
+                if member_id != &group.primary_item_id {
+                    duplicates.entry(member_id.clone()).or_insert_with(|| {
+                        (
+                            status.to_string(),
+                            group.id.clone(),
+                            group.primary_item_id.clone(),
+                        )
+                    });
+                }
+            }
+        }
+        Ok(duplicates)
+    }
+
     fn score_radar_run(&self, run_id: &str) -> Result<usize> {
         let run = self
             .read_radar_run(run_id)?
@@ -18926,6 +19142,7 @@ impl Store {
             let (score, reason, tags) = score_radar_item_heuristic(&item);
             scored.push((item, score, reason, tags));
         }
+        let duplicate_status_by_item = self.radar_duplicate_status_by_item(run_id)?;
         scored.sort_by(|left, right| {
             right
                 .1
@@ -18936,14 +19153,25 @@ impl Store {
         let max_items = profile.max_items.unwrap_or(i64::MAX).max(0) as usize;
         let selected_ids: BTreeSet<String> = scored
             .iter()
-            .filter(|(_, score, _, _)| *score >= profile.min_score)
+            .filter(|(item, score, _, _)| {
+                *score >= profile.min_score && !duplicate_status_by_item.contains_key(&item.id)
+            })
             .take(max_items)
             .map(|(item, _, _, _)| item.id.clone())
             .collect();
         let timestamp = now();
         let mut inserted = 0usize;
-        for (item, score, reason, tags) in scored {
-            let status = if selected_ids.contains(&item.id) {
+        for (item, score, mut reason, mut tags) in scored {
+            let status = if let Some((status, group_id, primary_item_id)) =
+                duplicate_status_by_item.get(&item.id)
+            {
+                tags.push("duplicate".to_string());
+                tags.push("exact-dedupe".to_string());
+                reason = format!(
+                    "{reason}; duplicate suppressed by dedupe group {group_id}; primary item {primary_item_id}"
+                );
+                status.as_str()
+            } else if selected_ids.contains(&item.id) {
                 "selected"
             } else if score >= profile.min_score {
                 "over_profile_limit"
@@ -26081,6 +26309,23 @@ fn ensure_radar_schema_on(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_radar_scores_run_status ON radar_scores(run_id, status);
 
+        CREATE TABLE IF NOT EXISTS radar_dedup_groups (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          dedup_kind TEXT NOT NULL,
+          primary_item_id TEXT NOT NULL,
+          member_item_ids_json TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          confidence REAL NOT NULL,
+          model_provider TEXT,
+          cost_decision_id TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(run_id) REFERENCES radar_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(primary_item_id) REFERENCES radar_items(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_radar_dedup_groups_run ON radar_dedup_groups(run_id, dedup_kind);
+
         CREATE TABLE IF NOT EXISTS radar_summaries (
           id TEXT PRIMARY KEY,
           run_id TEXT NOT NULL,
@@ -27037,6 +27282,22 @@ fn radar_score_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RadarScore>
     })
 }
 
+fn radar_dedup_group_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RadarDedupGroup> {
+    let member_item_ids_json: String = row.get(4)?;
+    Ok(RadarDedupGroup {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        dedup_kind: row.get(2)?,
+        primary_item_id: row.get(3)?,
+        member_item_ids: parse_json_string_vec_column(&member_item_ids_json, 4)?,
+        reason: row.get(5)?,
+        confidence: row.get(6)?,
+        model_provider: row.get(7)?,
+        cost_decision_id: row.get(8)?,
+        created_at: row.get(9)?,
+    })
+}
+
 fn normalize_radar_profile_input(mut input: RadarProfileInput) -> Result<RadarProfileInput> {
     validate_key(&input.name)?;
     input.name = input.name.trim().to_string();
@@ -27213,6 +27474,59 @@ fn radar_source_card_matches_selector(card: &SourceCard, kind: &str, locator: &s
         }
         _ => false,
     }
+}
+
+fn radar_exact_url_key(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(mut url) = Url::parse(trimmed) {
+        url.set_fragment(None);
+        if url.path() == "/" {
+            url.set_path("");
+        }
+        return Some(url.to_string().trim_end_matches('/').to_ascii_lowercase());
+    }
+    Some(trimmed.trim_end_matches('/').to_ascii_lowercase())
+}
+
+fn radar_exact_dedup_group(
+    run_id: &str,
+    dedup_kind: &str,
+    reason: &str,
+    mut members: Vec<RadarItem>,
+) -> Result<RadarDedupGroup> {
+    members.sort_by(|left, right| {
+        let left_score = score_radar_item_heuristic(left).0;
+        let right_score = score_radar_item_heuristic(right).0;
+        right_score
+            .partial_cmp(&left_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.title.cmp(&right.title))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let primary_item_id = members
+        .first()
+        .map(|item| item.id.clone())
+        .context("radar dedupe group requires at least one member")?;
+    let member_item_ids = members
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>();
+    let stable = format!("{run_id}\n{dedup_kind}\n{}", member_item_ids.join("\n"));
+    Ok(RadarDedupGroup {
+        id: format!("radar-dedup-{}", &sha256(stable.as_bytes())[..32]),
+        run_id: run_id.to_string(),
+        dedup_kind: dedup_kind.to_string(),
+        primary_item_id,
+        member_item_ids,
+        reason: reason.to_string(),
+        confidence: 1.0,
+        model_provider: None,
+        cost_decision_id: None,
+        created_at: now(),
+    })
 }
 
 fn radar_item_from_source_card(run_id: &str, card: &SourceCard) -> Result<RadarItem> {
@@ -32427,6 +32741,7 @@ fn collect_x_archive_zip(
         if member.is_dir() {
             continue;
         }
+        reject_nested_x_archive_member(&safe_name)?;
         let Some(kind) = x_archive_file_kind(&safe_name, selected) else {
             collected.skipped_files += 1;
             record_unsupported_x_archive_file(collected, &safe_name);
@@ -32457,6 +32772,7 @@ fn collect_x_archive_named_reader(
     collected: &mut XArchiveCollectedItems,
 ) -> Result<()> {
     let safe_name = safe_x_archive_member_name(relative_name)?;
+    reject_nested_x_archive_member(&safe_name)?;
     let Some(kind) = x_archive_file_kind(&safe_name, selected) else {
         collected.skipped_files += 1;
         record_unsupported_x_archive_file(collected, &safe_name);
@@ -32495,6 +32811,19 @@ fn safe_x_archive_member_name(name: &str) -> Result<String> {
         }
     }
     Ok(path.to_string_lossy().replace('\\', "/"))
+}
+
+fn reject_nested_x_archive_member(name: &str) -> Result<()> {
+    let normalized = name.to_ascii_lowercase();
+    if normalized.ends_with(".zip")
+        || normalized.ends_with(".tar")
+        || normalized.ends_with(".tgz")
+        || normalized.ends_with(".tar.gz")
+        || normalized.ends_with(".gz")
+    {
+        bail!("nested X archive members are not supported");
+    }
+    Ok(())
 }
 
 fn validate_x_archive_file_budget(file_size: u64, current_total: u64) -> Result<()> {
@@ -37560,6 +37889,59 @@ mod tests {
     }
 
     #[test]
+    fn severe_schema_migration_adds_radar_dedup_groups_after_radar_core() {
+        // CLAIM: schema version 9 upgrades databases that already recorded the radar
+        // core migration instead of only working for fresh databases.
+        // ORACLE: a hand-built schema_version=8 database with migration 8 recorded
+        // gains radar_dedup_groups and records migration 9 after Store::open.
+        // SEVERITY: Severe because additive radar tables must appear in real upgraded
+        // local homes, not only in clean test databases.
+        let paths = test_paths("schema-fixture-radar-dedup-v8");
+        paths.ensure().unwrap();
+        let conn = Connection::open(&paths.db).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta (key, value) VALUES ('schema_version', '8');
+            CREATE TABLE schema_migrations (
+              version INTEGER PRIMARY KEY,
+              name TEXT NOT NULL,
+              destructive INTEGER NOT NULL DEFAULT 0,
+              backup_id TEXT,
+              applied_at TEXT NOT NULL
+            );
+            INSERT INTO schema_migrations
+              (version, name, destructive, backup_id, applied_at)
+            VALUES
+              (8, 'radar_core_schema', 0, NULL, '2026-06-23T00:00:00Z');
+            "#,
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = Store::open(paths).unwrap();
+        assert_eq!(store.stored_schema_version().unwrap(), SCHEMA_VERSION);
+        let table_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'radar_dedup_groups'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 1);
+        let migration_name: String = store
+            .conn
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 9",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(migration_name, "radar_dedup_groups");
+    }
+
+    #[test]
     fn severe_import_run_ledger_redacts_errors_and_surfaces_in_ops() {
         // CLAIM: import attempts leave durable aggregate audit records without
         // storing raw transcript content or secret-bearing error strings.
@@ -39523,6 +39905,172 @@ reason = "X OAuth disabled during policy test"
                 .iter()
                 .any(|finding| finding.code == "radar_unsupported_selectors")
         );
+    }
+
+    #[test]
+    fn severe_radar_exact_url_dedupe_preserves_evidence_but_selects_one_primary() {
+        // CLAIM: exact dedupe cannot delete or hide evidence rows; it only adds an
+        // auditable group and suppresses duplicate score selection.
+        // ORACLE: two source cards with the same canonical URL remain as radar
+        // items, exactly one is selected, the other is marked duplicate_url, and
+        // the dedupe group references both item ids.
+        // SEVERITY: Severe because digest dedupe is a classic place for fake
+        // "clean output" to destroy source inspectability.
+        let store = test_store("radar-exact-url-dedupe");
+        for input in [
+            SourceCardInput {
+                title: "Overlap agent launch from RSS".to_string(),
+                url: "https://example.com/overlap-agent-launch".to_string(),
+                source_type: "rss".to_string(),
+                provider: "rss".to_string(),
+                summary: "RSS reports an overlap agent launch for MCP workflows.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-23T00:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "rss", "source_detail": "https://example.com/feed.xml" }),
+            },
+            SourceCardInput {
+                title: "Overlap agent launch from GitHub".to_string(),
+                url: "https://example.com/overlap-agent-launch".to_string(),
+                source_type: "github_release".to_string(),
+                provider: "github".to_string(),
+                summary: "GitHub release mirror for the same overlap agent launch.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-23T00:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "github_release", "source_detail": "example/overlap" }),
+            },
+        ] {
+            store.add_source_card(input).unwrap();
+        }
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "exact-dedupe-radar".to_string(),
+                description: "Exact URL dedupe radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "overlap" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let report = store.run_radar_profile(&profile.id, None).unwrap();
+        assert_eq!(report.items_inserted, 2);
+        assert_eq!(report.scores_inserted, 2);
+        assert_eq!(report.selected_items, 1);
+        assert_eq!(report.run.filtered_count, 1);
+
+        let stage = store.read_radar_stage(&report.run.id).unwrap();
+        assert_eq!(stage.items.len(), 2);
+        assert_eq!(stage.scores.len(), 2);
+        assert_eq!(stage.dedup_groups.len(), 1);
+        let group = &stage.dedup_groups[0];
+        assert_eq!(group.dedup_kind, "canonical_url");
+        assert_eq!(group.confidence, 1.0);
+        assert_eq!(group.member_item_ids.len(), 2);
+        let item_ids = stage
+            .items
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<BTreeSet<_>>();
+        assert!(group.member_item_ids.iter().all(|id| item_ids.contains(id)));
+        assert!(group.member_item_ids.contains(&group.primary_item_id));
+
+        let statuses = stage
+            .scores
+            .iter()
+            .map(|score| score.status.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(statuses.contains("selected"));
+        assert!(statuses.contains("duplicate_url"));
+        let duplicate = stage
+            .scores
+            .iter()
+            .find(|score| score.status == "duplicate_url")
+            .unwrap();
+        assert!(duplicate.tags.contains(&"duplicate".to_string()));
+        assert!(
+            duplicate
+                .reason
+                .contains("duplicate suppressed by dedupe group")
+        );
+
+        let audit = store.audit_radar_run(&report.run.id).unwrap();
+        assert!(audit.ok, "{audit:?}");
+        assert_eq!(audit.dedup_group_count, 1);
+    }
+
+    #[test]
+    fn severe_radar_audit_rejects_corrupt_dedupe_groups() {
+        // CLAIM: an apparently scored run is not healthy when its dedupe ledger
+        // references missing members or omits the primary from the member list.
+        // ORACLE: direct SQLite corruption produces high-severity audit findings.
+        // SEVERITY: Severe because a dedupe table without referential audit could
+        // create another mirage of provenance.
+        let store = test_store("radar-corrupt-dedupe-audit");
+        store
+            .add_source_card(SourceCardInput {
+                title: "Audit dedupe agent launch".to_string(),
+                url: "https://example.com/audit-dedupe-agent-launch".to_string(),
+                source_type: "web".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Agent launch exists so the radar run has one real item.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-23T00:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "manual" }),
+            })
+            .unwrap();
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "corrupt-dedupe-radar".to_string(),
+                description: "Corrupt dedupe audit radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "audit dedupe" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+        let report = store.run_radar_profile(&profile.id, None).unwrap();
+        let item_id = store.list_radar_items(&report.run.id).unwrap()[0]
+            .id
+            .clone();
+        store
+            .conn
+            .execute(
+                r#"
+                INSERT INTO radar_dedup_groups
+                  (id, run_id, dedup_kind, primary_item_id, member_item_ids_json,
+                   reason, confidence, created_at)
+                VALUES (?1, ?2, 'canonical_url', ?3, ?4, 'corrupt test group', 1.0, ?5)
+                "#,
+                params![
+                    Uuid::new_v4().to_string(),
+                    report.run.id,
+                    item_id,
+                    serde_json::to_string(&vec!["missing-radar-item".to_string()]).unwrap(),
+                    now()
+                ],
+            )
+            .unwrap();
+
+        let audit = store.audit_radar_run(&report.run.id).unwrap();
+        assert!(!audit.ok);
+        assert_eq!(audit.dedup_group_count, 1);
+        assert!(audit.findings.iter().any(|finding| {
+            finding.code == "radar_dedup_group_too_small" && finding.severity == "high"
+        }));
+        assert!(audit.findings.iter().any(|finding| {
+            finding.code == "radar_dedup_primary_missing_from_group" && finding.severity == "high"
+        }));
+        assert!(audit.findings.iter().any(|finding| {
+            finding.code == "radar_dedup_missing_member" && finding.severity == "high"
+        }));
     }
 
     #[test]
@@ -44531,6 +45079,56 @@ reason = "network blocked for resident poll test"
             .import_x_archive(&archive_path, &["tweets".to_string()], 100)
             .expect_err("compressed archive bomb must fail");
         assert!(error.to_string().contains("X archive member is too large"));
+        let stats = store.x_stats().unwrap();
+        assert_eq!(stats.compatibility.x_items, 0);
+        assert_eq!(stats.canonical.tweets, 0);
+        assert_eq!(stats.canonical.projections, 0);
+        assert_eq!(stats.canonical.sync_runs, 1);
+        assert_eq!(stats.latest_sync_runs[0].stream, "import_archive");
+        assert_eq!(stats.latest_sync_runs[0].status, "failed");
+    }
+
+    #[test]
+    fn severe_x_import_archive_rejects_nested_archive_before_rows() {
+        // CLAIM: archive import never recursively expands nested archives or treats
+        // nested archive bytes as a selected slice.
+        // PRECONDITIONS: ZIP contains a valid selected tweet member followed by a
+        // nested selected-looking tweets.zip member.
+        // POSTCONDITIONS: import fails with an explicit nested-archive error and no
+        // compatibility, canonical, or projection rows survive from the earlier member.
+        // SEVERITY: Severe because recursive archive handling is unimplemented and
+        // pretending otherwise creates hidden parsing and resource-exhaustion risk.
+        let store = test_store("x-archive-nested-archive");
+        let archive_path =
+            std::env::temp_dir().join(format!("arcwell-x-archive-nested-{}.zip", Uuid::new_v4()));
+        {
+            let file = fs::File::create(&archive_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("data/tweets.js", options).unwrap();
+            zip.write_all(
+                br#"window.YTD.tweets.part0 = [{
+                  "tweet": {
+                    "id_str": "nested-previous-row",
+                    "full_text": "This earlier row must not survive a nested archive."
+                  }
+                }]"#,
+            )
+            .unwrap();
+            zip.start_file("data/tweets.zip", options).unwrap();
+            zip.write_all(b"PK\x03\x04not actually expanded").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let error = store
+            .import_x_archive(&archive_path, &["tweets".to_string()], 100)
+            .expect_err("nested archive member must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("nested X archive members are not supported"),
+            "{error}"
+        );
         let stats = store.x_stats().unwrap();
         assert_eq!(stats.compatibility.x_items, 0);
         assert_eq!(stats.canonical.tweets, 0);

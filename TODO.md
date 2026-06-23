@@ -191,8 +191,8 @@ PR, implementation note, or final report:
       work is old/new archive fixture corpus breadth, account identity conflict
       failure, and broader selected-slice preservation. Current tests also prove
       reimport idempotency for the local tweet archive path, fail malformed
-      selected slices before writes, and reject compressed archive bombs before
-      earlier rows survive.
+      selected slices before writes, and reject compressed archive bombs plus
+      nested archives before earlier rows survive.
 - [ ] Add X archive apply coverage for authored tweets, note tweets, profiles,
       followers, following, media metadata, malformed slices, selected imports
       preserving unselected state, and explicit proof that no secret values are
@@ -301,10 +301,14 @@ PR, implementation note, or final report:
 - [ ] Extend radar from projection over existing source cards into radar-owned
       live RSS, GitHub, arXiv, and X adapter execution with source-health/cursor
       safety and copied/disposable-home production-data proof.
-- [ ] Add radar exact/semantic dedupe, score freshness, source-quality windows,
-      category/source balancing, summaries, delivery attempts, ops UI visibility,
-      slash prompts, and MCP docs/status promotion only after real-data gates
-      pass.
+- [x] Add radar exact URL/source-native dedupe groups with preserved source
+      evidence, duplicate score statuses, audit drift checks, schema-migration
+      coverage, severe local tests, and copied-home production-data proof over
+      2,500 real source cards.
+- [ ] Add radar semantic dedupe, score freshness, source-quality windows,
+      category/source balancing, summaries, delivery attempts, ops UI
+      visibility, slash prompts, and MCP docs/status promotion only after
+      real-data gates pass.
 - [ ] Preserve tracked email defaults as `agent@example.com` and
       `user@example.com`; keep real local agent/author addresses only in ignored
       env or secret config.

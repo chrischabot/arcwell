@@ -5440,7 +5440,7 @@ Evidence required for storage requirements:
 - [ ] RX-IMP-008: archive parser never executes JavaScript wrapper files.
 - [ ] RX-IMP-009: archive parser rejects path traversal.
 - [x] RX-IMP-010: archive parser rejects decompression bombs.
-- [ ] RX-IMP-011: archive parser rejects nested archive recursion.
+- [x] RX-IMP-011: archive parser rejects nested archive recursion.
 - [ ] RX-IMP-012: archive selected-slice import preserves unselected state.
 - [ ] RX-IMP-013: archive import is idempotent.
 - [ ] RX-IMP-014: archive import reports malformed selected slices precisely.
@@ -5744,7 +5744,7 @@ implementation it should catch.
 - [ ] `severe_x_archive_rejects_symlink_entry`
       - Refutes: symlink escape via archive.
       - Oracle: failure before write.
-- [ ] `severe_x_archive_rejects_nested_archive`
+- [x] `severe_x_import_archive_rejects_nested_archive_before_rows`
       - Refutes: recursive archive expansion.
       - Oracle: nested entry skipped/rejected by documented rule.
 - [x] `severe_x_import_archive_rejects_compressed_bomb_before_rows`
