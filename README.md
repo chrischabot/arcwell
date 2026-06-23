@@ -159,18 +159,20 @@ Current scoring is intentionally transparent and simple. Rich clustering and mod
 
 The radar package is the Horizon-inspired staged digest substrate. It can create
 validated profiles, run local radar passes over existing source cards and
-source-card-backed RSS/GitHub/arXiv/X selectors, normalize source cards into
-`radar_items`, index them with FTS, apply transparent heuristic interestingness
-scores, record exact canonical-URL/source-native dedupe groups without deleting
-source evidence, write deterministic Markdown summaries over selected scored
-items, read run stages and summaries, rebuild radar FTS, and audit for drift,
-missing provenance, unscored rows, corrupt dedupe groups, empty output, and
-unsupported selectors.
+source-card-backed RSS/GitHub/arXiv/X selectors, optionally invoke existing
+RSS/GitHub/arXiv adapters with `--fetch-live` before projection, normalize
+source cards into `radar_items`, index them with FTS, apply transparent
+heuristic interestingness scores, record exact canonical-URL/source-native
+dedupe groups without deleting source evidence, write deterministic Markdown
+summaries over selected scored items, read run stages and summaries, rebuild
+radar FTS, and audit for drift, failed live adapters, missing provenance,
+unscored rows, corrupt dedupe groups, empty output, and unsupported selectors.
 
-This is copied-home production-data proof over existing Arcwell source-card
-outputs. Radar-owned live RSS/GitHub/arXiv/X fetching, HN, Reddit, semantic
-dedupe, enrichment/model-backed synthesis, delivery, and scheduled operation
-remain future work.
+This has copied/disposable-home production-data proof for existing Arcwell
+source-card outputs and foreground live RSS/GitHub/arXiv adapter execution with
+source-health/cursor state. X live fetching, HN, Reddit, semantic dedupe,
+enrichment/model-backed synthesis, delivery, and scheduled operation remain
+future work.
 
 ### Worker And Ops
 
@@ -363,6 +365,7 @@ arcwell research skeptic <run-id>
 arcwell research report <run-id> "coverage satisfied or limit reached"
 arcwell radar profile create ai-infra --source-card-query agent --min-score 3
 arcwell radar run ai-infra
+arcwell radar run ai-infra --fetch-live
 arcwell radar stage <run-id>
 arcwell radar audit <run-id>
 arcwell project status-sync-record <project-id> active "Fresh Codex thread summary" --host codex --thread-id <thread-id>

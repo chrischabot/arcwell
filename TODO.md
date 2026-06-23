@@ -306,9 +306,12 @@ PR, implementation note, or final report:
 - [x] Extend radar projection from local source-card query into existing
       RSS/GitHub/arXiv/X source-card families with copied-home production-data
       proof and unsupported-selector audit visibility.
-- [ ] Extend radar from projection over existing source cards into radar-owned
-      live RSS, GitHub, arXiv, and X adapter execution with source-health/cursor
-      safety and copied/disposable-home production-data proof.
+- [x] Extend radar from projection over existing source cards into opt-in
+      foreground live RSS, GitHub, and arXiv adapter execution with
+      source-health/cursor safety, CLI/MCP/slash surfaces, severe failure tests,
+      and disposable-home production-data proof.
+- [ ] Extend radar live execution to authenticated X watch/recent-search data
+      with copied/disposable-home source-health/cursor proof before promotion.
 - [x] Add radar exact URL/source-native dedupe groups with preserved source
       evidence, duplicate score statuses, audit drift checks, schema-migration
       coverage, severe local tests, and copied-home production-data proof over

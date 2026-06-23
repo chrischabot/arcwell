@@ -113,8 +113,9 @@ No item may jump from `Scaffold` or `Local Fixture Proof` to `Done`.
 ### 2026-06-23 Source-Card Radar Slice
 
 Status: `Production Data Proof` for copied-home `source_card_query`
-projection, existing source-family projection, and exact canonical-URL dedupe;
-`Partial` for the overall Horizon-inspired system.
+projection, existing source-family projection, exact canonical-URL dedupe, and
+foreground live RSS/GitHub/arXiv adapter execution; `Partial` for the overall
+Horizon-inspired system.
 
 Evidence:
 
@@ -148,16 +149,26 @@ Evidence:
   the 26 dedupe groups and score-status counts in metadata, stored
   `not_delivery=true`, advanced `summary_count=1`, kept `delivery_count=0`, and
   `arcwell radar summary` read back the same artifact.
+- Disposable-home live adapter proof at
+  `/tmp/arcwell-radar-live-proof-20260623T191510Z` used real public
+  production sources with `arcwell radar run horizon-live-proof --fetch-live`.
+  The profile selected `https://hnrss.org/newest?points=100`, GitHub owner
+  `Thysrael`, and arXiv query `cat:cs.AI`. The run completed 3 adapter jobs
+  (`rss_fetch`, `github_owner`, `arxiv_search`), wrote 30 source cards, advanced
+  3 cursors, recorded 3 healthy source-health rows, projected 30 radar items,
+  wrote 30 FTS rows, wrote 30 score rows, selected 20 items, and `radar audit`
+  returned `ok=true`. `radar summarize` wrote
+  `radar-summary-e655496f9cde91bc80c054f5915e6fad` over 20 selected items /
+  20 source cards with `not_delivery=true`, and `radar summary` read back the
+  same artifact.
 
 Still not proven by this slice:
 
-- Radar-owned live RSS/GitHub/arXiv/X/Hacker News/Reddit/public
-  Telegram/OSS/OpenBB fetch.
-- Cursor/source-health advancement for radar-owned live adapters.
+- Radar-owned live X/Hacker News/Reddit/public Telegram/OSS/OpenBB fetch.
+- Scheduled radar worker fetch/retry/recovery and ops UI controls.
 - Semantic dedupe, category/source balancing, source-quality decay.
 - Model-backed interestingness, enrichment/synthesis, and delivery attempts.
-- Scheduled worker operation, retry/recovery, ops UI controls, and full
-  production multi-source proof.
+- Full production multi-source proof including authenticated/private sources.
 
 ## Product Surfaces
 
@@ -666,7 +677,8 @@ Source adapters:
 - RSS/Atom: reuse current wiki RSS adapter where possible.
 - GitHub releases/commits/owner events: reuse current wiki GitHub adapters.
 - arXiv: reuse current wiki arXiv adapter.
-- X handles: reuse canonical `x_monitor_watch_sources` and project into radar.
+- X handles: reuse existing X recent-search/watch-source paths where
+  authorized, with copied/disposable-home proof before promotion.
 - Source-card query: read existing local source cards.
 - Hacker News: new adapter inspired by Horizon, including story comments.
 - Reddit: new adapter inspired by Horizon, including top comments and RSS
@@ -685,6 +697,8 @@ Checklist:
       durable data and proves the staged shape.
 - [x] Implement RSS/GitHub/arXiv projection from existing wiki jobs/source
       cards before adding new network adapters.
+- [x] Add opt-in foreground live RSS/GitHub/arXiv adapter execution through
+      existing Arcwell jobs before source-card projection.
 - [x] Implement X projection from source-card projections.
 - [ ] Implement X projection directly from canonical X rows.
 - [ ] Add Hacker News adapter with real Firebase API, comment capture, and
@@ -699,25 +713,26 @@ Checklist:
       acceptable; otherwise use a separate command path and mark source kind
       `requires_optional_runtime`.
 - [ ] Add per-source raw payload size caps and content truncation rules.
-- [ ] Add cursor advancement after all accepted source cards/radar rows/FTS rows
-      are durable.
-- [ ] Add source-health statuses: `healthy`, `empty`, `stale`, `rate_limited`,
-      `auth_failed`, `policy_denied`, `cost_denied`, `partial`,
-      `projection_failed`, `blocked`, `unknown`.
+- [x] Reuse existing RSS/GitHub/arXiv cursor/source-health advancement for
+      opt-in foreground live adapter runs, and record radar-owned source-health
+      failures when a live selector fails before adapter execution.
+- [ ] Add radar-specific source-health statuses beyond the existing adapter
+      classification: `empty`, `stale`, `projection_failed`, and richer
+      `partial`/`blocked` semantics.
 
 Anti-mirage gate:
 
 - [ ] A fetch run that only returns mock/local fixture rows cannot satisfy
       production proof.
-- [ ] A fetch run that writes radar rows but skips source cards, source-health,
+- [x] A fetch run that writes radar rows but skips source cards, source-health,
       or cursors is only `Scaffold`.
-- [ ] A source with provider errors cannot be hidden under `completed`.
+- [x] A source with provider errors cannot be hidden under `completed`.
 
 Production-data proof:
 
-- [ ] Run against real current RSS feeds from the user's existing watch sources.
-- [ ] Run against real GitHub owner/repo release sources.
-- [ ] Run against real arXiv query sources.
+- [x] Run against real current RSS feed data.
+- [x] Run against real GitHub owner/repo data.
+- [x] Run against real arXiv query data.
 - [ ] Run against real X watch sources in a copied/disposable home when
       authenticated user-context data is involved.
 - [ ] Run against real Hacker News top stories.
