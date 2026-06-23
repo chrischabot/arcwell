@@ -100,18 +100,35 @@ async function runCommand(command, args, timeoutMs, input = null) {
     const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    let terminateTimer = null;
+    let killTimer = null;
+    function finish(result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(terminateTimer);
+      clearTimeout(killTimer);
+      resolve(result);
+    }
     const timer = setTimeout(() => {
-      child.kill("SIGINT");
+      timedOut = true;
+      child.kill("SIGTERM");
+      terminateTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+      }, 500);
+      killTimer = setTimeout(() => {
+        finish({ ok: false, stdout, stderr, code: null, timedOut });
+      }, 1500);
     }, timeoutMs);
     child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
     child.on("error", (error) => {
-      clearTimeout(timer);
-      resolve({ ok: false, stdout, stderr: error.message });
+      finish({ ok: false, stdout, stderr: error.message, timedOut });
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ ok: code === 0 || code === null || code === 130, stdout, stderr, code });
+      finish({ ok: !timedOut && (code === 0 || code === null || code === 130), stdout, stderr, code, timedOut });
     });
     if (input == null) child.stdin.end();
     else child.stdin.end(input);
@@ -984,6 +1001,7 @@ export {
   postText,
   power,
   resolveAgainst,
+  runCommand,
   soapEnvelope,
   sources,
   spotifyInfo,

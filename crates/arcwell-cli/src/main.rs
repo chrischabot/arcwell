@@ -1,10 +1,12 @@
 use anyhow::{Context, Result, bail};
 use arcwell_core::{
     AppPaths, DoctorOptions, ImportRunFinish, OpsSnapshot, PolicyRequest, ProcedureCandidateInput,
-    ResearchArtifactInput, ResearchDocumentInput, ResearchEditorialInvokeInput,
+    ResearchActiveFactCheckInput, ResearchArtifactInput, ResearchConvergenceCloseLoopInput,
+    ResearchConvergenceProviderSearchInput, ResearchConvergenceStartInput,
+    ResearchConvergenceStepInput, ResearchDocumentInput, ResearchEditorialInvokeInput,
     ResearchEditorialRunInput, ResearchHostSearchInput, ResearchHostSearchResultInput,
     ResearchRoleRunStart, ResearchSourceInput, SourceCardInput, Store, WebSearchConfig,
-    personal_memory_eval_corpus,
+    XStatsReport, personal_memory_eval_corpus,
 };
 use axum::{
     Json, Router,
@@ -1172,9 +1174,48 @@ const SLASH_COMMAND_ALIASES: &[(&str, SlashAliasTarget)] = &[
         "x-import-json",
         SlashAliasTarget::Cli(&["x", "import-json"]),
     ),
+    (
+        "x-import-archive",
+        SlashAliasTarget::Cli(&["x", "import-archive"]),
+    ),
+    (
+        "x-discover-archives",
+        SlashAliasTarget::Cli(&["x", "discover-archives"]),
+    ),
+    (
+        "x-export-portable",
+        SlashAliasTarget::Cli(&["x", "export-portable"]),
+    ),
+    (
+        "x-validate-portable",
+        SlashAliasTarget::Cli(&["x", "validate-portable"]),
+    ),
+    (
+        "x-import-portable",
+        SlashAliasTarget::Cli(&["x", "import-portable"]),
+    ),
+    (
+        "x-extract-links",
+        SlashAliasTarget::Cli(&["x", "extract-links"]),
+    ),
+    (
+        "x-expand-links",
+        SlashAliasTarget::Cli(&["x", "expand-links"]),
+    ),
+    ("x-links", SlashAliasTarget::Cli(&["x", "links"])),
     ("x-list", SlashAliasTarget::Cli(&["x", "list"])),
     ("x-report", SlashAliasTarget::Cli(&["x", "report"])),
     ("x-search", SlashAliasTarget::Cli(&["x", "recent-search"])),
+    (
+        "x-search-tweets",
+        SlashAliasTarget::Cli(&["x", "search-tweets"]),
+    ),
+    ("x-thread", SlashAliasTarget::Cli(&["x", "thread"])),
+    (
+        "x-repair-projections",
+        SlashAliasTarget::Cli(&["x", "repair-projections"]),
+    ),
+    ("x-stats", SlashAliasTarget::Cli(&["x", "stats"])),
     (
         "x-watch-rebuild",
         SlashAliasTarget::Cli(&["x", "rebuild-definitive-watch-sources"]),
@@ -1601,6 +1642,7 @@ struct ResearchCommand {
 
 #[derive(Subcommand)]
 enum ResearchSubcommand {
+    Capabilities,
     Run {
         query: String,
     },
@@ -1688,6 +1730,80 @@ enum ResearchSubcommand {
         saturation_reason: String,
         #[arg(long)]
         no_write: bool,
+    },
+    Converge(ResearchConvergenceArgs),
+    ConvergeStep(ResearchConvergenceArgs),
+    ConvergeEnqueue(ResearchConvergenceArgs),
+    ConvergenceStatus {
+        run_id: String,
+    },
+    Iterations {
+        run_id: String,
+    },
+    IterationRead {
+        id: String,
+    },
+    Statements {
+        run_id: String,
+    },
+    Challenges {
+        run_id: String,
+    },
+    ConvergenceHostSearchTasks {
+        run_id: String,
+    },
+    ConvergenceProviderSearch {
+        run_id: String,
+        #[arg(long, default_value = "brave")]
+        provider: String,
+        #[arg(long)]
+        max_tasks: Option<usize>,
+        #[arg(long)]
+        max_results: Option<usize>,
+        #[arg(long)]
+        max_provider_calls: Option<usize>,
+        #[arg(long)]
+        enqueue_selected_url_ingest: bool,
+        #[arg(long)]
+        max_ingest_jobs: Option<usize>,
+        #[arg(long)]
+        cost_cap_usd: Option<f64>,
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long)]
+        api_key: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+    },
+    Disproofs {
+        run_id: String,
+    },
+    Revisions {
+        run_id: String,
+    },
+    FactChecks {
+        run_id: String,
+    },
+    ActiveFactCheck {
+        run_id: String,
+        #[arg(long)]
+        artifact_id: Option<String>,
+        #[arg(long)]
+        max_sentences: Option<usize>,
+        #[arg(long)]
+        no_challenges: bool,
+    },
+    ConvergenceCloseLoop(ResearchConvergenceCloseLoopArgs),
+    ConvergenceSnapshots {
+        run_id: String,
+    },
+    ConvergenceReport {
+        run_id: String,
+    },
+    ReportJudgments {
+        run_id: String,
     },
     Plan {
         query: String,
@@ -1871,6 +1987,194 @@ enum ResearchSubcommand {
         query: String,
     },
     Runs,
+}
+
+#[derive(Args, Clone)]
+struct ResearchConvergenceArgs {
+    run_id: String,
+    #[arg(long)]
+    max_iterations: Option<usize>,
+    #[arg(long)]
+    max_seconds: Option<i64>,
+    #[arg(long)]
+    max_sources: Option<usize>,
+    #[arg(long)]
+    max_provider_calls: Option<usize>,
+    #[arg(long)]
+    cost_cap_usd: Option<f64>,
+    #[arg(long)]
+    source_novelty_threshold: Option<f64>,
+    #[arg(long)]
+    confidence_delta_threshold: Option<f64>,
+    #[arg(long)]
+    no_progress_iteration_limit: Option<usize>,
+    #[arg(long)]
+    require_active_fact_check: Option<bool>,
+    #[arg(long)]
+    allow_long_run: Option<bool>,
+    #[arg(long)]
+    no_write: Option<bool>,
+    #[arg(long)]
+    editorial_provider: Option<String>,
+    #[arg(long)]
+    editorial_model_name: Option<String>,
+    #[arg(long)]
+    editorial_endpoint: Option<String>,
+    #[arg(long)]
+    editorial_timeout_seconds: Option<u64>,
+}
+
+fn research_convergence_step_input(args: ResearchConvergenceArgs) -> ResearchConvergenceStepInput {
+    ResearchConvergenceStepInput {
+        run_id: args.run_id,
+        max_iterations: args.max_iterations,
+        max_seconds: args.max_seconds,
+        max_sources: args.max_sources,
+        max_provider_calls: args.max_provider_calls,
+        cost_cap_usd: args.cost_cap_usd,
+        source_novelty_threshold: args.source_novelty_threshold,
+        confidence_delta_threshold: args.confidence_delta_threshold,
+        no_progress_iteration_limit: args.no_progress_iteration_limit,
+        require_active_fact_check: args.require_active_fact_check,
+        allow_long_run: args.allow_long_run,
+        no_write: args.no_write,
+        editorial_provider: args.editorial_provider,
+        editorial_model_name: args.editorial_model_name,
+        editorial_endpoint: args.editorial_endpoint,
+        editorial_timeout_seconds: args.editorial_timeout_seconds,
+    }
+}
+
+fn research_convergence_start_input(
+    args: ResearchConvergenceArgs,
+) -> ResearchConvergenceStartInput {
+    ResearchConvergenceStartInput {
+        run_id: args.run_id,
+        max_iterations: args.max_iterations,
+        max_seconds: args.max_seconds,
+        max_sources: args.max_sources,
+        max_provider_calls: args.max_provider_calls,
+        cost_cap_usd: args.cost_cap_usd,
+        source_novelty_threshold: args.source_novelty_threshold,
+        confidence_delta_threshold: args.confidence_delta_threshold,
+        no_progress_iteration_limit: args.no_progress_iteration_limit,
+        require_active_fact_check: args.require_active_fact_check,
+        allow_long_run: args.allow_long_run,
+        no_write: args.no_write,
+        editorial_provider: args.editorial_provider,
+        editorial_model_name: args.editorial_model_name,
+        editorial_endpoint: args.editorial_endpoint,
+        editorial_timeout_seconds: args.editorial_timeout_seconds,
+    }
+}
+
+#[derive(Args, Clone)]
+struct ResearchConvergenceCloseLoopArgs {
+    run_id: String,
+    #[arg(long)]
+    artifact_id: Option<String>,
+    #[arg(long)]
+    max_sentences: Option<usize>,
+    #[arg(long)]
+    no_challenges: bool,
+    #[arg(long)]
+    no_compile_report_before_check: bool,
+    #[arg(long)]
+    no_rerun_after_check: bool,
+    #[arg(long)]
+    no_compile_final_report: bool,
+    #[arg(long)]
+    provider: Option<String>,
+    #[arg(long)]
+    provider_max_tasks: Option<usize>,
+    #[arg(long)]
+    provider_max_results: Option<usize>,
+    #[arg(long)]
+    provider_max_provider_calls: Option<usize>,
+    #[arg(long)]
+    enqueue_selected_url_ingest: bool,
+    #[arg(long)]
+    max_ingest_jobs: Option<usize>,
+    #[arg(long)]
+    provider_cost_cap_usd: Option<f64>,
+    #[arg(long)]
+    provider_endpoint: Option<String>,
+    #[arg(long)]
+    provider_api_key: Option<String>,
+    #[arg(long)]
+    provider_model: Option<String>,
+    #[arg(long)]
+    provider_timeout_seconds: Option<u64>,
+    #[arg(long)]
+    max_iterations: Option<usize>,
+    #[arg(long)]
+    max_seconds: Option<i64>,
+    #[arg(long)]
+    max_sources: Option<usize>,
+    #[arg(long)]
+    max_provider_calls: Option<usize>,
+    #[arg(long)]
+    cost_cap_usd: Option<f64>,
+    #[arg(long)]
+    source_novelty_threshold: Option<f64>,
+    #[arg(long)]
+    confidence_delta_threshold: Option<f64>,
+    #[arg(long)]
+    no_progress_iteration_limit: Option<usize>,
+    #[arg(long)]
+    require_active_fact_check: Option<bool>,
+    #[arg(long)]
+    allow_long_run: Option<bool>,
+    #[arg(long)]
+    no_write: Option<bool>,
+    #[arg(long)]
+    editorial_provider: Option<String>,
+    #[arg(long)]
+    editorial_model_name: Option<String>,
+    #[arg(long)]
+    editorial_endpoint: Option<String>,
+    #[arg(long)]
+    editorial_timeout_seconds: Option<u64>,
+}
+
+fn research_convergence_close_loop_input(
+    args: ResearchConvergenceCloseLoopArgs,
+) -> ResearchConvergenceCloseLoopInput {
+    ResearchConvergenceCloseLoopInput {
+        run_id: args.run_id,
+        artifact_id: args.artifact_id,
+        max_sentences: args.max_sentences,
+        create_challenges: Some(!args.no_challenges),
+        compile_report_before_check: Some(!args.no_compile_report_before_check),
+        rerun_after_check: Some(!args.no_rerun_after_check),
+        compile_final_report: Some(!args.no_compile_final_report),
+        provider: args.provider,
+        provider_max_tasks: args.provider_max_tasks,
+        provider_max_results: args.provider_max_results,
+        provider_max_provider_calls: args.provider_max_provider_calls,
+        enqueue_selected_url_ingest: Some(args.enqueue_selected_url_ingest),
+        max_ingest_jobs: args.max_ingest_jobs,
+        provider_cost_cap_usd: args.provider_cost_cap_usd,
+        provider_endpoint: args.provider_endpoint,
+        provider_api_key: args.provider_api_key,
+        provider_model: args.provider_model,
+        provider_timeout_seconds: args.provider_timeout_seconds,
+        max_iterations: args.max_iterations,
+        max_seconds: args.max_seconds,
+        max_sources: args.max_sources,
+        max_provider_calls: args.max_provider_calls,
+        cost_cap_usd: args.cost_cap_usd,
+        source_novelty_threshold: args.source_novelty_threshold,
+        confidence_delta_threshold: args.confidence_delta_threshold,
+        no_progress_iteration_limit: args.no_progress_iteration_limit,
+        require_active_fact_check: args.require_active_fact_check,
+        allow_long_run: args.allow_long_run,
+        no_write: args.no_write,
+        editorial_provider: args.editorial_provider,
+        editorial_model_name: args.editorial_model_name,
+        editorial_endpoint: args.editorial_endpoint,
+        editorial_timeout_seconds: args.editorial_timeout_seconds,
+    }
 }
 
 #[derive(Args)]
@@ -2291,6 +2595,29 @@ enum XSubcommand {
     ImportJson {
         path: PathBuf,
     },
+    DiscoverArchives {
+        #[arg(long = "dir")]
+        dirs: Vec<PathBuf>,
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+    ImportArchive {
+        path: PathBuf,
+        #[arg(long, value_delimiter = ',')]
+        select: Vec<String>,
+        #[arg(long, default_value_t = 10000)]
+        limit: usize,
+    },
+    ExportPortable {
+        #[arg(long)]
+        out: PathBuf,
+    },
+    ValidatePortable {
+        dir: PathBuf,
+    },
+    ImportPortable {
+        dir: PathBuf,
+    },
     RecentSearch {
         query: String,
         #[arg(long, default_value_t = 10)]
@@ -2365,6 +2692,36 @@ enum XSubcommand {
         #[arg(long, default_value_t = 25)]
         limit: usize,
     },
+    SearchTweets {
+        query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    Thread {
+        x_id: String,
+        #[arg(long, default_value_t = 50)]
+        max_depth: usize,
+    },
+    ExtractLinks {
+        #[arg(long, default_value_t = 1000)]
+        limit: usize,
+    },
+    ExpandLinks {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    Links {
+        #[arg(long)]
+        query: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    RebuildFts,
+    RepairProjections {
+        #[arg(long, default_value_t = 1000)]
+        limit: usize,
+    },
+    Stats,
     Report {
         #[arg(long)]
         query: Option<String>,
@@ -2729,6 +3086,7 @@ fn source_card(store: Store, args: SourceCardCommand) -> Result<()> {
 
 fn research(store: Store, args: ResearchCommand) -> Result<()> {
     match args.command {
+        ResearchSubcommand::Capabilities => print_json(&research_capabilities(store.paths())),
         ResearchSubcommand::Run { query } => print_json(&store.create_deep_research_run(&query)?),
         ResearchSubcommand::Status { run_id } => print_json(&store.research_run_status(&run_id)?),
         ResearchSubcommand::Read { run_id } => print_json(&store.read_research_run(&run_id)?),
@@ -2823,6 +3181,97 @@ fn research(store: Store, args: ResearchCommand) -> Result<()> {
             saturation_reason,
             no_write,
         } => print_json(&store.compile_research_report(&run_id, &saturation_reason, !no_write)?),
+        ResearchSubcommand::Converge(args) => print_json(
+            &store.run_research_convergence_to_stop(research_convergence_step_input(args))?,
+        ),
+        ResearchSubcommand::ConvergeStep(args) => {
+            print_json(&store.start_research_convergence(research_convergence_start_input(args))?)
+        }
+        ResearchSubcommand::ConvergeEnqueue(args) => print_json(
+            &store.enqueue_research_convergence_job(research_convergence_step_input(args))?,
+        ),
+        ResearchSubcommand::ConvergenceStatus { run_id } => {
+            print_json(&store.research_convergence_status(&run_id)?)
+        }
+        ResearchSubcommand::Iterations { run_id } => {
+            print_json(&store.list_research_iterations(&run_id)?)
+        }
+        ResearchSubcommand::IterationRead { id } => {
+            print_json(&store.read_research_iteration(&id)?)
+        }
+        ResearchSubcommand::Statements { run_id } => {
+            print_json(&store.list_research_statements(&run_id)?)
+        }
+        ResearchSubcommand::Challenges { run_id } => {
+            print_json(&store.list_research_challenges(&run_id)?)
+        }
+        ResearchSubcommand::ConvergenceHostSearchTasks { run_id } => {
+            print_json(&store.list_research_convergence_host_search_tasks(&run_id)?)
+        }
+        ResearchSubcommand::ConvergenceProviderSearch {
+            run_id,
+            provider,
+            max_tasks,
+            max_results,
+            max_provider_calls,
+            enqueue_selected_url_ingest,
+            max_ingest_jobs,
+            cost_cap_usd,
+            endpoint,
+            api_key,
+            model,
+            timeout_seconds,
+        } => print_json(&store.run_research_convergence_provider_search(
+            ResearchConvergenceProviderSearchInput {
+                run_id,
+                provider,
+                max_tasks,
+                max_results,
+                max_provider_calls,
+                enqueue_selected_url_ingest: Some(enqueue_selected_url_ingest),
+                max_ingest_jobs,
+                cost_cap_usd,
+                endpoint,
+                api_key,
+                model,
+                timeout_seconds,
+            },
+        )?),
+        ResearchSubcommand::Disproofs { run_id } => {
+            print_json(&store.list_research_disproofs(&run_id)?)
+        }
+        ResearchSubcommand::Revisions { run_id } => {
+            print_json(&store.list_research_revisions(&run_id)?)
+        }
+        ResearchSubcommand::FactChecks { run_id } => {
+            print_json(&store.list_research_fact_checks(&run_id)?)
+        }
+        ResearchSubcommand::ActiveFactCheck {
+            run_id,
+            artifact_id,
+            max_sentences,
+            no_challenges,
+        } => print_json(
+            &store.run_research_active_fact_check(ResearchActiveFactCheckInput {
+                run_id,
+                artifact_id,
+                max_sentences,
+                create_challenges: Some(!no_challenges),
+            })?,
+        ),
+        ResearchSubcommand::ConvergenceCloseLoop(args) => print_json(
+            &store
+                .run_research_convergence_close_loop(research_convergence_close_loop_input(args))?,
+        ),
+        ResearchSubcommand::ConvergenceSnapshots { run_id } => {
+            print_json(&store.list_research_convergence_snapshots(&run_id)?)
+        }
+        ResearchSubcommand::ConvergenceReport { run_id } => {
+            print_json(&store.compile_research_convergence_report(&run_id)?)
+        }
+        ResearchSubcommand::ReportJudgments { run_id } => {
+            print_json(&store.list_research_report_judgments(&run_id)?)
+        }
         ResearchSubcommand::Plan { query, max_sources } => {
             print_json(&store.create_research_plan(&query, max_sources)?)
         }
@@ -3045,6 +3494,17 @@ fn research(store: Store, args: ResearchCommand) -> Result<()> {
 fn x_command(store: Store, args: XCommand) -> Result<()> {
     match args.command {
         XSubcommand::ImportJson { path } => print_json(&store.import_x_json_file(&path)?),
+        XSubcommand::DiscoverArchives { dirs, limit } => {
+            print_json(&store.discover_x_archives(&dirs, limit)?)
+        }
+        XSubcommand::ImportArchive {
+            path,
+            select,
+            limit,
+        } => print_json(&store.import_x_archive(&path, &select, limit)?),
+        XSubcommand::ExportPortable { out } => print_json(&store.export_x_portable(&out)?),
+        XSubcommand::ValidatePortable { dir } => print_json(&store.validate_x_portable(&dir)?),
+        XSubcommand::ImportPortable { dir } => print_json(&store.import_x_portable(&dir)?),
         XSubcommand::RecentSearch { query, max_results } => {
             print_json(&store.x_recent_search(&query, max_results)?)
         }
@@ -3107,6 +3567,16 @@ fn x_command(store: Store, args: XCommand) -> Result<()> {
             Some("bookmark"),
             Some(limit),
         )?),
+        XSubcommand::SearchTweets { query, limit } => {
+            print_json(&store.search_x_tweets(&query, limit)?)
+        }
+        XSubcommand::Thread { x_id, max_depth } => print_json(&store.x_thread(&x_id, max_depth)?),
+        XSubcommand::ExtractLinks { limit } => print_json(&store.x_extract_links(limit)?),
+        XSubcommand::ExpandLinks { limit } => print_json(&store.x_expand_links(limit)?),
+        XSubcommand::Links { query, limit } => print_json(&store.x_links(query.as_deref(), limit)?),
+        XSubcommand::RebuildFts => print_json(&store.x_rebuild_fts()?),
+        XSubcommand::RepairProjections { limit } => print_json(&store.x_repair_projections(limit)?),
+        XSubcommand::Stats => print_json(&store.x_stats()?),
         XSubcommand::Report { query } => print_json(&store.x_report(query.as_deref())?),
     }
 }
@@ -5638,6 +6108,18 @@ fn ops_health_score(snapshot: &OpsSnapshot) -> OpsHealthScore {
         .iter()
         .filter(|attempt| !attempt.ok)
         .count() as i64;
+    let x_drift = snapshot.x_stats.drift.compatibility_without_canonical
+        + snapshot.x_stats.drift.canonical_without_compatibility
+        + snapshot.x_stats.drift.tweets_without_fts
+        + snapshot.x_stats.drift.fts_without_tweets
+        + snapshot.x_stats.drift.projection_failures
+        + snapshot.x_stats.drift.non_healthy_sources;
+    let x_failed_sync_runs = snapshot
+        .x_stats
+        .sync_runs_by_status
+        .get("failed")
+        .copied()
+        .unwrap_or(0);
     let mut issues = Vec::new();
     if !snapshot.health.ok {
         issues.push("base health report is failing".to_string());
@@ -5657,6 +6139,12 @@ fn ops_health_score(snapshot: &OpsSnapshot) -> OpsHealthScore {
     if failed_deliveries > 0 {
         issues.push(format!("{failed_deliveries} failed channel deliveries"));
     }
+    if x_drift > 0 {
+        issues.push(format!("{x_drift} X drift/source-health issue(s)"));
+    }
+    if x_failed_sync_runs > 0 {
+        issues.push(format!("{x_failed_sync_runs} failed X sync run(s)"));
+    }
     for warning in &snapshot.health.warnings {
         issues.push(warning.clone());
     }
@@ -5666,6 +6154,8 @@ fn ops_health_score(snapshot: &OpsSnapshot) -> OpsHealthScore {
         + (failed_sources * 5)
         + (bad_secrets * 6)
         + (failed_deliveries * 4)
+        + (x_drift * 6)
+        + (x_failed_sync_runs * 5)
         + if snapshot.health.ok { 0 } else { 12 };
     let score = (100 - penalty).clamp(0, 100);
     let label = if score >= 90 {
@@ -5763,6 +6253,15 @@ fn render_ops_summary(snapshot: &OpsSnapshot, score: &OpsHealthScore) -> String 
                     .iter()
                     .map(|secret| secret.status.as_str()),
             ),
+        ),
+        ("X drift", summarize_x_drift(&snapshot.x_stats)),
+        (
+            "X sync statuses",
+            summarize_count_map(&snapshot.x_stats.sync_runs_by_status),
+        ),
+        (
+            "X source statuses",
+            summarize_count_map(&snapshot.x_stats.source_health_by_status),
         ),
     ] {
         html.push_str(&format!(
@@ -6037,6 +6536,46 @@ fn summarize_counts<'a>(values: impl Iterator<Item = &'a str>) -> String {
         .join(", ")
 }
 
+fn summarize_count_map(counts: &BTreeMap<String, i64>) -> String {
+    let summary = counts
+        .iter()
+        .filter(|(_, count)| **count > 0)
+        .map(|(key, count)| format!("{key}:{count}"))
+        .collect::<Vec<_>>();
+    if summary.is_empty() {
+        "none".to_string()
+    } else {
+        summary.join(", ")
+    }
+}
+
+fn summarize_x_drift(stats: &XStatsReport) -> String {
+    let entries = [
+        (
+            "compat_missing_canonical",
+            stats.drift.compatibility_without_canonical,
+        ),
+        (
+            "canonical_missing_compat",
+            stats.drift.canonical_without_compatibility,
+        ),
+        ("tweets_missing_fts", stats.drift.tweets_without_fts),
+        ("fts_missing_tweets", stats.drift.fts_without_tweets),
+        ("projection_failures", stats.drift.projection_failures),
+        ("non_healthy_sources", stats.drift.non_healthy_sources),
+    ];
+    let summary = entries
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(label, count)| format!("{label}:{count}"))
+        .collect::<Vec<_>>();
+    if summary.is_empty() {
+        "ok".to_string()
+    } else {
+        summary.join(", ")
+    }
+}
+
 fn detail_link(kind: &str, id: &str, label: &str) -> String {
     format!(
         "<a href=\"/ops/ui?detail={}:{}\">{}</a>",
@@ -6258,9 +6797,147 @@ fn dispatch_mcp(paths: &AppPaths, method: &str, params: Value) -> Result<Value> 
     }
 }
 
+fn research_capabilities(paths: &AppPaths) -> Value {
+    let pdftotext_available = ProcessCommand::new("pdftotext").arg("-v").output().is_ok();
+    let binary_path = std::env::current_exe()
+        .ok()
+        .map(|path| path.display().to_string());
+    json!({
+        "schema_version": 3,
+        "binary_path": binary_path,
+        "arcwell_home": paths.home.display().to_string(),
+        "mode": "deep",
+        "host_native_search": {
+            "daemon_provider": "research_web_search provider=host is intentionally rejected",
+            "agent_flow": "Use the host search tool available in the Codex thread, then call research_host_search_record with structured result objects.",
+            "record_tool": "research_host_search_record",
+            "result_shape": {
+                "rank": "integer, required",
+                "title": "string, required",
+                "url": "string, required",
+                "snippet": "string, required",
+                "selected_for_ingest": "boolean, required",
+                "published_at": "string, optional",
+                "source_family_guess": "string, optional",
+                "provider_metadata": "object, optional"
+            }
+        },
+        "document_extraction": {
+            "tool": "research_document_extract",
+            "supported_media_types": [
+                "text/csv",
+                "text/tab-separated-values",
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/xlsx"
+            ],
+            "supported_extensions": ["csv", "tsv", "pdf", "xlsx", "xlsm"],
+            "pdftotext_available": pdftotext_available,
+            "pdf_table_precision": "heuristic layout tables with document anchors; corroborate critical cells",
+            "xlsx_formula_policy": "formulas are preserved as untrusted text and are not evaluated",
+            "anchor_outputs": ["document_id", "span_id", "table_id", "row_index", "column_index"]
+        },
+        "role_orchestration": {
+            "start_tool": "research_role_start",
+            "artifact_tool": "research_artifact_add",
+            "finish_tool": "research_role_finish",
+            "completed_requires_output_artifact_id": true,
+            "artifact_supports_role_run_id": true
+        },
+        "editorial": {
+            "tool": "research_editorial_invoke",
+            "providers": [
+                {
+                    "name": "mock",
+                    "configured": true,
+                    "network": false
+                },
+                {
+                    "name": "openai",
+                    "configured": std::env::var("OPENAI_API_KEY").ok().filter(|value| !value.trim().is_empty()).is_some(),
+                    "network": true,
+                    "default_endpoint": "https://api.openai.com/v1/responses",
+                    "default_model_env": "ARCWELL_RESEARCH_EDITORIAL_MODEL"
+                }
+            ],
+            "stages": [
+                "evidence_pack",
+                "editorial_drafter",
+                "citation_verifier",
+                "adversarial_evaluator",
+                "final_audit"
+            ],
+            "live_provider_boundary": "OpenAI invocation requires OPENAI_API_KEY or an explicit api_key plus policy and cost approval."
+        },
+        "iterated_epistemic_convergence": {
+            "start_tool": "research_convergence_start",
+            "step_tool": "research_convergence_step",
+            "run_to_stop_tool": "research_convergence_run",
+            "enqueue_tool": "research_convergence_enqueue",
+            "status_tool": "research_convergence_status",
+            "report_tool": "research_convergence_report_compile",
+            "close_loop_tool": "research_convergence_close_loop",
+            "ledgers": [
+                "research_iterations",
+                "research_statements",
+                "research_challenges",
+                "research_convergence_host_search_tasks",
+                "research_disproofs",
+                "research_revisions",
+                "research_fact_checks",
+                "research_active_fact_check",
+                "research_convergence_close_loop",
+                "research_convergence_snapshots",
+                "research_report_judgments"
+            ],
+            "host_search_task_tool": "research_convergence_host_search_tasks",
+            "provider_search_tool": "research_convergence_provider_search",
+            "active_fact_check_tool": "research_active_fact_check",
+            "close_loop_rule": "research_convergence_close_loop compiles/checks a report, creates active fact-check challenges, optionally runs provider fallback for pending search proof, reruns convergence, compiles a final judgment, and returns explicit blockers instead of hiding incomplete work.",
+            "default_stop_policy": "iterate until no critical/error challenge, moderate-or-strong refutation, or high-impact unknown fact-check remains and the no-progress threshold is met",
+            "host_search_challenge_rule": "A challenge search plan is answered only when a matching planned query has recorded host-search proof with selected linked research sources; unrecorded search intentions never count as evidence.",
+            "provider_search_challenge_rule": "When host-native search is unavailable or a worker needs unattended progress, research_convergence_provider_search runs brave/openai/perplexity through policy and cost gates, then records results as auditable search proof.",
+            "active_fact_check_rule": "research_active_fact_check extracts factual report sentences, verifies them against current source-backed statements, and creates citation-gap host-search challenges for unsupported high-impact sentences.",
+            "model_backed_editorial_eval": {
+                "enabled_by": "Set editorial_provider on research_convergence_run or research_convergence_enqueue.",
+                "providers": ["mock", "openai"],
+                "requires_max_provider_calls": 2,
+                "stages": ["citation_verifier", "adversarial_evaluator"],
+                "no_write_policy": "Rejected when no_write=true because the eval chain writes inspectable artifacts and editorial run records.",
+                "result_surface": "ResearchConvergenceStep.editorial plus model_backed_convergence_editorial scores in research_report_judgments."
+            },
+            "deterministic_boundary": "Current loop compiles, challenges, consumes matching recorded host-search proof, verifies, revises, fact-checks, snapshots, and judges persisted evidence deterministically; live host/model searches must be recorded as host-search/source artifacts before they count as evidence."
+        },
+        "agent_usability": {
+            "before_declaring_unavailable": "Run tool_search for the exact tool name and inspect this research_capabilities output.",
+            "known_required_tools": [
+                "research_run",
+                "research_capabilities",
+                "research_role_start",
+                "research_artifact_add",
+                "research_role_finish",
+                "research_host_search_record",
+                "research_document_extract",
+                "research_evidence_pack",
+                "research_editorial_invoke",
+                "research_convergence_start",
+                "research_convergence_step",
+                "research_convergence_run",
+                "research_convergence_enqueue",
+                "research_convergence_status",
+                "research_convergence_close_loop",
+                "research_convergence_report_compile",
+                "research_audit_run",
+                "research_report_compile"
+            ]
+        }
+    })
+}
+
 fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value> {
     let store = Store::open(paths.clone())?;
     match name {
+        "research_capabilities" => Ok(research_capabilities(paths)),
         "arcwell_health" => Ok(json!(store.health()?)),
         "profile_list" => Ok(json!(store.list_profile()?)),
         "profile_search" => {
@@ -6642,6 +7319,81 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 !no_write,
             )?))
         }
+        "research_convergence_start" => {
+            Ok(json!(store.start_research_convergence(
+                research_convergence_start_input_from_mcp(&arguments)?
+            )?))
+        }
+        "research_convergence_step" => Ok(json!(store.run_research_convergence_step(
+            research_convergence_step_input_from_mcp(&arguments)?
+        )?)),
+        "research_convergence_run" => Ok(json!(store.run_research_convergence_to_stop(
+            research_convergence_step_input_from_mcp(&arguments)?
+        )?)),
+        "research_convergence_enqueue" => Ok(json!(store.enqueue_research_convergence_job(
+            research_convergence_step_input_from_mcp(&arguments)?
+        )?)),
+        "research_convergence_status" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.research_convergence_status(&run_id)?))
+        }
+        "research_iterations" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_iterations(&run_id)?))
+        }
+        "research_iteration_read" => {
+            let id = required_string(&arguments, "id")?;
+            Ok(json!(store.read_research_iteration(&id)?))
+        }
+        "research_statements" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_statements(&run_id)?))
+        }
+        "research_challenges" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_challenges(&run_id)?))
+        }
+        "research_convergence_host_search_tasks" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(
+                store.list_research_convergence_host_search_tasks(&run_id)?
+            ))
+        }
+        "research_convergence_provider_search" => {
+            Ok(json!(store.run_research_convergence_provider_search(
+                research_convergence_provider_search_input_from_mcp(&arguments)?
+            )?))
+        }
+        "research_disproofs" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_disproofs(&run_id)?))
+        }
+        "research_revisions" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_revisions(&run_id)?))
+        }
+        "research_fact_checks" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_fact_checks(&run_id)?))
+        }
+        "research_active_fact_check" => Ok(json!(store.run_research_active_fact_check(
+            research_active_fact_check_input_from_mcp(&arguments)?
+        )?)),
+        "research_convergence_close_loop" => Ok(json!(store.run_research_convergence_close_loop(
+            research_convergence_close_loop_input_from_mcp(&arguments)?
+        )?)),
+        "research_convergence_snapshots" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_convergence_snapshots(&run_id)?))
+        }
+        "research_convergence_report_compile" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.compile_research_convergence_report(&run_id)?))
+        }
+        "research_report_judgments" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_research_report_judgments(&run_id)?))
+        }
         "research_web_search" => {
             let query = required_string(&arguments, "query")?;
             let provider = optional_string(&arguments, "provider", "host");
@@ -6742,6 +7494,13 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
             let artifact_type = required_string(&arguments, "artifact_type")?;
             let title = required_string(&arguments, "title")?;
             let body = required_string(&arguments, "body")?;
+            let metadata = match arguments.get("metadata_json").and_then(Value::as_str) {
+                Some(raw) => serde_json::from_str(raw).context("parsing metadata_json")?,
+                None => arguments
+                    .get("metadata")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            };
             Ok(json!(
                 store.record_research_artifact(ResearchArtifactInput {
                     run_id,
@@ -6752,10 +7511,7 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                     artifact_type,
                     title,
                     body,
-                    metadata: arguments
-                        .get("metadata")
-                        .cloned()
-                        .unwrap_or_else(|| json!({})),
+                    metadata,
                 })?
             ))
         }
@@ -7618,6 +8374,67 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
             let path = required_string(&arguments, "path")?;
             Ok(json!(store.import_x_json_file(&PathBuf::from(path))?))
         }
+        "x_import_archive" => {
+            let path = required_string(&arguments, "path")?;
+            let select = arguments
+                .get("select")
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(10_000);
+            Ok(json!(store.import_x_archive(
+                &PathBuf::from(path),
+                &select,
+                limit
+            )?))
+        }
+        "x_discover_archives" => {
+            let dirs = arguments
+                .get("dirs")
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(PathBuf::from)
+                        .collect::<Vec<_>>()
+                })
+                .or_else(|| {
+                    arguments
+                        .get("dir")
+                        .and_then(Value::as_str)
+                        .map(|dir| vec![PathBuf::from(dir)])
+                })
+                .unwrap_or_default();
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(25);
+            Ok(json!(store.discover_x_archives(&dirs, limit)?))
+        }
+        "x_export_portable" => {
+            let out = required_string(&arguments, "out")?;
+            Ok(json!(store.export_x_portable(&PathBuf::from(out))?))
+        }
+        "x_validate_portable" => {
+            let dir = required_string(&arguments, "dir")?;
+            Ok(json!(store.validate_x_portable(&PathBuf::from(dir))?))
+        }
+        "x_import_portable" => {
+            let dir = required_string(&arguments, "dir")?;
+            Ok(json!(store.import_x_portable(&PathBuf::from(dir))?))
+        }
         "x_recent_search" => {
             let query = required_string(&arguments, "query")?;
             let max_results = arguments
@@ -7749,6 +8566,58 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 limit
             )?))
         }
+        "x_search_tweets" => {
+            let query = required_string(&arguments, "query")?;
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(20);
+            Ok(json!(store.search_x_tweets(&query, limit)?))
+        }
+        "x_thread" => {
+            let x_id = required_string(&arguments, "x_id")?;
+            let max_depth = arguments
+                .get("max_depth")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(50);
+            Ok(json!(store.x_thread(&x_id, max_depth)?))
+        }
+        "x_extract_links" => {
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(1000);
+            Ok(json!(store.x_extract_links(limit)?))
+        }
+        "x_expand_links" => {
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(100);
+            Ok(json!(store.x_expand_links(limit)?))
+        }
+        "x_links" => {
+            let query = arguments.get("query").and_then(Value::as_str);
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(100);
+            Ok(json!(store.x_links(query, limit)?))
+        }
+        "x_repair_projections" => {
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(1000);
+            Ok(json!(store.x_repair_projections(limit)?))
+        }
+        "x_stats" => Ok(json!(store.x_stats()?)),
         "x_report" => {
             let query = arguments.get("query").and_then(Value::as_str);
             Ok(json!(store.x_report(query)?))
@@ -7970,6 +8839,11 @@ fn mcp_tools() -> Vec<Value> {
             [("id", "string", "Policy approval id.")],
         ),
         tool(
+            "research_capabilities",
+            "Read the agent-facing deep-research capability contract, including rich extraction support, host-search proof flow, role artifact requirements, and editorial provider boundaries.",
+            [],
+        ),
+        tool(
             "research_plan",
             "Create a research plan using local wiki context and suggested host-native searches.",
             [("query", "string", "Research question or topic.")],
@@ -8075,45 +8949,160 @@ fn mcp_tools() -> Vec<Value> {
                 ),
             ],
         ),
+        tool_with_schema(
+            "research_convergence_start",
+            "Start the iterated epistemic convergence loop with one inspectable iteration.",
+            research_convergence_tool_properties(),
+            &["run_id"],
+        ),
+        tool_with_schema(
+            "research_convergence_step",
+            "Run exactly one convergence iteration: compile statements, pressure-test, disprove, revise, fact-check, and snapshot.",
+            research_convergence_tool_properties(),
+            &["run_id"],
+        ),
+        tool_with_schema(
+            "research_convergence_run",
+            "Run convergence iterations until the configured stop rule settles or stops incomplete. Optional editorial_provider runs a model-backed citation/evaluator gate after terminal convergence.",
+            research_convergence_tool_properties(),
+            &["run_id"],
+        ),
+        tool_with_schema(
+            "research_convergence_enqueue",
+            "Queue a resumable worker-run convergence job for long-running research. Optional editorial_provider runs the model-backed citation/evaluator gate from the worker.",
+            research_convergence_tool_properties(),
+            &["run_id"],
+        ),
+        tool(
+            "research_convergence_status",
+            "Read current convergence status, latest snapshot, current statements, open challenges, and strong refutations.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_iterations",
+            "List convergence iterations for a research run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_iteration_read",
+            "Read one convergence iteration by id.",
+            [("id", "string", "Research iteration id.")],
+        ),
+        tool(
+            "research_statements",
+            "List convergence statements for a research run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_challenges",
+            "List red-team challenges generated for convergence statements.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_convergence_host_search_tasks",
+            "List exact host-native search tasks required by convergence challenges, with pending/recorded proof status.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool_with_schema(
+            "research_convergence_provider_search",
+            "Run policy/cost-gated provider search for pending convergence host-search tasks and record auditable proof.",
+            research_convergence_provider_search_tool_properties(),
+            &["run_id", "provider"],
+        ),
+        tool(
+            "research_disproofs",
+            "List verifier disproof records generated during convergence.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_revisions",
+            "List revisions applied because of convergence disproofs.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_fact_checks",
+            "List active fact-check records for convergence statements.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool_with_schema(
+            "research_active_fact_check",
+            "Extract factual sentences from a report artifact, verify them against current convergence statements, and create citation-gap challenges for unsupported high-impact sentences.",
+            research_active_fact_check_tool_properties(),
+            &["run_id"],
+        ),
+        tool_with_schema(
+            "research_convergence_close_loop",
+            "Compile/check a convergence report, run active fact-checking, optionally run provider fallback for pending citation-gap searches, rerun convergence, and return explicit closure blockers.",
+            research_convergence_close_loop_tool_properties(),
+            &["run_id"],
+        ),
+        tool(
+            "research_convergence_snapshots",
+            "List convergence snapshots and stop-rule metrics.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_convergence_report_compile",
+            "Compile an analyst-readable convergence report artifact plus report judgment.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "research_report_judgments",
+            "List final report judgments and blocking/non-blocking findings for a research run.",
+            [("run_id", "string", "Research run id.")],
+        ),
         tool(
             "research_tasks",
             "List daemon-tracked research tasks for a run.",
             [("run_id", "string", "Research run id.")],
         ),
-        tool(
+        tool_with_schema(
             "research_role_start",
-            "Record the start of a host or Codex subagent role execution for a deep research run.",
-            [
-                ("run_id", "string", "Research run id."),
-                ("role", "string", "Research role name."),
-            ],
+            "Record the start of a host or Codex subagent role execution for a deep research run. Optional host_thread_id/host_subagent_id/tool_surface fields make fresh in-app Codex orchestration auditable.",
+            json!({
+                "run_id": string_schema("Research run id."),
+                "role": string_schema("Research role name, such as research-scout, corpus-builder, source-extractor, skeptic, synthesizer, or auditor."),
+                "host": string_schema("Host runtime. Defaults to codex."),
+                "execution_mode": enum_schema("Execution mode. Defaults to host_sequential; use codex_subagent_live when a real Codex subagent is spawned.", &["host_sequential", "codex_subagent_live", "simulated_test"]),
+                "host_thread_id": string_schema("Optional host thread/session id for provenance."),
+                "host_subagent_id": string_schema("Optional host subagent id for provenance."),
+                "tool_surface": string_schema("Optional surface used by the role, such as mcp, cli, host-search, or codex-subagent."),
+                "prompt_version": string_schema("Prompt/instruction version. Defaults to v1."),
+                "prompt_hash": string_schema("Optional prompt hash when available."),
+                "input_artifact_ids": array_schema("Optional input artifact ids supplied to this role.", string_schema("Research artifact id."))
+            }),
+            &["run_id", "role"],
         ),
-        tool(
+        tool_with_schema(
             "research_role_finish",
-            "Record completion, rejection, cancellation, or failure of a research role execution.",
-            [
-                ("role_run_id", "string", "Research role run id."),
-                (
-                    "status",
-                    "string",
-                    "completed, failed, rejected, or cancelled.",
-                ),
-            ],
+            "Record completion, rejection, cancellation, or failure of a research role execution. IMPORTANT: status=completed requires output_artifact_id, and that artifact must be linked to the same role_run_id.",
+            json!({
+                "role_run_id": string_schema("Research role run id."),
+                "status": enum_schema("Role terminal status.", &["completed", "failed", "rejected", "cancelled"]),
+                "output_artifact_id": string_schema("Required when status=completed; must identify an artifact created with this role_run_id."),
+                "error_kind": string_schema("Failure/rejection category when status is failed, rejected, or cancelled."),
+                "error_message": string_schema("Redacted failure/rejection notes when status is failed, rejected, or cancelled.")
+            }),
+            &["role_run_id", "status"],
         ),
         tool(
             "research_role_runs",
             "List host/subagent role execution records for one deep research run.",
             [("run_id", "string", "Research run id.")],
         ),
-        tool(
+        tool_with_schema(
             "research_artifact_add",
-            "Record an auditable research artifact such as a source map, role output, rejected proposal, evidence pack, or synthesis draft.",
-            [
-                ("run_id", "string", "Research run id."),
-                ("artifact_type", "string", "Artifact type."),
-                ("title", "string", "Artifact title."),
-                ("body", "string", "Artifact body."),
-            ],
+            "Record an auditable research artifact such as a source map, role output, rejected proposal, evidence pack, or synthesis draft. Use role_run_id before research_role_finish so completed roles can point at their accepted output.",
+            json!({
+                "run_id": string_schema("Research run id."),
+                "artifact_type": string_schema("Artifact type, such as source_map, role_output, evidence_pack, synthesis_draft, evaluator_report, or rejected_proposal."),
+                "title": string_schema("Artifact title."),
+                "body": string_schema("Artifact body, normally Markdown or JSON text."),
+                "role_run_id": string_schema("Optional research role run id this artifact belongs to."),
+                "metadata": object_schema("Optional structured metadata object.", json!({}), &[]),
+                "metadata_json": string_schema("Optional metadata JSON string for CLI parity; metadata object is preferred.")
+            }),
+            &["run_id", "artifact_type", "title", "body"],
         ),
         tool(
             "research_artifacts",
@@ -8125,18 +9114,38 @@ fn mcp_tools() -> Vec<Value> {
             "Read one research artifact by id.",
             [("id", "string", "Research artifact id.")],
         ),
-        tool(
+        tool_with_schema(
             "research_host_search_record",
-            "Record auditable host-native search proof and link selected results into the research source ledger.",
-            [
-                ("run_id", "string", "Research run id."),
-                ("query", "string", "Host-native search query."),
-                (
-                    "results",
-                    "array",
-                    "Search results with rank, title, url, snippet, and selected_for_ingest.",
-                ),
-            ],
+            "Record auditable host-native search proof and link selected results into the research source ledger. Use after running Codex/web host search; results must be objects, not strings. Example result: {\"rank\":1,\"title\":\"Official docs\",\"url\":\"https://example.com\",\"snippet\":\"Relevant passage\",\"selected_for_ingest\":true,\"source_family_guess\":\"official-docs\"}.",
+            json!({
+                "run_id": string_schema("Research run id."),
+                "query": string_schema("Host-native search query."),
+                "host": string_schema("Host runtime. Defaults to codex."),
+                "tool_surface": string_schema("Host search surface. Defaults to host-native."),
+                "role_run_id": string_schema("Optional research role run id that performed the search."),
+                "query_intent": string_schema("Optional purpose of the search, such as source-discovery, contradiction-check, or freshness-check."),
+                "requested_recency": integer_schema("Optional requested recency window in days."),
+                "requested_domains": array_schema("Optional requested domain filters.", string_schema("Domain name.")),
+                "cost_decision_id": string_schema("Optional cost/policy decision id."),
+                "results": array_schema(
+                    "Structured host search results in ranked order.",
+                    object_schema(
+                        "One host search result.",
+                        json!({
+                            "rank": integer_schema("1-based rank from the host search result list."),
+                            "title": string_schema("Result title."),
+                            "url": string_schema("Result URL."),
+                            "snippet": string_schema("Search snippet or short host-provided summary."),
+                            "published_at": string_schema("Optional publication/update date when visible."),
+                            "source_family_guess": string_schema("Optional source family guess, such as official-docs, paper, company-blog, news, forum, or repository."),
+                            "provider_metadata": object_schema("Optional host/provider metadata. Do not include secrets.", json!({}), &[]),
+                            "selected_for_ingest": boolean_schema("Whether Arcwell should create/link a source-ledger candidate for this result.")
+                        }),
+                        &["rank", "title", "url", "snippet", "selected_for_ingest"]
+                    )
+                )
+            }),
+            &["run_id", "query", "results"],
         ),
         tool(
             "research_host_searches",
@@ -8148,13 +9157,17 @@ fn mcp_tools() -> Vec<Value> {
             "Read one host-native search proof record by id.",
             [("id", "string", "Host search id.")],
         ),
-        tool(
+        tool_with_schema(
             "research_document_extract",
-            "Extract a local CSV, TSV, PDF, or supported document into auditable research document/table/span artifacts.",
-            [
-                ("run_id", "string", "Research run id."),
-                ("path", "string", "Local document path."),
-            ],
+            "Extract a local CSV, TSV, XLSX/XLSM, or PDF into auditable document/table/span artifacts with byte hashes and anchors. PDF tables are layout heuristics unless manually corroborated; XLSX formulas are preserved as untrusted text and not evaluated.",
+            json!({
+                "run_id": string_schema("Research run id."),
+                "path": string_schema("Local document path."),
+                "media_type": string_schema("Optional media type override: text/csv, text/tab-separated-values, application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, or application/xlsx."),
+                "research_source_id": string_schema("Optional linked research source id."),
+                "source_card_id": string_schema("Optional linked source card id.")
+            }),
+            &["run_id", "path"],
         ),
         tool(
             "research_documents",
@@ -8171,34 +9184,39 @@ fn mcp_tools() -> Vec<Value> {
             "Build a deterministic evidence-pack artifact for model-backed editorial drafting and evaluation.",
             [("run_id", "string", "Research run id.")],
         ),
-        tool(
+        tool_with_schema(
             "research_editorial_invoke",
-            "Invoke a live or mock model-backed editorial/eval stage and record its inspectable output artifact.",
-            [
-                ("run_id", "string", "Research run id."),
-                (
-                    "stage",
-                    "string",
-                    "editorial_drafter, citation_verifier, adversarial_evaluator, final_audit, or evidence_pack.",
-                ),
-            ],
+            "Invoke a live OpenAI or mock model-backed editorial/eval stage and record its inspectable output artifact. Use mock for deterministic tests; OpenAI requires OPENAI_API_KEY or api_key plus policy and cost approval.",
+            json!({
+                "run_id": string_schema("Research run id."),
+                "stage": enum_schema("Editorial/eval stage.", &["evidence_pack", "editorial_drafter", "citation_verifier", "adversarial_evaluator", "final_audit"]),
+                "model_provider": enum_schema("Provider. Defaults to openai; use mock for deterministic local tests.", &["openai", "mock"]),
+                "model_name": string_schema("Optional model name. Defaults to ARCWELL_RESEARCH_EDITORIAL_MODEL or gpt-5.5 for OpenAI, mock-editorial for mock."),
+                "prompt_version": string_schema("Prompt version. Defaults to v1."),
+                "input_artifact_id": string_schema("Optional input artifact id. If omitted, Arcwell builds an evidence pack."),
+                "endpoint": string_schema("Optional OpenAI-compatible endpoint override."),
+                "api_key": string_schema("Optional API key for live provider invocation. Prefer environment/secret configuration."),
+                "timeout_seconds": integer_schema("Optional timeout, clamped by Arcwell.")
+            }),
+            &["run_id", "stage"],
         ),
-        tool(
+        tool_with_schema(
             "research_editorial_record",
-            "Record one model-backed editorial, citation-verifier, or adversarial-evaluator run.",
-            [
-                ("run_id", "string", "Research run id."),
-                (
-                    "stage",
-                    "string",
-                    "evidence_pack, editorial_drafter, citation_verifier, adversarial_evaluator, or final_audit.",
-                ),
-                (
-                    "model_name",
-                    "string",
-                    "Model name used for the editorial/eval stage.",
-                ),
-            ],
+            "Record one externally produced model-backed editorial, citation-verifier, or adversarial-evaluator run. Prefer research_editorial_invoke when Arcwell should call the provider itself.",
+            json!({
+                "run_id": string_schema("Research run id."),
+                "stage": enum_schema("Editorial/eval stage.", &["evidence_pack", "editorial_drafter", "citation_verifier", "adversarial_evaluator", "final_audit"]),
+                "model_provider": string_schema("Provider name. Defaults to openai."),
+                "model_name": string_schema("Model name used for the editorial/eval stage."),
+                "prompt_version": string_schema("Prompt version. Defaults to v1."),
+                "input_artifact_id": string_schema("Optional input artifact id."),
+                "output_artifact_id": string_schema("Optional output artifact id."),
+                "cost_decision_id": string_schema("Optional cost/policy decision id."),
+                "status": enum_schema("Editorial run status.", &["completed", "accepted", "failed", "rejected"]),
+                "score": object_schema("Optional structured score object.", json!({}), &[]),
+                "error_message": string_schema("Optional redacted failure/rejection message.")
+            }),
+            &["run_id", "stage", "model_name"],
         ),
         tool(
             "research_editorial_runs",
@@ -8714,6 +9732,50 @@ fn mcp_tools() -> Vec<Value> {
             [("path", "string", "Path to X JSON export/replay fixture.")],
         ),
         tool(
+            "x_import_archive",
+            "Import supported Twitter/X archive tweets, bookmarks, and likes from a local directory or zip without network access.",
+            [
+                (
+                    "path",
+                    "string",
+                    "Path to a Twitter/X archive directory or zip.",
+                ),
+                (
+                    "select",
+                    "array",
+                    "Optional selectors: tweets, bookmarks, likes, or all.",
+                ),
+                ("limit", "integer", "Maximum archive records to import."),
+            ],
+        ),
+        tool(
+            "x_discover_archives",
+            "Find likely local Twitter/X archive directories or zip files without importing or writing state.",
+            [
+                ("dirs", "array", "Optional directories or files to inspect."),
+                ("limit", "integer", "Maximum candidates to return."),
+            ],
+        ),
+        tool(
+            "x_export_portable",
+            "Export canonical local X data as deterministic portable JSONL shards with a hashed manifest and token-like value checks.",
+            [(
+                "out",
+                "string",
+                "Output directory for the portable X bundle.",
+            )],
+        ),
+        tool(
+            "x_validate_portable",
+            "Validate a portable X bundle manifest, shard hashes, JSONL rows, and token-like content before import.",
+            [("dir", "string", "Portable X bundle directory.")],
+        ),
+        tool(
+            "x_import_portable",
+            "Validate and import a portable X bundle into canonical local X storage.",
+            [("dir", "string", "Portable X bundle directory.")],
+        ),
+        tool(
             "x_recent_search",
             "Run live X recent search using X_BEARER_TOKEN from env or local SQLite secrets.",
             [("query", "string", "X search query.")],
@@ -8821,6 +9883,62 @@ fn mcp_tools() -> Vec<Value> {
                 ("limit", "integer", "Maximum items to return."),
             ],
         ),
+        tool(
+            "x_search_tweets",
+            "Search canonical local X tweet text, authors, and URLs with FTS.",
+            [
+                ("query", "string", "Search query."),
+                ("limit", "integer", "Maximum items to return."),
+            ],
+        ),
+        tool(
+            "x_thread",
+            "Expand a local-only X thread around a known tweet, with bounded depth, quote/retweet distinctions, missing-context labels, and cycle detection.",
+            [
+                ("x_id", "string", "Root X tweet id already present locally."),
+                (
+                    "max_depth",
+                    "integer",
+                    "Maximum local reference depth to follow.",
+                ),
+            ],
+        ),
+        tool(
+            "x_extract_links",
+            "Extract safe local URL occurrences from already-imported X tweets without fetching or expanding them.",
+            [("limit", "integer", "Maximum tweets to scan.")],
+        ),
+        tool(
+            "x_expand_links",
+            "Fetch and ingest indexed X link URLs through the explicit URL-ingest safety path, with policy/cost gates and expansion status rows.",
+            [("limit", "integer", "Maximum indexed links to expand.")],
+        ),
+        tool(
+            "x_links",
+            "List locally indexed X URL occurrences.",
+            [
+                (
+                    "query",
+                    "string",
+                    "Optional URL, display URL, or tweet id filter.",
+                ),
+                ("limit", "integer", "Maximum link occurrences to return."),
+            ],
+        ),
+        tool(
+            "x_stats",
+            "Inspect canonical X counts, compatibility drift, FTS drift, projections, sync runs, source health, and watch-source status.",
+            [],
+        ),
+        tool(
+            "x_repair_projections",
+            "Repair missing or failed canonical X tweet source-card/wiki projections idempotently.",
+            [(
+                "limit",
+                "integer",
+                "Maximum candidate projections to repair.",
+            )],
+        ),
         tool("x_report", "Render a report from imported X items.", []),
         tool(
             "wiki_ingest_file",
@@ -8838,6 +9956,155 @@ fn mcp_tools() -> Vec<Value> {
             [("id", "string", "Wiki page id.")],
         ),
     ]
+}
+
+fn research_convergence_tool_properties() -> Value {
+    json!({
+        "run_id": string_schema("Research run id."),
+        "max_iterations": integer_schema("Maximum convergence iterations, 1..16."),
+        "max_seconds": integer_schema("Wall-clock cap in seconds, 1..86400."),
+        "max_sources": integer_schema("Maximum sources allowed before stopping incomplete."),
+        "max_provider_calls": integer_schema("Maximum provider/model calls allowed. Model-backed editorial/eval requires at least 2."),
+        "cost_cap_usd": {
+            "type": "number",
+            "description": "Estimated cost cap in USD."
+        },
+        "source_novelty_threshold": {
+            "type": "number",
+            "description": "Novel source threshold for stop-rule no-progress checks."
+        },
+        "confidence_delta_threshold": {
+            "type": "number",
+            "description": "Confidence delta threshold for stop-rule no-progress checks."
+        },
+        "no_progress_iteration_limit": integer_schema("Iterations with no progress before settled stop."),
+        "require_active_fact_check": boolean_schema("Require active fact-check labels in convergence."),
+        "allow_long_run": boolean_schema("Permit convergence runs longer than two hours."),
+        "no_write": boolean_schema("Disable report/editorial writes where supported."),
+        "editorial_provider": enum_schema("Optional model-backed convergence editorial/evaluator provider.", &["mock", "openai"]),
+        "editorial_model_name": string_schema("Optional editorial/evaluator model name."),
+        "editorial_endpoint": string_schema("Optional provider endpoint override for tests or compatible endpoints."),
+        "editorial_timeout_seconds": integer_schema("Editorial provider timeout, clamped 1..120 seconds.")
+    })
+}
+
+fn research_convergence_provider_search_tool_properties() -> Value {
+    json!({
+        "run_id": string_schema("Research run id."),
+        "provider": enum_schema("Provider fallback to use for pending convergence host-search tasks.", &["brave", "openai", "perplexity"]),
+        "max_tasks": integer_schema("Maximum pending host-search tasks to attempt, 1..50."),
+        "max_results": integer_schema("Maximum provider results per task, 1..20."),
+        "max_provider_calls": integer_schema("Maximum provider calls for this invocation, 1..50."),
+        "enqueue_selected_url_ingest": boolean_schema("When true, enqueue worker ingest_url jobs for selected safe provider results."),
+        "max_ingest_jobs": integer_schema("Maximum selected URL ingest jobs to enqueue, 0..100. Required above zero when enqueue_selected_url_ingest is true."),
+        "cost_cap_usd": {
+            "type": "number",
+            "description": "Per-invocation projected cost cap in USD."
+        },
+        "endpoint": string_schema("Optional provider endpoint override for tests or compatible endpoints."),
+        "api_key": string_schema("Optional provider API key; omitted values use provider environment variables."),
+        "model": string_schema("Optional provider model name."),
+        "timeout_seconds": integer_schema("Provider search timeout, clamped 1..120 seconds.")
+    })
+}
+
+fn research_active_fact_check_tool_properties() -> Value {
+    json!({
+        "run_id": string_schema("Research run id."),
+        "artifact_id": string_schema("Optional report/generated-synthesis artifact id. Defaults to the latest convergence/report synthesis artifact for the run."),
+        "max_sentences": integer_schema("Maximum factual report sentences to check, 1..200."),
+        "create_challenges": boolean_schema("Whether unsupported sentences should create citation-gap host-search challenges. Defaults true.")
+    })
+}
+
+fn research_convergence_close_loop_tool_properties() -> Value {
+    let mut properties = research_convergence_tool_properties()
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    properties.insert(
+        "artifact_id".to_string(),
+        string_schema("Optional report/generated-synthesis artifact id to actively fact-check."),
+    );
+    properties.insert(
+        "max_sentences".to_string(),
+        integer_schema("Maximum factual report sentences to check, 1..200."),
+    );
+    properties.insert(
+        "create_challenges".to_string(),
+        boolean_schema("Whether unsupported report sentences should create citation-gap challenges. Defaults true."),
+    );
+    properties.insert(
+        "compile_report_before_check".to_string(),
+        boolean_schema("Compile a convergence report before active fact-checking when artifact_id is absent. Defaults true."),
+    );
+    properties.insert(
+        "rerun_after_check".to_string(),
+        boolean_schema("Rerun convergence after fact-check/provider proof so blockers can settle or remain explicit. Defaults true."),
+    );
+    properties.insert(
+        "compile_final_report".to_string(),
+        boolean_schema(
+            "Compile a final convergence report/judgment after the loop attempt. Defaults true.",
+        ),
+    );
+    properties.insert(
+        "provider".to_string(),
+        enum_schema(
+            "Optional provider fallback for pending host-search tasks.",
+            &["brave", "openai", "perplexity"],
+        ),
+    );
+    properties.insert(
+        "provider_max_tasks".to_string(),
+        integer_schema(
+            "Maximum pending host-search tasks to attempt through provider fallback, 1..50.",
+        ),
+    );
+    properties.insert(
+        "provider_max_results".to_string(),
+        integer_schema("Maximum provider results per pending task, 1..20."),
+    );
+    properties.insert(
+        "provider_max_provider_calls".to_string(),
+        integer_schema("Maximum provider fallback calls for this close-loop invocation, 1..50."),
+    );
+    properties.insert(
+        "enqueue_selected_url_ingest".to_string(),
+        boolean_schema(
+            "When true, enqueue worker ingest_url jobs for selected safe provider results.",
+        ),
+    );
+    properties.insert(
+        "max_ingest_jobs".to_string(),
+        integer_schema("Maximum selected URL ingest jobs to enqueue, 0..100."),
+    );
+    properties.insert(
+        "provider_cost_cap_usd".to_string(),
+        json!({
+            "type": "number",
+            "description": "Provider-search projected cost cap in USD for this close-loop invocation."
+        }),
+    );
+    properties.insert(
+        "provider_endpoint".to_string(),
+        string_schema("Optional provider endpoint override for tests or compatible endpoints."),
+    );
+    properties.insert(
+        "provider_api_key".to_string(),
+        string_schema(
+            "Optional provider API key; omitted values use provider environment variables.",
+        ),
+    );
+    properties.insert(
+        "provider_model".to_string(),
+        string_schema("Optional provider model name."),
+    );
+    properties.insert(
+        "provider_timeout_seconds".to_string(),
+        integer_schema("Provider fallback timeout, clamped 1..120 seconds."),
+    );
+    Value::Object(properties)
 }
 
 fn tool<const N: usize>(name: &str, description: &str, props: [(&str, &str, &str); N]) -> Value {
@@ -8861,6 +10128,64 @@ fn tool<const N: usize>(name: &str, description: &str, props: [(&str, &str, &str
             "properties": properties,
             "required": required
         }
+    })
+}
+
+fn tool_with_schema(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": properties,
+            "required": required
+        }
+    })
+}
+
+fn string_schema(description: &str) -> Value {
+    json!({
+        "type": "string",
+        "description": description
+    })
+}
+
+fn integer_schema(description: &str) -> Value {
+    json!({
+        "type": "integer",
+        "description": description
+    })
+}
+
+fn boolean_schema(description: &str) -> Value {
+    json!({
+        "type": "boolean",
+        "description": description
+    })
+}
+
+fn array_schema(description: &str, items: Value) -> Value {
+    json!({
+        "type": "array",
+        "description": description,
+        "items": items
+    })
+}
+
+fn object_schema(description: &str, properties: Value, required: &[&str]) -> Value {
+    json!({
+        "type": "object",
+        "description": description,
+        "properties": properties,
+        "required": required
+    })
+}
+
+fn enum_schema(description: &str, values: &[&str]) -> Value {
+    json!({
+        "type": "string",
+        "description": description,
+        "enum": values
     })
 }
 
@@ -8893,6 +10218,205 @@ fn optional_usize(arguments: &Value, key: &str, default: usize) -> usize {
         .and_then(Value::as_u64)
         .map(|value| value as usize)
         .unwrap_or(default)
+}
+
+fn optional_usize_arg(arguments: &Value, key: &str) -> Option<usize> {
+    arguments
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+}
+
+fn optional_i64_arg(arguments: &Value, key: &str) -> Option<i64> {
+    arguments.get(key).and_then(Value::as_i64)
+}
+
+fn optional_f64_arg(arguments: &Value, key: &str) -> Option<f64> {
+    arguments.get(key).and_then(Value::as_f64)
+}
+
+fn optional_bool_arg(arguments: &Value, key: &str) -> Option<bool> {
+    arguments.get(key).and_then(Value::as_bool)
+}
+
+fn research_convergence_step_input_from_mcp(
+    arguments: &Value,
+) -> Result<ResearchConvergenceStepInput> {
+    Ok(ResearchConvergenceStepInput {
+        run_id: required_string(arguments, "run_id")?,
+        max_iterations: optional_usize_arg(arguments, "max_iterations"),
+        max_seconds: optional_i64_arg(arguments, "max_seconds"),
+        max_sources: optional_usize_arg(arguments, "max_sources"),
+        max_provider_calls: optional_usize_arg(arguments, "max_provider_calls"),
+        cost_cap_usd: optional_f64_arg(arguments, "cost_cap_usd"),
+        source_novelty_threshold: optional_f64_arg(arguments, "source_novelty_threshold"),
+        confidence_delta_threshold: optional_f64_arg(arguments, "confidence_delta_threshold"),
+        no_progress_iteration_limit: optional_usize_arg(arguments, "no_progress_iteration_limit"),
+        require_active_fact_check: optional_bool_arg(arguments, "require_active_fact_check"),
+        allow_long_run: optional_bool_arg(arguments, "allow_long_run"),
+        no_write: optional_bool_arg(arguments, "no_write"),
+        editorial_provider: arguments
+            .get("editorial_provider")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        editorial_model_name: arguments
+            .get("editorial_model_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        editorial_endpoint: arguments
+            .get("editorial_endpoint")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        editorial_timeout_seconds: arguments
+            .get("editorial_timeout_seconds")
+            .and_then(Value::as_u64),
+    })
+}
+
+fn research_convergence_start_input_from_mcp(
+    arguments: &Value,
+) -> Result<ResearchConvergenceStartInput> {
+    Ok(ResearchConvergenceStartInput {
+        run_id: required_string(arguments, "run_id")?,
+        max_iterations: optional_usize_arg(arguments, "max_iterations"),
+        max_seconds: optional_i64_arg(arguments, "max_seconds"),
+        max_sources: optional_usize_arg(arguments, "max_sources"),
+        max_provider_calls: optional_usize_arg(arguments, "max_provider_calls"),
+        cost_cap_usd: optional_f64_arg(arguments, "cost_cap_usd"),
+        source_novelty_threshold: optional_f64_arg(arguments, "source_novelty_threshold"),
+        confidence_delta_threshold: optional_f64_arg(arguments, "confidence_delta_threshold"),
+        no_progress_iteration_limit: optional_usize_arg(arguments, "no_progress_iteration_limit"),
+        require_active_fact_check: optional_bool_arg(arguments, "require_active_fact_check"),
+        allow_long_run: optional_bool_arg(arguments, "allow_long_run"),
+        no_write: optional_bool_arg(arguments, "no_write"),
+        editorial_provider: arguments
+            .get("editorial_provider")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        editorial_model_name: arguments
+            .get("editorial_model_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        editorial_endpoint: arguments
+            .get("editorial_endpoint")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        editorial_timeout_seconds: arguments
+            .get("editorial_timeout_seconds")
+            .and_then(Value::as_u64),
+    })
+}
+
+fn research_convergence_provider_search_input_from_mcp(
+    arguments: &Value,
+) -> Result<ResearchConvergenceProviderSearchInput> {
+    Ok(ResearchConvergenceProviderSearchInput {
+        run_id: required_string(arguments, "run_id")?,
+        provider: required_string(arguments, "provider")?,
+        max_tasks: optional_usize_arg(arguments, "max_tasks"),
+        max_results: optional_usize_arg(arguments, "max_results"),
+        max_provider_calls: optional_usize_arg(arguments, "max_provider_calls"),
+        enqueue_selected_url_ingest: arguments
+            .get("enqueue_selected_url_ingest")
+            .and_then(Value::as_bool),
+        max_ingest_jobs: optional_usize_arg(arguments, "max_ingest_jobs"),
+        cost_cap_usd: optional_f64_arg(arguments, "cost_cap_usd"),
+        endpoint: arguments
+            .get("endpoint")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        api_key: arguments
+            .get("api_key")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        model: arguments
+            .get("model")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        timeout_seconds: arguments.get("timeout_seconds").and_then(Value::as_u64),
+    })
+}
+
+fn research_active_fact_check_input_from_mcp(
+    arguments: &Value,
+) -> Result<ResearchActiveFactCheckInput> {
+    Ok(ResearchActiveFactCheckInput {
+        run_id: required_string(arguments, "run_id")?,
+        artifact_id: arguments
+            .get("artifact_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        max_sentences: optional_usize_arg(arguments, "max_sentences"),
+        create_challenges: optional_bool_arg(arguments, "create_challenges"),
+    })
+}
+
+fn research_convergence_close_loop_input_from_mcp(
+    arguments: &Value,
+) -> Result<ResearchConvergenceCloseLoopInput> {
+    Ok(ResearchConvergenceCloseLoopInput {
+        run_id: required_string(arguments, "run_id")?,
+        artifact_id: arguments
+            .get("artifact_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        max_sentences: optional_usize_arg(arguments, "max_sentences"),
+        create_challenges: optional_bool_arg(arguments, "create_challenges"),
+        compile_report_before_check: optional_bool_arg(arguments, "compile_report_before_check"),
+        rerun_after_check: optional_bool_arg(arguments, "rerun_after_check"),
+        compile_final_report: optional_bool_arg(arguments, "compile_final_report"),
+        provider: arguments
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        provider_max_tasks: optional_usize_arg(arguments, "provider_max_tasks"),
+        provider_max_results: optional_usize_arg(arguments, "provider_max_results"),
+        provider_max_provider_calls: optional_usize_arg(arguments, "provider_max_provider_calls"),
+        enqueue_selected_url_ingest: optional_bool_arg(arguments, "enqueue_selected_url_ingest"),
+        max_ingest_jobs: optional_usize_arg(arguments, "max_ingest_jobs"),
+        provider_cost_cap_usd: optional_f64_arg(arguments, "provider_cost_cap_usd"),
+        provider_endpoint: arguments
+            .get("provider_endpoint")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        provider_api_key: arguments
+            .get("provider_api_key")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        provider_model: arguments
+            .get("provider_model")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        provider_timeout_seconds: arguments
+            .get("provider_timeout_seconds")
+            .and_then(Value::as_u64),
+        max_iterations: optional_usize_arg(arguments, "max_iterations"),
+        max_seconds: optional_i64_arg(arguments, "max_seconds"),
+        max_sources: optional_usize_arg(arguments, "max_sources"),
+        max_provider_calls: optional_usize_arg(arguments, "max_provider_calls"),
+        cost_cap_usd: optional_f64_arg(arguments, "cost_cap_usd"),
+        source_novelty_threshold: optional_f64_arg(arguments, "source_novelty_threshold"),
+        confidence_delta_threshold: optional_f64_arg(arguments, "confidence_delta_threshold"),
+        no_progress_iteration_limit: optional_usize_arg(arguments, "no_progress_iteration_limit"),
+        require_active_fact_check: optional_bool_arg(arguments, "require_active_fact_check"),
+        allow_long_run: optional_bool_arg(arguments, "allow_long_run"),
+        no_write: optional_bool_arg(arguments, "no_write"),
+        editorial_provider: arguments
+            .get("editorial_provider")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        editorial_model_name: arguments
+            .get("editorial_model_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        editorial_endpoint: arguments
+            .get("editorial_endpoint")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        editorial_timeout_seconds: arguments
+            .get("editorial_timeout_seconds")
+            .and_then(Value::as_u64),
+    })
 }
 
 fn policy_request_from_mcp_args(arguments: &Value) -> Result<PolicyRequest> {
@@ -9512,6 +11036,22 @@ mod tests {
         )))
     }
 
+    fn mock_base_server(body: &'static str, content_type: &'static str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 4096];
+            let _ = stream.read(&mut buffer);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        format!("http://{addr}")
+    }
+
     #[test]
     fn claude_import_reads_canonical_memory_export() {
         let root = std::env::temp_dir().join(format!(
@@ -9744,7 +11284,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         command_names.sort();
-        assert_eq!(command_names.len(), 106);
+        assert_eq!(command_names.len(), 118);
         let missing = command_names
             .into_iter()
             .filter(|name| slash_alias_target(name).is_none() && !slash_alias_is_dynamic(name))
@@ -10065,6 +11605,765 @@ reason = "MCP secret writes are denied for this token"
     }
 
     #[test]
+    fn severe_mcp_research_convergence_loop_is_agent_callable_and_inspectable() {
+        // CLAIM: agents can invoke and inspect the full convergence loop through MCP, not only internal Rust APIs.
+        // ORACLE: source card, claims, convergence, ledgers, status, report, and judgment all round-trip via call_mcp_tool.
+        // SEVERITY: Severe because prior failures came from capabilities existing in code but not usable by agents.
+        let paths = test_paths("mcp-research-convergence");
+        let workflow = call_mcp_tool(
+            &paths,
+            "research_run",
+            json!({ "query": "deterministic sandbox verification" }),
+        )
+        .unwrap();
+        let run_id = workflow["run"]["id"].as_str().unwrap();
+        let source = call_mcp_tool(
+            &paths,
+            "source_card_add",
+            json!({
+                "run_id": run_id,
+                "title": "Sandbox verification note",
+                "url": "https://example.com/sandbox-verification-note",
+                "source_type": "paper",
+                "provider": "test",
+                "summary": "The sandbox requires deterministic verification before untrusted execution.",
+                "source_family": "papers",
+                "metadata": { "source_role": "primary", "trust_level": "high" }
+            }),
+        )
+        .unwrap();
+        let source_card_id = source["source_card"]["id"].as_str().unwrap();
+        call_mcp_tool(
+            &paths,
+            "research_claims_ingest",
+            json!({
+                "run_id": run_id,
+                "source_card_id": source_card_id,
+                "provider": "test",
+                "model": "fixture",
+                "output_json": r#"{"claims":[{
+                    "text":"The sandbox requires deterministic verification before untrusted execution.",
+                    "kind":"fact",
+                    "subject":"the sandbox",
+                    "predicate":"requires",
+                    "object":"deterministic verification before untrusted execution",
+                    "confidence":0.88,
+                    "caveats":["Fixture source only."],
+                    "quote":"requires deterministic verification"
+                }]}"#
+            }),
+        )
+        .unwrap();
+
+        let converged = call_mcp_tool(
+            &paths,
+            "research_convergence_run",
+            json!({
+                "run_id": run_id,
+                "max_iterations": 3,
+                "no_progress_iteration_limit": 1
+            }),
+        )
+        .unwrap();
+        assert_eq!(converged["status"]["settled"].as_bool(), Some(true));
+        assert_eq!(
+            converged["snapshot"]["stop_rule"]["stop_reason"].as_str(),
+            Some("settled")
+        );
+
+        for tool in [
+            "research_iterations",
+            "research_statements",
+            "research_challenges",
+            "research_convergence_host_search_tasks",
+            "research_disproofs",
+            "research_fact_checks",
+            "research_convergence_snapshots",
+        ] {
+            let value = call_mcp_tool(&paths, tool, json!({ "run_id": run_id })).unwrap();
+            assert!(
+                !value.as_array().unwrap().is_empty(),
+                "{tool} returned no convergence records"
+            );
+        }
+        let status = call_mcp_tool(
+            &paths,
+            "research_convergence_status",
+            json!({ "run_id": run_id }),
+        )
+        .unwrap();
+        assert_eq!(status["settled"].as_bool(), Some(true));
+        assert!(
+            status["host_search_tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|task| task["status"].as_str() == Some("pending"))
+        );
+        let host_search_tasks = call_mcp_tool(
+            &paths,
+            "research_convergence_host_search_tasks",
+            json!({ "run_id": run_id }),
+        )
+        .unwrap();
+        let task = host_search_tasks
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["status"].as_str() == Some("pending"))
+            .expect("convergence should expose pending host-search tasks")
+            .clone();
+        let task_id = task["id"].as_str().unwrap();
+        let task_query = task["query"].as_str().unwrap();
+        let recorded_search = call_mcp_tool(
+            &paths,
+            "research_host_search_record",
+            json!({
+                "run_id": run_id,
+                "host": "codex",
+                "tool_surface": "web.run",
+                "query": task_query,
+                "query_intent": "Resolve exact convergence host-search task.",
+                "results": [{
+                    "rank": 1,
+                    "title": "Sandbox verification official note",
+                    "url": "https://example.com/sandbox/official-verification",
+                    "snippet": "Official note corroborates deterministic verification.",
+                    "source_family_guess": "primary",
+                    "selected_for_ingest": true
+                }]
+            }),
+        )
+        .unwrap();
+        let recorded_tasks = call_mcp_tool(
+            &paths,
+            "research_convergence_host_search_tasks",
+            json!({ "run_id": run_id }),
+        )
+        .unwrap();
+        assert!(recorded_tasks.as_array().unwrap().iter().any(|task| {
+            task["id"].as_str() == Some(task_id)
+                && task["status"].as_str() == Some("recorded")
+                && task["matched_host_search_ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|id| id.as_str() == recorded_search["search"]["id"].as_str())
+                && task["research_source_ids"].as_array().unwrap().len() == 1
+        }));
+        let report = call_mcp_tool(
+            &paths,
+            "research_convergence_report_compile",
+            json!({ "run_id": run_id }),
+        )
+        .unwrap();
+        assert_eq!(
+            report["judgment"]["overall_decision"].as_str(),
+            Some("accept_with_caveats")
+        );
+        assert!(
+            report["artifact"]["body"]
+                .as_str()
+                .unwrap()
+                .contains("Pressure-Test Results")
+        );
+        let judgments = call_mcp_tool(
+            &paths,
+            "research_report_judgments",
+            json!({ "run_id": run_id }),
+        )
+        .unwrap();
+        assert_eq!(judgments.as_array().unwrap().len(), 1);
+
+        let queued = call_mcp_tool(
+            &paths,
+            "research_convergence_enqueue",
+            json!({ "run_id": run_id, "max_iterations": 3, "no_progress_iteration_limit": 1 }),
+        )
+        .unwrap();
+        assert_eq!(queued["kind"].as_str(), Some("research_convergence_run"));
+        let worker = call_mcp_tool(&paths, "worker_run_once", json!({ "max_jobs": 1 })).unwrap();
+        assert_eq!(worker["completed"].as_u64(), Some(1));
+        assert_eq!(
+            worker["jobs"][0]["result_json"]["action"].as_str(),
+            Some("already_terminal")
+        );
+    }
+
+    #[test]
+    fn severe_mcp_research_convergence_model_editorial_gate_round_trips() {
+        // CLAIM: agents can request the model-backed convergence editorial/evaluator loop through MCP.
+        // ORACLE: the convergence result exposes editorial stage outputs and the persisted judgment/evidence can be read back.
+        // SEVERITY: Severe because schema-only exposure is insufficient for long-running Codex research orchestration.
+        let paths = test_paths("mcp-research-convergence-editorial");
+        let workflow = call_mcp_tool(
+            &paths,
+            "research_run",
+            json!({ "query": "research deterministic code sandbox verification" }),
+        )
+        .unwrap();
+        let run_id = workflow["run"]["id"].as_str().unwrap();
+        let source = call_mcp_tool(
+            &paths,
+            "source_card_add",
+            json!({
+                "run_id": run_id,
+                "title": "Deterministic sandbox verification note",
+                "url": "https://example.com/deterministic-sandbox-verification",
+                "source_type": "paper",
+                "provider": "test",
+                "summary": "Deterministic verification is required before untrusted code execution in the sandbox.",
+                "source_family": "papers",
+                "metadata": { "source_role": "primary", "trust_level": "high" }
+            }),
+        )
+        .unwrap();
+        let source_card_id = source["source_card"]["id"].as_str().unwrap();
+        call_mcp_tool(
+            &paths,
+            "research_claims_ingest",
+            json!({
+                "run_id": run_id,
+                "source_card_id": source_card_id,
+                "provider": "test",
+                "model": "fixture",
+                "output_json": r#"{"claims":[{
+                    "text":"Deterministic verification is required before untrusted code execution in the sandbox.",
+                    "kind":"fact",
+                    "subject":"deterministic verification",
+                    "predicate":"is required before",
+                    "object":"untrusted code execution in the sandbox",
+                    "confidence":0.91,
+                    "caveats":["Fixture source only."],
+                    "quote":"Deterministic verification is required"
+                }]}"#
+            }),
+        )
+        .unwrap();
+
+        let converged = call_mcp_tool(
+            &paths,
+            "research_convergence_run",
+            json!({
+                "run_id": run_id,
+                "max_iterations": 3,
+                "no_progress_iteration_limit": 1,
+                "editorial_provider": "mock",
+                "max_provider_calls": 2
+            }),
+        )
+        .unwrap();
+        assert_eq!(converged["status"]["settled"].as_bool(), Some(true));
+        assert_eq!(converged["editorial"]["status"].as_str(), Some("accepted"));
+        assert_eq!(
+            converged["editorial"]["citation_verifier"]["editorial_run"]["stage"].as_str(),
+            Some("citation_verifier")
+        );
+        assert_eq!(
+            converged["editorial"]["adversarial_evaluator"]["editorial_run"]["stage"].as_str(),
+            Some("adversarial_evaluator")
+        );
+
+        let editorial_runs = call_mcp_tool(
+            &paths,
+            "research_editorial_runs",
+            json!({ "run_id": run_id }),
+        )
+        .unwrap();
+        assert_eq!(editorial_runs.as_array().unwrap().len(), 2);
+        assert!(editorial_runs.as_array().unwrap().iter().all(|run| {
+            run["status"].as_str() == Some("completed")
+                && run["output_artifact_id"]
+                    .as_str()
+                    .is_some_and(|id| !id.is_empty())
+        }));
+
+        let judgments = call_mcp_tool(
+            &paths,
+            "research_report_judgments",
+            json!({ "run_id": run_id }),
+        )
+        .unwrap();
+        let gate = judgments
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|judgment| judgment["scores"].get("model_backed_convergence_editorial"))
+            .expect("model-backed convergence editorial judgment must be present");
+        assert_eq!(gate["accepted"].as_bool(), Some(true));
+        assert_eq!(
+            gate["citation_verifier"]["status"].as_str(),
+            Some("completed")
+        );
+        assert_eq!(
+            gate["adversarial_evaluator"]["status"].as_str(),
+            Some("completed")
+        );
+    }
+
+    #[test]
+    fn severe_mcp_deep_research_schemas_expose_agent_usable_fields() {
+        // CLAIM: MCP discovery exposes the fields an in-app Codex agent needs
+        // for deep research without falling back to CLI spelunking.
+        // ORACLE: JSON schema properties for the exact logged failure surfaces.
+        // SEVERITY: Severe because a thin schema caused real agent misuse in logs.
+        let tools = mcp_tools();
+        let find_tool = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+                .unwrap_or_else(|| panic!("missing tool {name}"))
+        };
+
+        let capabilities = find_tool("research_capabilities");
+        assert!(
+            capabilities["description"]
+                .as_str()
+                .unwrap()
+                .contains("capability contract")
+        );
+
+        let role_start = find_tool("research_role_start");
+        for property in [
+            "host",
+            "execution_mode",
+            "host_thread_id",
+            "host_subagent_id",
+            "tool_surface",
+            "prompt_version",
+            "prompt_hash",
+            "input_artifact_ids",
+        ] {
+            assert!(
+                role_start
+                    .pointer(&format!("/inputSchema/properties/{property}"))
+                    .is_some(),
+                "research_role_start missing {property}"
+            );
+        }
+
+        let role_finish = find_tool("research_role_finish");
+        assert!(
+            role_finish
+                .pointer("/inputSchema/properties/output_artifact_id")
+                .is_some()
+        );
+        assert!(
+            role_finish["description"]
+                .as_str()
+                .unwrap()
+                .contains("requires output_artifact_id")
+        );
+
+        let artifact = find_tool("research_artifact_add");
+        assert!(
+            artifact
+                .pointer("/inputSchema/properties/role_run_id")
+                .is_some()
+        );
+        assert!(
+            artifact
+                .pointer("/inputSchema/properties/metadata")
+                .is_some()
+        );
+        assert!(
+            artifact
+                .pointer("/inputSchema/properties/metadata_json")
+                .is_some()
+        );
+
+        let host_search = find_tool("research_host_search_record");
+        assert_eq!(
+            host_search.pointer("/inputSchema/properties/results/items/type"),
+            Some(&json!("object"))
+        );
+        for property in [
+            "rank",
+            "title",
+            "url",
+            "snippet",
+            "provider_metadata",
+            "selected_for_ingest",
+        ] {
+            assert!(
+                host_search
+                    .pointer(&format!(
+                        "/inputSchema/properties/results/items/properties/{property}"
+                    ))
+                    .is_some(),
+                "research_host_search_record result missing {property}"
+            );
+        }
+
+        let document = find_tool("research_document_extract");
+        assert!(document["description"].as_str().unwrap().contains("XLSX"));
+        for property in ["media_type", "research_source_id", "source_card_id"] {
+            assert!(
+                document
+                    .pointer(&format!("/inputSchema/properties/{property}"))
+                    .is_some(),
+                "research_document_extract missing {property}"
+            );
+        }
+
+        for tool_name in [
+            "research_convergence_start",
+            "research_convergence_step",
+            "research_convergence_run",
+            "research_convergence_enqueue",
+            "research_convergence_status",
+            "research_iterations",
+            "research_statements",
+            "research_challenges",
+            "research_convergence_host_search_tasks",
+            "research_convergence_provider_search",
+            "research_disproofs",
+            "research_revisions",
+            "research_fact_checks",
+            "research_active_fact_check",
+            "research_convergence_close_loop",
+            "research_convergence_snapshots",
+            "research_convergence_report_compile",
+            "research_report_judgments",
+        ] {
+            let tool = find_tool(tool_name);
+            assert!(
+                tool.pointer("/inputSchema/properties/run_id").is_some()
+                    || tool.pointer("/inputSchema/properties/id").is_some(),
+                "{tool_name} missing id/run_id input"
+            );
+        }
+
+        for tool_name in ["research_convergence_run", "research_convergence_enqueue"] {
+            let tool = find_tool(tool_name);
+            for property in [
+                "max_provider_calls",
+                "editorial_provider",
+                "editorial_model_name",
+                "editorial_endpoint",
+                "editorial_timeout_seconds",
+            ] {
+                assert!(
+                    tool.pointer(&format!("/inputSchema/properties/{property}"))
+                        .is_some(),
+                    "{tool_name} missing convergence editorial/eval property {property}"
+                );
+            }
+        }
+
+        let active_fact_check = find_tool("research_active_fact_check");
+        for property in ["artifact_id", "max_sentences", "create_challenges"] {
+            assert!(
+                active_fact_check
+                    .pointer(&format!("/inputSchema/properties/{property}"))
+                    .is_some(),
+                "research_active_fact_check missing {property}"
+            );
+        }
+
+        let provider_search = find_tool("research_convergence_provider_search");
+        for property in [
+            "provider",
+            "max_tasks",
+            "max_results",
+            "max_provider_calls",
+            "enqueue_selected_url_ingest",
+            "max_ingest_jobs",
+            "cost_cap_usd",
+            "endpoint",
+            "api_key",
+            "model",
+            "timeout_seconds",
+        ] {
+            assert!(
+                provider_search
+                    .pointer(&format!("/inputSchema/properties/{property}"))
+                    .is_some(),
+                "research_convergence_provider_search missing {property}"
+            );
+        }
+
+        let close_loop = find_tool("research_convergence_close_loop");
+        for property in [
+            "artifact_id",
+            "max_sentences",
+            "create_challenges",
+            "compile_report_before_check",
+            "rerun_after_check",
+            "compile_final_report",
+            "provider",
+            "provider_max_tasks",
+            "provider_max_results",
+            "provider_max_provider_calls",
+            "provider_cost_cap_usd",
+            "max_provider_calls",
+            "editorial_provider",
+        ] {
+            assert!(
+                close_loop
+                    .pointer(&format!("/inputSchema/properties/{property}"))
+                    .is_some(),
+                "research_convergence_close_loop missing {property}"
+            );
+        }
+
+        let editorial = find_tool("research_editorial_invoke");
+        for property in [
+            "model_provider",
+            "model_name",
+            "prompt_version",
+            "input_artifact_id",
+            "endpoint",
+            "api_key",
+            "timeout_seconds",
+        ] {
+            assert!(
+                editorial
+                    .pointer(&format!("/inputSchema/properties/{property}"))
+                    .is_some(),
+                "research_editorial_invoke missing {property}"
+            );
+        }
+    }
+
+    #[test]
+    fn severe_mcp_deep_research_agent_surface_round_trip_without_cli_fallback() {
+        // CLAIM: The deep-research MCP surface can run the logged host-search,
+        // role, artifact, document, evidence-pack, and editorial flow directly.
+        // ORACLE: Every state transition is observed through call_mcp_tool.
+        // SEVERITY: Severe because this reproduces the live failure class with
+        // structured host results and completed role artifact linkage.
+        let paths = test_paths("mcp-research-agent-surface");
+        let workflow = call_mcp_tool(
+            &paths,
+            "research_run",
+            json!({ "query": "research the most effective compression algorithms for images" }),
+        )
+        .unwrap();
+        let run_id = workflow["run"]["id"].as_str().unwrap();
+
+        let capabilities = call_mcp_tool(&paths, "research_capabilities", json!({})).unwrap();
+        assert_eq!(capabilities["schema_version"].as_u64(), Some(3));
+        assert_eq!(
+            capabilities["role_orchestration"]["completed_requires_output_artifact_id"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            capabilities["iterated_epistemic_convergence"]["status_tool"].as_str(),
+            Some("research_convergence_status")
+        );
+
+        let role = call_mcp_tool(
+            &paths,
+            "research_role_start",
+            json!({
+                "run_id": run_id,
+                "role": "research-scout",
+                "host": "codex",
+                "execution_mode": "codex_subagent_live",
+                "host_thread_id": "test-thread",
+                "host_subagent_id": "test-subagent",
+                "tool_surface": "mcp+host-search",
+                "prompt_version": "severe-test-v1"
+            }),
+        )
+        .unwrap();
+        let role_run_id = role["id"].as_str().unwrap();
+
+        let string_result_error = call_mcp_tool(
+            &paths,
+            "research_host_search_record",
+            json!({
+                "run_id": run_id,
+                "query": "image compression codec benchmark official paper",
+                "results": ["https://example.com/not-an-object"]
+            }),
+        )
+        .expect_err("string search results must not be accepted");
+        assert!(
+            string_result_error
+                .to_string()
+                .contains("parsing host search results")
+        );
+
+        let search = call_mcp_tool(
+            &paths,
+            "research_host_search_record",
+            json!({
+                "run_id": run_id,
+                "role_run_id": role_run_id,
+                "query": "image compression codec benchmark official paper",
+                "query_intent": "source-discovery",
+                "requested_recency": 30,
+                "requested_domains": ["example.com"],
+                "results": [
+                    {
+                        "rank": 1,
+                        "title": "Codec benchmark paper",
+                        "url": "https://example.com/codec-benchmark",
+                        "snippet": "A benchmark compares modern image compression methods.",
+                        "published_at": "2026-01-02",
+                        "source_family_guess": "paper",
+                        "provider_metadata": { "fixture": true },
+                        "selected_for_ingest": true
+                    }
+                ]
+            }),
+        )
+        .unwrap();
+        assert_eq!(search["results"].as_array().unwrap().len(), 1);
+        assert!(
+            search["results"][0]["research_source_id"]
+                .as_str()
+                .is_some()
+        );
+
+        let missing_output_error = call_mcp_tool(
+            &paths,
+            "research_role_finish",
+            json!({
+                "role_run_id": role_run_id,
+                "status": "completed"
+            }),
+        )
+        .expect_err("completed role without output artifact must fail");
+        assert!(
+            missing_output_error
+                .to_string()
+                .contains("requires an output artifact")
+        );
+
+        let artifact = call_mcp_tool(
+            &paths,
+            "research_artifact_add",
+            json!({
+                "run_id": run_id,
+                "role_run_id": role_run_id,
+                "artifact_type": "source_map",
+                "title": "Scout source map",
+                "body": "Selected a benchmark paper and recorded host-native proof.",
+                "metadata_json": "{\"fixture\":true,\"schema\":\"mcp\"}"
+            }),
+        )
+        .unwrap();
+        let artifact_id = artifact["id"].as_str().unwrap();
+        assert_eq!(artifact["role_run_id"].as_str(), Some(role_run_id));
+        assert_eq!(artifact["metadata"]["schema"].as_str(), Some("mcp"));
+
+        let finished = call_mcp_tool(
+            &paths,
+            "research_role_finish",
+            json!({
+                "role_run_id": role_run_id,
+                "status": "completed",
+                "output_artifact_id": artifact_id
+            }),
+        )
+        .unwrap();
+        assert_eq!(finished["status"].as_str(), Some("completed"));
+
+        fs::create_dir_all(&paths.home).unwrap();
+        let csv_path = paths.home.join("codec-benchmarks.csv");
+        fs::write(
+            &csv_path,
+            "codec,ratio,notes\nAVIF,0.72,high quality\nJPEG XL,0.69,fast decode\n",
+        )
+        .unwrap();
+        let document = call_mcp_tool(
+            &paths,
+            "research_document_extract",
+            json!({
+                "run_id": run_id,
+                "path": csv_path.to_string_lossy(),
+                "media_type": "text/csv"
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            document["document"]["extraction_status"].as_str(),
+            Some("extracted")
+        );
+        assert_eq!(document["tables"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            document["tables"][0]["cells"][0]["column_header"].as_str(),
+            Some("codec")
+        );
+
+        let evidence = call_mcp_tool(
+            &paths,
+            "research_evidence_pack",
+            json!({ "run_id": run_id }),
+        )
+        .unwrap();
+        assert_eq!(evidence["artifact_type"].as_str(), Some("evidence_pack"));
+        let editorial = call_mcp_tool(
+            &paths,
+            "research_editorial_invoke",
+            json!({
+                "run_id": run_id,
+                "stage": "editorial_drafter",
+                "model_provider": "mock",
+                "input_artifact_id": evidence["id"].as_str().unwrap(),
+                "prompt_version": "severe-test-v1",
+                "timeout_seconds": 5
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            editorial["editorial_run"]["model_provider"].as_str(),
+            Some("mock")
+        );
+        assert!(
+            editorial["output_artifact"]["id"].as_str().is_some(),
+            "{editorial}"
+        );
+    }
+
+    #[test]
+    fn severe_mcp_research_capabilities_reports_runtime_boundaries() {
+        // CLAIM: Agents can ask Arcwell what is actually available before
+        // declaring richer extraction/editorial tools unavailable.
+        // ORACLE: Capability JSON includes runtime/tool boundaries without
+        // exposing secret values.
+        // SEVERITY: Strong because this prevents misleading final reports.
+        let paths = test_paths("mcp-research-capabilities");
+        let capabilities = call_mcp_tool(&paths, "research_capabilities", json!({})).unwrap();
+        let serialized = serde_json::to_string(&capabilities).unwrap();
+        assert_eq!(capabilities["mode"].as_str(), Some("deep"));
+        assert!(
+            capabilities["document_extraction"]["supported_extensions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str() == Some("xlsx"))
+        );
+        assert_eq!(
+            capabilities["host_native_search"]["record_tool"].as_str(),
+            Some("research_host_search_record")
+        );
+        assert_eq!(
+            capabilities["iterated_epistemic_convergence"]["close_loop_tool"].as_str(),
+            Some("research_convergence_close_loop")
+        );
+        assert!(
+            capabilities["iterated_epistemic_convergence"]["close_loop_rule"]
+                .as_str()
+                .unwrap()
+                .contains("explicit blockers")
+        );
+        assert!(
+            capabilities["editorial"]["providers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|provider| provider["name"].as_str() == Some("mock")
+                    && provider["configured"].as_bool() == Some(true))
+        );
+        assert!(!serialized.contains("sk-"));
+        assert!(!serialized.contains("api_key\":\""));
+    }
+
+    #[test]
     fn mcp_research_source_ledger_links_cards_by_run_id() {
         let paths = test_paths("mcp-research-source-ledger");
         let workflow = call_mcp_tool(
@@ -10321,6 +12620,456 @@ reason = "MCP secret writes are denied for this token"
                 .and_then(Value::as_str)
                 .unwrap()
                 .contains("Shipping Arcwell")
+        );
+    }
+
+    #[test]
+    fn severe_mcp_x_import_archive_round_trip_uses_canonical_import() {
+        let paths = test_paths("mcp-x-import-archive");
+        let archive = paths.home.join("x-archive.zip");
+        std::fs::create_dir_all(&paths.home).unwrap();
+        {
+            let file = std::fs::File::create(&archive).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("data/tweets.js", options).unwrap();
+            zip.write_all(
+                br#"window.YTD.tweets.part0 = [{
+                  "tweet": {
+                    "id_str": "mcp-archive-1",
+                    "full_text": "MCP archive import canonical proof.",
+                    "screen_name": "arcwell"
+                  }
+                }]"#,
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+
+        let report = call_mcp_tool(
+            &paths,
+            "x_import_archive",
+            json!({
+                "path": archive.to_string_lossy(),
+                "select": ["tweets"],
+                "limit": 10
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            report.pointer("/import/imported").and_then(Value::as_u64),
+            Some(1)
+        );
+        let search = call_mcp_tool(
+            &paths,
+            "x_search_tweets",
+            json!({ "query": "canonical proof", "limit": 10 }),
+        )
+        .unwrap();
+        let items = search.as_array().expect("search returns array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].get("x_id").and_then(Value::as_str),
+            Some("mcp-archive-1")
+        );
+        assert!(
+            items[0]
+                .get("source_card_id")
+                .and_then(Value::as_str)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn severe_mcp_x_discover_archives_round_trip_is_no_write() {
+        let paths = test_paths("mcp-x-discover-archives");
+        let archive = paths.home.join("twitter-archive.zip");
+        std::fs::create_dir_all(&paths.home).unwrap();
+        {
+            let file = std::fs::File::create(&archive).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("data/bookmark.js", options).unwrap();
+            zip.write_all(br#"window.YTD.bookmark.part0 = []"#).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let report = call_mcp_tool(
+            &paths,
+            "x_discover_archives",
+            json!({ "dirs": [paths.home.to_string_lossy()], "limit": 10 }),
+        )
+        .unwrap();
+        let candidates = report
+            .get("candidates")
+            .and_then(Value::as_array)
+            .expect("candidates array");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].get("path").and_then(Value::as_str),
+            Some(archive.to_str().unwrap())
+        );
+        assert!(
+            candidates[0]
+                .get("supported_slices")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|slice| slice.as_str() == Some("bookmarks"))
+        );
+        let stats = call_mcp_tool(&paths, "x_stats", json!({})).unwrap();
+        assert_eq!(
+            stats
+                .pointer("/canonical/sync_runs")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            stats.pointer("/canonical/tweets").and_then(Value::as_u64),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn severe_mcp_x_portable_export_validate_import_round_trip() {
+        // ORACLE: portable X data moves through the MCP tools that agents use, not
+        // just private Store helpers.
+        let source_paths = test_paths("mcp-x-portable-source");
+        let destination_paths = test_paths("mcp-x-portable-destination");
+        std::fs::create_dir_all(&source_paths.home).unwrap();
+        let fixture = source_paths.home.join("x-portable-fixture.json");
+        std::fs::write(
+            &fixture,
+            r#"[
+                {
+                    "id": "mcp-portable-1",
+                    "author": "arcwell",
+                    "text": "MCP portable import proof with searchable aurora context.",
+                    "url": "https://x.com/arcwell/status/mcp-portable-1",
+                    "created_at": "2026-06-22T12:00:00Z",
+                    "source_kind": "bookmark",
+                    "source_detail": "mcp-portable-test",
+                    "raw": {
+                        "id_str": "mcp-portable-1",
+                        "full_text": "MCP portable import proof with searchable aurora context."
+                    }
+                }
+            ]"#,
+        )
+        .unwrap();
+        let import = call_mcp_tool(
+            &source_paths,
+            "x_import_json_file",
+            json!({ "path": fixture.to_string_lossy() }),
+        )
+        .unwrap();
+        assert_eq!(import.get("imported").and_then(Value::as_u64), Some(1));
+
+        let bundle = source_paths.home.join("portable-x");
+        let export = call_mcp_tool(
+            &source_paths,
+            "x_export_portable",
+            json!({ "out": bundle.to_string_lossy() }),
+        )
+        .unwrap();
+        assert_eq!(export.get("rows_exported").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            export.pointer("/shards/0/path").and_then(Value::as_str),
+            Some("data/x/tweets.jsonl")
+        );
+
+        let validation = call_mcp_tool(
+            &source_paths,
+            "x_validate_portable",
+            json!({ "dir": bundle.to_string_lossy() }),
+        )
+        .unwrap();
+        assert_eq!(validation.get("valid").and_then(Value::as_bool), Some(true));
+        assert_eq!(validation.get("rows").and_then(Value::as_u64), Some(1));
+
+        let imported = call_mcp_tool(
+            &destination_paths,
+            "x_import_portable",
+            json!({ "dir": bundle.to_string_lossy() }),
+        )
+        .unwrap();
+        assert_eq!(
+            imported.pointer("/import/imported").and_then(Value::as_u64),
+            Some(1)
+        );
+        let search = call_mcp_tool(
+            &destination_paths,
+            "x_search_tweets",
+            json!({ "query": "searchable aurora", "limit": 10 }),
+        )
+        .unwrap();
+        let items = search.as_array().expect("search returns array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].get("x_id").and_then(Value::as_str),
+            Some("mcp-portable-1")
+        );
+
+        let second = call_mcp_tool(
+            &destination_paths,
+            "x_import_portable",
+            json!({ "dir": bundle.to_string_lossy() }),
+        )
+        .unwrap();
+        assert_eq!(
+            second
+                .pointer("/import/skipped_duplicates")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn severe_mcp_x_repair_projections_round_trip() {
+        let paths = test_paths("mcp-x-repair-projections");
+        let fixture = paths.home.join("x-repair.json");
+        std::fs::create_dir_all(&paths.home).unwrap();
+        std::fs::write(
+            &fixture,
+            r#"[
+              {
+                "id": "mcp-repair-1",
+                "author": "openai",
+                "text": "MCP repair projection proof.",
+                "url": "https://x.com/openai/status/mcp-repair-1"
+              }
+            ]"#,
+        )
+        .unwrap();
+        call_mcp_tool(
+            &paths,
+            "x_import_json_file",
+            json!({ "path": fixture.to_string_lossy() }),
+        )
+        .unwrap();
+        let conn = rusqlite::Connection::open(&paths.db).unwrap();
+        conn.execute(
+            "DELETE FROM source_cards WHERE json_extract(metadata_json, '$.x_id') = 'mcp-repair-1'",
+            [],
+        )
+        .unwrap();
+        conn
+            .execute(
+                "UPDATE x_items SET source_card_id = NULL, wiki_page_id = NULL WHERE x_id = 'mcp-repair-1'",
+                [],
+            )
+            .unwrap();
+        conn
+            .execute(
+                "UPDATE x_projections SET status = 'failed', source_card_id = NULL, wiki_page_id = NULL, last_error = 'mcp projection failure' WHERE entity_id = 'mcp-repair-1'",
+                [],
+            )
+            .unwrap();
+        drop(conn);
+
+        let repair = call_mcp_tool(&paths, "x_repair_projections", json!({ "limit": 10 })).unwrap();
+        assert_eq!(repair.get("candidates").and_then(Value::as_u64), Some(1));
+        assert_eq!(repair.get("repaired").and_then(Value::as_u64), Some(1));
+        assert_eq!(repair.get("failed").and_then(Value::as_u64), Some(0));
+        let search = call_mcp_tool(
+            &paths,
+            "x_search_tweets",
+            json!({ "query": "projection proof", "limit": 10 }),
+        )
+        .unwrap();
+        let items = search.as_array().expect("search returns array");
+        assert_eq!(items.len(), 1);
+        assert!(
+            items[0]
+                .get("source_card_id")
+                .and_then(Value::as_str)
+                .is_some()
+        );
+        assert!(
+            items[0]
+                .get("wiki_page_id")
+                .and_then(Value::as_str)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn severe_mcp_x_thread_reports_local_missing_context() {
+        let paths = test_paths("mcp-x-thread");
+        let fixture = paths.home.join("x-thread.json");
+        std::fs::create_dir_all(&paths.home).unwrap();
+        std::fs::write(
+            &fixture,
+            r#"[
+              {
+                "id": "mcp-thread-root",
+                "author": "openai",
+                "text": "MCP thread root.",
+                "url": "https://x.com/openai/status/mcp-thread-root",
+                "conversation_id": "mcp-thread-root"
+              },
+              {
+                "id": "mcp-thread-reply",
+                "author": "openai",
+                "text": "MCP reply with missing quote.",
+                "url": "https://x.com/openai/status/mcp-thread-reply",
+                "conversation_id": "mcp-thread-root",
+                "referenced_tweets": [
+                  { "type": "replied_to", "id": "mcp-thread-root" },
+                  { "type": "quoted", "id": "mcp-missing-quote" }
+                ]
+              }
+            ]"#,
+        )
+        .unwrap();
+        call_mcp_tool(
+            &paths,
+            "x_import_json_file",
+            json!({ "path": fixture.to_string_lossy() }),
+        )
+        .unwrap();
+
+        let thread = call_mcp_tool(
+            &paths,
+            "x_thread",
+            json!({ "x_id": "mcp-thread-root", "max_depth": 10 }),
+        )
+        .unwrap();
+        assert_eq!(thread.get("mode").and_then(Value::as_str), Some("local"));
+        assert_eq!(
+            thread.get("root_x_id").and_then(Value::as_str),
+            Some("mcp-thread-root")
+        );
+        let tweets = thread
+            .get("tweets")
+            .and_then(Value::as_array)
+            .expect("thread tweets array");
+        assert_eq!(tweets.len(), 2);
+        assert!(tweets.iter().any(|tweet| {
+            tweet.get("x_id").and_then(Value::as_str) == Some("mcp-thread-reply")
+                && tweet.get("reply_to_x_id").and_then(Value::as_str) == Some("mcp-thread-root")
+        }));
+        let missing = thread
+            .get("missing_context")
+            .and_then(Value::as_array)
+            .expect("missing context array");
+        assert!(missing.iter().any(|item| {
+            item.get("tweet_x_id").and_then(Value::as_str) == Some("mcp-thread-reply")
+                && item.get("ref_kind").and_then(Value::as_str) == Some("quote")
+                && item.get("ref_x_id").and_then(Value::as_str) == Some("mcp-missing-quote")
+                && item.get("reason").and_then(Value::as_str) == Some("missing_local_tweet")
+        }));
+    }
+
+    #[test]
+    fn severe_mcp_x_extract_links_round_trip_without_fetching() {
+        let paths = test_paths("mcp-x-links");
+        let fixture = paths.home.join("x-links.json");
+        std::fs::create_dir_all(&paths.home).unwrap();
+        std::fs::write(
+            &fixture,
+            r#"[
+              {
+                "id": "mcp-links-1",
+                "author": "openai",
+                "text": "MCP links https://example.org/mcp and unsafe http://127.0.0.1/admin",
+                "url": "https://x.com/openai/status/mcp-links-1",
+                "entities": {
+                  "urls": [
+                    {
+                      "url": "https://t.co/mcp",
+                      "expanded_url": "https://example.com/mcp",
+                      "display_url": "example.com/mcp"
+                    }
+                  ]
+                }
+              }
+            ]"#,
+        )
+        .unwrap();
+        call_mcp_tool(
+            &paths,
+            "x_import_json_file",
+            json!({ "path": fixture.to_string_lossy() }),
+        )
+        .unwrap();
+
+        let extracted = call_mcp_tool(&paths, "x_extract_links", json!({ "limit": 10 })).unwrap();
+        assert_eq!(
+            extracted.get("tweets_scanned").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            extracted.get("links_indexed").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert!(
+            extracted
+                .get("skipped_unsafe")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                >= 1
+        );
+        let links = call_mcp_tool(
+            &paths,
+            "x_links",
+            json!({ "query": "example.com", "limit": 10 }),
+        )
+        .unwrap();
+        let links = links.as_array().expect("x_links returns array");
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].get("tweet_x_id").and_then(Value::as_str),
+            Some("mcp-links-1")
+        );
+        assert_eq!(
+            links[0].get("url").and_then(Value::as_str),
+            Some("https://example.com/mcp")
+        );
+    }
+
+    #[test]
+    fn severe_mcp_x_expand_links_round_trip_uses_safe_ingest() {
+        let paths = test_paths("mcp-x-expand-links");
+        let url = mock_base_server(
+            "<html><head><title>MCP Expanded</title></head><body><main>MCP evidence.</main></body></html>",
+            "text/html; charset=utf-8",
+        );
+        call_mcp_tool(&paths, "arcwell_health", json!({})).unwrap();
+        let conn = rusqlite::Connection::open(&paths.db).unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            r#"
+            INSERT INTO x_tweet_links
+              (tweet_x_id, url, source, first_seen_at, last_seen_at, raw_json)
+            VALUES ('mcp-expand-tweet', ?1, 'test', ?2, ?2, '{}')
+            "#,
+            rusqlite::params![url, now],
+        )
+        .unwrap();
+        drop(conn);
+        unsafe {
+            std::env::set_var("ARCWELL_ALLOW_LOOPBACK_URL_INGEST", "1");
+        }
+        let expanded = call_mcp_tool(&paths, "x_expand_links", json!({ "limit": 10 })).unwrap();
+        unsafe {
+            std::env::remove_var("ARCWELL_ALLOW_LOOPBACK_URL_INGEST");
+        }
+        assert_eq!(expanded.get("expanded").and_then(Value::as_u64), Some(1));
+        assert_eq!(expanded.get("failed").and_then(Value::as_u64), Some(0));
+        let items = expanded
+            .get("items")
+            .and_then(Value::as_array)
+            .expect("x_expand_links returns items");
+        assert_eq!(
+            items[0].get("status").and_then(Value::as_str),
+            Some("expanded")
+        );
+        assert!(
+            items[0]
+                .get("wiki_page_id")
+                .and_then(Value::as_str)
+                .is_some()
         );
     }
 
@@ -11195,6 +13944,37 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
         assert!(!html.contains(&short_id(&job.id)));
         assert!(!html.contains("<script>alert('detail')</script>"));
         assert!(html.contains("&lt;script&gt;alert(&#39;detail&#39;)&lt;/script&gt;"));
+    }
+
+    #[test]
+    fn severe_ops_ui_summary_surfaces_x_drift_and_sync_failures() {
+        // CLAIM: The rendered ops UI makes X drift/sync failure state visible,
+        // not just present in machine JSON.
+        // ORACLE: Synthetic snapshot with X drift renders explicit summary
+        // metrics and health issues.
+        let paths = test_paths("ops-ui-x-drift");
+        let store = Store::open(paths).unwrap();
+        let mut snapshot = store.ops_snapshot().unwrap();
+        snapshot.x_stats.drift.tweets_without_fts = 1;
+        snapshot.x_stats.drift.projection_failures = 1;
+        snapshot
+            .x_stats
+            .sync_runs_by_status
+            .insert("failed".to_string(), 2);
+        snapshot
+            .health
+            .warnings
+            .push("X FTS drift: 1 canonical tweet(s) are missing FTS rows".to_string());
+        snapshot.health.ok = false;
+
+        let html = render_ops_ui(&snapshot);
+        assert!(html.contains("X drift"));
+        assert!(html.contains("tweets_missing_fts:1"));
+        assert!(html.contains("projection_failures:1"));
+        assert!(html.contains("X sync statuses"));
+        assert!(html.contains("failed:2"));
+        assert!(html.contains("failed X sync run"));
+        assert!(html.contains("X FTS drift"));
     }
 
     #[tokio::test]

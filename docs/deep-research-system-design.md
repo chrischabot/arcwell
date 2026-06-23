@@ -13,6 +13,11 @@ and produce a source-backed report. A short executive summary may appear inside
 the final report, but it is an artifact of the deep run, not a separate "brief"
 mode.
 
+The next architecture layer is iterated epistemic convergence: repeated
+statement -> disproof -> revision -> stop-rule loops over the durable evidence
+substrate. That design lives in
+[`docs/iterated-epistemic-convergence-design.md`](iterated-epistemic-convergence-design.md).
+
 The normal assistant should not auto-trigger Deep Research for every factual
 question. It should trigger only when the user explicitly asks for research,
 deep research, a deep dive, field mapping, a literature survey, a market map, a
@@ -1001,13 +1006,54 @@ A model-backed report may be marked complete only when:
   adversarial-evaluator records.
 - Done: automated mock/OpenAI editorial invocation with policy/cost records,
   inspectable output artifacts, and malformed-provider fail-closed tests.
+- Done: terminal convergence can opt into the model-backed citation-verifier
+  and adversarial-evaluator gate through `editorial_provider` plus
+  `max_provider_calls>=2`; direct, worker, and MCP paths persist nested
+  judgment scores and avoid duplicate provider calls on terminal replay.
+  Incomplete terminal states such as `max_iterations` preserve their durable
+  stop reason and still run the model-backed gate when requested, while stale
+  settled snapshots reopen to `continue` if active fact-checking adds new
+  blockers.
+- Done: convergence exposes `research_convergence_host_search_tasks` as the
+  exact Codex/host handoff queue for per-challenge host-native search; matching
+  proof refreshes existing challenge rows, while wrong-query selected results
+  remain insufficient.
+- Done: `research_convergence_provider_search` provides a daemon/provider
+  fallback for pending convergence search tasks using Brave/OpenAI/Perplexity
+  through the existing policy and cost gates, records cost-linked proof when
+  safe public results are selected, can enqueue bounded worker `ingest_url`
+  jobs for selected safe results through `enqueue_selected_url_ingest` plus
+  `max_ingest_jobs`, and records blocked provider attempts as artifacts.
 - Done: live OpenAI editorial invocation reached the provider, parsed the nested
   Responses API output envelope, recorded a cost decision, and rejected an
   insufficient evidence pack instead of drafting unsupported prose.
-- Remaining: live provider editorial/eval quality smoke over a saturated corpus,
-  richer citation-quality scoring,
-  final report status wiring, mutation eval expansion, and live smoke under
-  explicit provider/cost config.
+- Done: `research_active_fact_check` extracts factual sentences from
+  report/generated-synthesis artifacts, matches source-backed convergence
+  statements as `right`, labels unsupported high-impact sentences `unknown`,
+  labels vague judgments `not_checkable`, and creates citation-gap host-search
+  tasks so wrong/unknown report claims feed the next retrieval/convergence pass.
+- Done: `research_convergence_close_loop` now composes convergence report
+  compilation, active fact-checking, optional policy/cost-gated provider
+  fallback for pending citation-gap searches, convergence rerun, final report
+  judgment, and explicit closure blockers. Severe fixtures prove it refuses
+  unsupported report prose without retrieval proof and closes only after
+  provider-recorded proof plus rerun clears blocking challenges.
+- Done: a live image-compression production proof reached the OpenAI
+  citation-verifier/adversarial-evaluator gate over a saturated source-card
+  corpus and failed closed rather than accepting weak evidence. Latest proof:
+  `.arcwell-dev/proofs/deep-research-production-proof-20260623T155121Z`.
+- Done: a bounded live image-compression proof proved full-source URL
+  promotion, exact per-challenge host-search execution, worker-resumable
+  convergence, and model-backed review over a `max_iterations` incomplete
+  terminal state. Latest bounded proof:
+  `.arcwell-dev/proofs/deep-research-production-proof-20260623T181935Z`.
+- Remaining: accepted live provider editorial/eval quality over a saturated
+  corpus, richer citation-quality scoring, mutation eval expansion, and live
+  smoke under explicit provider/cost config. The deterministic convergence
+  report now includes bottom-line readiness, iteration deltas, source/search
+  saturation, host-search proof coverage, and residual risks; a fail-closed
+  live proof is still not a substitute for an accepted live saturated
+  report-quality proof.
 
 ### Milestone 12: Saturated Production Proof
 
@@ -1024,6 +1070,33 @@ Each proof must preserve run state, role traces, host-search proof, source
 ledger, source cards, document/table artifacts where relevant, structured
 claims, skeptic findings, editorial/eval runs, audit output, report artifact,
 cost/policy records, and saturation reason.
+
+Current production-proof state:
+
+- Technical/literature harness exists at `scripts/deep-research-production-proof`.
+  It writes a proof packet and exits non-zero when blockers remain.
+- Latest image-compression run:
+  `.arcwell-dev/proofs/deep-research-production-proof-20260623T181935Z`.
+  It recorded 2 Brave queries, 8 deduped candidates, 12 source cards, 4
+  bounded full-source cards, 34 host-search proof records, 20 exact challenge
+  host-search task executions, 4 worker convergence runs, and live OpenAI
+  verifier/evaluator records on a `max_iterations` incomplete terminal state.
+  It is intentionally blocked with `closure_status: stopped_incomplete`, one
+  unknown high-impact fact check, an unaccepted model-backed judgment, and a
+  rejected final report judgment.
+- Earlier saturated image-compression run:
+  `.arcwell-dev/proofs/deep-research-production-proof-20260623T155121Z`.
+  It recorded 12 Brave queries, 131 deduped candidates, 80 source cards,
+  80 structured claims, 18 host-search proof records, closed deterministic
+  convergence/close-loop state, and live OpenAI verifier/evaluator records.
+- The run is intentionally not accepted as analyst-grade. The model-backed
+  evaluator rejected it for snippet-derived medium-confidence evidence,
+  unsupported or overreaching conclusions, missing caveats, and 474 pending
+  challenge-search tasks.
+- Next production proof must read/extract selected full sources, resolve or
+  explicitly close challenge-search tasks, attach stronger document anchors for
+  numeric/table claims, and then rerun the model-backed verifier/evaluator until
+  it accepts or records a bounded, honest incomplete state.
 
 ## Implementation Milestones
 

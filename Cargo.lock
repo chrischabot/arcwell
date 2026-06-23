@@ -120,10 +120,12 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",
  "uuid",
+ "zip",
 ]
 
 [[package]]

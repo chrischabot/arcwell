@@ -159,6 +159,7 @@ typing part of the name. Use the displayed command name from the picker.
 - Deep research runs use `research_run`, `research_status`, `research_read`, `research_audit_run`, and `research_stop`.
 - Deep research source ledgers use `research_sources`, `research_source_add`, `research_source_card_link`, and optional `run_id` linking in `source_card_add`.
 - Structured extraction and synthesis gates use `research_extraction_prompt`, `research_claims_ingest`, `research_claims`, `research_clusters`, `research_skeptic_pass`, and `research_report_compile`.
+- Iterated convergence uses `research_convergence_start`, `research_convergence_step`, `research_convergence_run`, `research_convergence_enqueue`, `research_convergence_status`, `research_iterations`, `research_iteration_read`, `research_statements`, `research_challenges`, `research_convergence_host_search_tasks`, `research_convergence_provider_search`, `research_disproofs`, `research_revisions`, `research_fact_checks`, `research_active_fact_check`, `research_convergence_close_loop`, `research_convergence_snapshots`, `research_convergence_report_compile`, and `research_report_judgments`. `research_convergence_host_search_tasks` is the exact pending/recorded work queue for host-native search per challenge. `research_convergence_provider_search` is the policy/cost-gated daemon fallback for pending challenge searches when host-native search is unavailable or unattended worker progress is needed; `enqueue_selected_url_ingest` plus `max_ingest_jobs` can schedule bounded worker `ingest_url` jobs for selected safe results. `research_active_fact_check` extracts report/generated-synthesis factual sentences, verifies them against source-backed convergence statements, and creates citation-gap host-search challenges for unsupported high-impact sentences. `research_convergence_close_loop` composes report compilation, active fact-checking, optional provider fallback, rerun, final report judgment, and explicit `closure_status`/blockers so agents can tell `closed` from `needs_host_search`, `provider_blocked`, `stopped_incomplete`, or `unresolved`. `research_convergence_run` and `research_convergence_enqueue` accept `editorial_provider`, `editorial_model_name`, `editorial_endpoint`, `editorial_timeout_seconds`, and `max_provider_calls`; the model-backed convergence editorial/evaluator gate requires `max_provider_calls>=2` and `no_write=false`.
 - `/research-runs` uses `research_runs`.
 - `/research-tasks` uses `research_tasks`.
 - `/research-task-complete` uses `research_task_complete`.
@@ -184,7 +185,19 @@ typing part of the name. Use the displayed command name from the picker.
 - `/x-watch-rebuild` uses `x_rebuild_definitive_watch_sources`.
 - `/x-import-following-watch-sources` uses `x_import_following_watch_sources`.
 - `/x-import-json` uses `x_import_json_file`.
+- `/x-discover-archives` uses `x_discover_archives`.
+- `/x-import-archive` uses `x_import_archive`.
+- `/x-export-portable` uses `x_export_portable`.
+- `/x-validate-portable` uses `x_validate_portable`.
+- `/x-import-portable` uses `x_import_portable`.
+- `/x-extract-links` uses `x_extract_links`.
+- `/x-expand-links` uses `x_expand_links`.
+- `/x-links` uses `x_links`.
 - `/x-list` uses `x_list`.
+- `/x-search-tweets` uses `x_search_tweets`.
+- `/x-thread` uses `x_thread`.
+- `/x-stats` uses `x_stats`.
+- `/x-repair-projections` uses `x_repair_projections`.
 - `/x-report` uses `x_report`.
 - `/x-oauth` uses `x_oauth_authorize_url`, `x_oauth_exchange_code`, or `x_oauth_refresh`.
 

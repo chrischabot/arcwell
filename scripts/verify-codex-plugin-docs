@@ -111,7 +111,11 @@ function rel(root, file) {
 function extractMcpTools(root) {
   const main = path.join(root, "crates/arcwell-cli/src/main.rs");
   const text = read(main);
-  return new Set([...text.matchAll(/tool\(\s*"([a-z0-9_]+)"/g)].map((match) => match[1]));
+  return new Set(
+    [...text.matchAll(/\btool(?:_with_schema)?\(\s*"([a-z0-9_]+)"/g)].map(
+      (match) => match[1]
+    )
+  );
 }
 
 function extractBackticks(text) {

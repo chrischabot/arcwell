@@ -1,0 +1,1234 @@
+#!/usr/bin/env node
+/*
+ * Run an end-to-end deep-research production proof in a disposable Arcwell home.
+ *
+ * This script intentionally drives the public CLI instead of private test APIs:
+ * provider search -> host-search proof -> source cards -> run linkage ->
+ * audit/report -> convergence -> close-loop -> proof packet.
+ */
+
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { spawnSync } = require("child_process");
+
+const root = path.resolve(__dirname, "..");
+
+const profiles = {
+  "image-compression": {
+    topic:
+      "state of the art image compression algorithms, codecs, benchmarks, and deployment tradeoffs",
+    minCandidates: 80,
+    minSourceCards: 60,
+    minFullSourceCards: 24,
+    queries: [
+      "image compression algorithms benchmark AVIF JPEG XL WebP PNG 2026",
+      "JPEG XL benchmark corpus visual quality butteraugli official docs",
+      "AVIF codec benchmark libaom rav1e svt-av1 image compression",
+      "WebP lossless lossy benchmark image compression study",
+      "learned image compression survey neural codecs benchmark",
+      "arXiv image compression survey neural learned compression benchmark",
+      "official JPEG XL specification codec documentation compression",
+      "AOM AVIF official documentation image compression codec",
+      "Cloudinary image format benchmark AVIF WebP JPEG XL",
+      "browser support AVIF WebP JPEG XL image compression 2026",
+      "lossless image compression benchmark PNG WebP JPEG XL FLIF",
+      "perceptual metrics image compression SSIM MS-SSIM VMAF Butteraugli",
+    ],
+  },
+  "london-ai": {
+    topic:
+      "AI startup scene in London: companies, funding, talent, infrastructure, accelerators, and risks",
+    minCandidates: 80,
+    minSourceCards: 60,
+    minFullSourceCards: 24,
+    queries: [
+      "London AI startups funding 2026 venture capital ecosystem",
+      "London artificial intelligence startups official company announcements funding",
+      "UK AI startups London Dealroom Sifted Beauhurst 2026",
+      "London AI labs startups hiring machine learning 2026",
+      "UK government AI sector London startup ecosystem report",
+      "London AI accelerators incubators startups entrepreneurs",
+      "London generative AI startups funding round news",
+      "London deep tech AI startups university spinouts",
+      "AI safety startups London UK companies funding",
+      "London fintech AI startups enterprise AI funding",
+      "London health AI startups clinical AI funding UK",
+      "London AI ecosystem risks regulation talent compute",
+    ],
+  },
+  "cloud-code-safety": {
+    topic:
+      "safe cloud code execution platform with compile-time security constraint verification",
+    minCandidates: 80,
+    minSourceCards: 60,
+    minFullSourceCards: 24,
+    queries: [
+      "safe cloud code execution sandbox architecture capability security verification",
+      "compile time security policy verification code execution platform WASM",
+      "WebAssembly sandbox security capability based isolation research",
+      "eBPF verifier safety model capability sandbox research",
+      "OPA Rego policy verification sandbox cloud code execution",
+      "language based security proof carrying code cloud sandbox",
+      "secure multi tenant code execution sandbox threat model",
+      "Firecracker gVisor Kata Containers sandbox security comparison",
+      "capability systems object capability security sandbox cloud",
+      "static analysis security policy enforcement untrusted code execution",
+      "formal verification sandbox isolation cloud code execution",
+      "serverless sandbox security isolation research 2026",
+    ],
+  },
+};
+
+function usage(exitCode = 0) {
+  const profileNames = Object.keys(profiles).join(", ");
+  console.log(`Usage: scripts/deep-research-production-proof [options]
+
+Options:
+  --profile <name>              Topic profile: ${profileNames}
+  --topic <text>                Override topic text
+  --query <text>                Add one query; may be repeated
+  --queries-file <path>         Newline-delimited queries
+  --max-queries <n>             Max provider search queries (default: all profile queries)
+  --max-results <n>             Provider results per query, 1..20 (default: 10)
+  --max-source-cards <n>        Max selected source cards (default: 100)
+  --min-candidates <n>          Required deduped candidates (profile default)
+  --min-source-cards <n>        Required linked source cards (profile default)
+  --max-full-source-ingests <n> Max selected URLs to fetch/read into full-text source cards (default: 40)
+  --min-full-source-cards <n>   Required full-text source cards (profile default)
+  --max-challenge-search-tasks <n>
+                               Max exact convergence host-search tasks per round (default: 60)
+  --challenge-search-rounds <n>
+                               Exact challenge-search/converge rounds (default: 2)
+  --challenge-search-results <n>
+                               Provider results per challenge task, 1..10 (default: 5)
+  --max-convergence-iterations <n>
+                               Max convergence iterations per converge call (default: 8)
+  --provider <name>             Search provider (default: brave)
+  --home <path>                 Use this ARCWELL_HOME instead of a new proof home
+  --keep-home                   Keep generated proof home on failure
+  --no-editorial                Skip live model-backed convergence editorial/eval
+  --worker-convergence          Run convergence through enqueue + worker run-once
+  --editorial-provider <name>   Editorial provider (default: openai)
+  --editorial-model-name <name> Editorial model (default: gpt-4.1-mini)
+  --provider-cost-cap-usd <n>   Close-loop provider fallback cap (default: 0.50)
+  --editorial-cost-cap-usd <n>  Convergence/editorial cap (default: 1.00)
+  --help                       Show this help
+`);
+  process.exit(exitCode);
+}
+
+function parseArgs(argv) {
+  const args = {
+    profile: "image-compression",
+    queries: [],
+    maxResults: 10,
+    maxSourceCards: 100,
+    maxFullSourceIngests: 40,
+    maxChallengeSearchTasks: 60,
+    challengeSearchRounds: 2,
+    challengeSearchResults: 5,
+    maxConvergenceIterations: 8,
+    provider: "brave",
+    keepHome: false,
+    noEditorial: false,
+    workerConvergence: false,
+    editorialProvider: "openai",
+    editorialModelName: "gpt-4.1-mini",
+    providerCostCapUsd: 0.5,
+    editorialCostCapUsd: 1.0,
+  };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = () => {
+      if (i + 1 >= argv.length) throw new Error(`${arg} requires a value`);
+      i += 1;
+      return argv[i];
+    };
+    switch (arg) {
+      case "--help":
+      case "-h":
+        usage(0);
+        break;
+      case "--profile":
+        args.profile = next();
+        break;
+      case "--topic":
+        args.topic = next();
+        break;
+      case "--query":
+        args.queries.push(next());
+        break;
+      case "--queries-file": {
+        const file = next();
+        args.queries.push(
+          ...fs
+            .readFileSync(file, "utf8")
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+        );
+        break;
+      }
+      case "--max-queries":
+        args.maxQueries = parsePositiveInt(arg, next());
+        break;
+      case "--max-results":
+        args.maxResults = parsePositiveInt(arg, next());
+        break;
+      case "--max-source-cards":
+        args.maxSourceCards = parsePositiveInt(arg, next());
+        break;
+      case "--min-candidates":
+        args.minCandidates = parsePositiveInt(arg, next());
+        break;
+      case "--min-source-cards":
+        args.minSourceCards = parsePositiveInt(arg, next());
+        break;
+      case "--max-full-source-ingests":
+        args.maxFullSourceIngests = parsePositiveInt(arg, next());
+        break;
+      case "--min-full-source-cards":
+        args.minFullSourceCards = parsePositiveInt(arg, next());
+        break;
+      case "--max-challenge-search-tasks":
+        args.maxChallengeSearchTasks = parsePositiveInt(arg, next());
+        break;
+      case "--challenge-search-rounds":
+        args.challengeSearchRounds = parsePositiveInt(arg, next());
+        break;
+      case "--challenge-search-results":
+        args.challengeSearchResults = parsePositiveInt(arg, next());
+        break;
+      case "--max-convergence-iterations":
+        args.maxConvergenceIterations = parsePositiveInt(arg, next());
+        break;
+      case "--provider":
+        args.provider = next();
+        break;
+      case "--home":
+        args.home = next();
+        break;
+      case "--keep-home":
+        args.keepHome = true;
+        break;
+      case "--no-editorial":
+        args.noEditorial = true;
+        break;
+      case "--worker-convergence":
+        args.workerConvergence = true;
+        break;
+      case "--editorial-provider":
+        args.editorialProvider = next();
+        break;
+      case "--editorial-model-name":
+        args.editorialModelName = next();
+        break;
+      case "--provider-cost-cap-usd":
+        args.providerCostCapUsd = parseFiniteNumber(arg, next());
+        break;
+      case "--editorial-cost-cap-usd":
+        args.editorialCostCapUsd = parseFiniteNumber(arg, next());
+        break;
+      default:
+        throw new Error(`unknown argument: ${arg}`);
+    }
+  }
+  return args;
+}
+
+function parsePositiveInt(name, value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function parseFiniteNumber(name, value) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a finite non-negative number`);
+  }
+  return parsed;
+}
+
+function buildEnv(home, provider) {
+  const env = { ...process.env, ARCWELL_HOME: home };
+  if (provider === "brave" && !env.BRAVE_API_KEY && env.BRAVE_SEARCH_API_KEY) {
+    env.BRAVE_API_KEY = env.BRAVE_SEARCH_API_KEY;
+  }
+  return env;
+}
+
+function ensureProviderEnv(env, provider, noEditorial, editorialProvider) {
+  if (provider === "brave" && !env.BRAVE_API_KEY) {
+    throw new Error("BRAVE_API_KEY or BRAVE_SEARCH_API_KEY is required for brave search");
+  }
+  if (!noEditorial && editorialProvider === "openai" && !env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is required for live OpenAI editorial proof");
+  }
+}
+
+function commandString(args) {
+  return args
+    .map((arg) => (/[^\w./:=@+-]/.test(arg) ? JSON.stringify(arg) : arg))
+    .join(" ");
+}
+
+function runJson(bin, env, logFile, args) {
+  const label = commandString([bin, ...args]);
+  fs.appendFileSync(logFile, `$ ${label}\n`);
+  const result = spawnSync(bin, args, {
+    cwd: root,
+    env,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  fs.appendFileSync(logFile, result.stdout || "");
+  fs.appendFileSync(logFile, result.stderr || "");
+  fs.appendFileSync(logFile, "\n");
+  if (result.status !== 0) {
+    throw new Error(`command failed (${result.status}): ${label}\n${result.stderr || result.stdout}`);
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    throw new Error(`command returned non-JSON: ${label}\n${result.stdout}\n${error.message}`);
+  }
+}
+
+function cleanText(text, maxLength = 1000) {
+  return String(text || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function canonicalUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "https:") return null;
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function classifySource(result) {
+  const url = String(result.url || "").toLowerCase();
+  const title = String(result.title || "").toLowerCase();
+  if (url.includes("arxiv.org") || url.endsWith(".pdf") || title.includes("paper")) {
+    return "paper";
+  }
+  if (
+    url.includes("w3.org") ||
+    url.includes("ietf.org") ||
+    url.includes("iso.org") ||
+    url.includes("jpeg.org") ||
+    url.includes("aomedia.org") ||
+    url.includes("webmproject.org") ||
+    url.includes("developer.mozilla.org") ||
+    url.includes("gov.uk") ||
+    url.includes("nist.gov")
+  ) {
+    return "primary";
+  }
+  if (title.includes("benchmark") || url.includes("benchmark")) return "benchmark";
+  if (url.includes("github.com")) return "implementation";
+  if (url.includes("reddit.com") || url.includes("news.ycombinator.com")) return "community";
+  return "secondary";
+}
+
+function sourceType(result) {
+  const url = String(result.url || "").toLowerCase();
+  return url.endsWith(".pdf") || url.includes("/pdf/") ? "pdf" : "web";
+}
+
+function claimKindFor(result, cardClaim) {
+  const kind = String(cardClaim?.kind || "").toLowerCase();
+  const allowed = ["fact", "interpretation", "prediction", "rumor", "measurement", "recommendation"];
+  if (allowed.includes(kind)) return kind;
+  if (result.source_family === "benchmark") return "measurement";
+  return "fact";
+}
+
+function boundedConfidence(value, fallback = 0.55) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(1, Math.max(0, parsed));
+}
+
+function markdownProofPacket(summary) {
+  const blockers = summary.blockers.length
+    ? summary.blockers.map((item) => `- ${item}`).join("\n")
+    : "- None recorded by the proof harness.";
+  return `# Deep Research Production Proof
+
+Generated: ${summary.generated_at}
+
+## Claim
+
+The deep-research loop can run through live provider search, auditable host-search proof, source-card linkage, report compilation, convergence, active close-loop checks, and optional model-backed editorial/evaluator gates in one repeatable command.
+
+## Scope
+
+- Topic: ${summary.topic}
+- Profile: ${summary.profile}
+- ARCWELL_HOME: ${summary.home}
+- Search provider: ${summary.provider}
+- Editorial provider: ${summary.editorial_provider || "disabled"}
+- Worker convergence: ${summary.worker_convergence ? "yes" : "no"}
+- Max convergence iterations: ${summary.max_convergence_iterations}
+- Challenge search rounds: ${summary.challenge_search_rounds}
+- Queries attempted: ${summary.queries_attempted}
+
+## Evidence Counts
+
+- Deduped candidates: ${summary.candidates}
+- Source cards linked: ${summary.source_cards}
+- Full-text source cards linked: ${summary.full_source_cards}
+- Structured claims ingested: ${summary.claims}
+- Claim ingest failures: ${summary.claim_ingest_failures}
+- Host-search records: ${summary.host_searches}
+- Challenge host-search tasks executed: ${summary.challenge_search_tasks_executed}
+- Worker convergence runs: ${summary.worker_convergence_runs}
+- Open convergence challenges: ${summary.open_challenges}
+- Strong refutations: ${summary.strong_refutations}
+- Report judgments: ${summary.report_judgments}
+- Model-backed editorial judgment: ${summary.model_backed_editorial ? "present" : "absent"}
+- Model-backed accepted: ${summary.model_backed_accepted ? "yes" : "no"}
+- Closure status: ${summary.closure_status || "not reported"}
+
+## Blockers
+
+${blockers}
+
+## Artifacts
+
+- Search JSONL: \`${summary.files.searches}\`
+- Source JSONL: \`${summary.files.sources}\`
+- Command log: \`${summary.files.commands}\`
+- Summary JSON: \`${summary.files.summary}\`
+`;
+}
+
+function extractReadableTextFromWikiPage(page) {
+  const content = String(page?.content || "");
+  const readableStart = content.indexOf("## Readable Text");
+  const sourceStart = content.indexOf("## Escaped Source Excerpt");
+  if (readableStart >= 0) {
+    const start = readableStart + "## Readable Text".length;
+    const end = sourceStart > start ? sourceStart : content.length;
+    return cleanText(content.slice(start, end), 6000);
+  }
+  return cleanText(content, 6000);
+}
+
+function sourceCardClaimsJson(text, kind, confidence, sourceAnchor, caveats) {
+  const claim = cleanText(text, 900);
+  if (!claim) return "[]";
+  return JSON.stringify([
+    {
+      claim,
+      kind,
+      confidence,
+    },
+  ]);
+}
+
+function researchClaimOutput(text, kind, confidence, sourceAnchor, caveats) {
+  const claim = cleanText(text, 900);
+  if (!claim) return null;
+  return {
+    claims: [
+      {
+        text: claim,
+        kind,
+        confidence,
+        caveats,
+        quote: claim.slice(0, 500),
+        source_anchor: sourceAnchor,
+      },
+    ],
+  };
+}
+
+function shouldAttemptFullSourceIngest(result) {
+  const url = String(result.canonical_url || result.url || "").toLowerCase();
+  if (!url.startsWith("https://")) return false;
+  if (url.endsWith(".pdf") || url.includes("/pdf/")) return false;
+  if (url.includes("reddit.com") || url.includes("news.ycombinator.com")) return false;
+  return true;
+}
+
+function promoteFullSource({
+  bin,
+  env,
+  logFile,
+  runId,
+  result,
+  args,
+  linkedCards,
+  fullSourceCards,
+  claimIngestFailures,
+  fullSourceFailures,
+  sourcesFile,
+  reason,
+}) {
+  if (!shouldAttemptFullSourceIngest(result)) {
+    fullSourceFailures.push({
+      url: result.canonical_url || result.url,
+      reason: "unsupported_for_bounded_url_ingest",
+    });
+    return null;
+  }
+  try {
+    const job = runJson(bin, env, logFile, ["wiki", "ingest-url", result.canonical_url]);
+    if (job.status !== "completed") {
+      const error = cleanText(job.error || JSON.stringify(job.result_json || {}), 700);
+      fullSourceFailures.push({
+        url: result.canonical_url,
+        job_id: job.id,
+        reason: error || `url ingest status ${job.status}`,
+      });
+      return null;
+    }
+    const pageId = job.result_json?.page_id;
+    if (!pageId) {
+      fullSourceFailures.push({
+        url: result.canonical_url,
+        job_id: job.id,
+        reason: "url ingest completed without page_id",
+      });
+      return null;
+    }
+    const page = runJson(bin, env, logFile, ["wiki", "read", pageId]);
+    const readable = extractReadableTextFromWikiPage(page);
+    if (readable.length < 400) {
+      fullSourceFailures.push({
+        url: result.canonical_url,
+        job_id: job.id,
+        page_id: pageId,
+        reason: "readable full-source text too short",
+      });
+      return null;
+    }
+    const title = cleanText(result.title, 180) || page.title || result.canonical_url;
+    const summary = cleanText(readable, 2400);
+    const kind = result.source_family === "benchmark" ? "measurement" : "fact";
+    const claimsJson = sourceCardClaimsJson(
+      summary,
+      kind,
+      0.72,
+      `url-ingest:${pageId}`,
+      []
+    );
+    const card = runJson(bin, env, logFile, [
+      "source-card",
+      "add",
+      "--title",
+      `${title} [full source extract]`,
+      "--url",
+      result.canonical_url,
+      "--source-type",
+      result.source_type || "web",
+      "--provider",
+      `production-proof-url-ingest-${args.provider}`,
+      "--summary",
+      summary,
+      "--claims-json",
+      claimsJson,
+    ]);
+    runJson(bin, env, logFile, [
+      "research",
+      "link-source-card",
+      runId,
+      card.id,
+      "--source-family",
+      result.source_family || classifySource(result),
+      "--read-depth",
+      "full-text",
+      "--triage-status",
+      "read",
+      "--notes",
+      `${reason}; URL ingest job ${job.id}; wiki page ${pageId}`,
+    ]);
+    const claimOutput = researchClaimOutput(
+      summary,
+      kind,
+      0.72,
+      `url-ingest:${pageId}`,
+      ["Bounded URL-ingest extraction; verify quoted/numeric claims against the original page before external publication."]
+    );
+    if (claimOutput) {
+      try {
+        runJson(bin, env, logFile, [
+          "research",
+          "ingest-claims",
+          runId,
+          card.id,
+          "--provider",
+          "production-proof-url-ingest",
+          "--model",
+          "deterministic-readable-text",
+          "--output-json",
+          JSON.stringify(claimOutput),
+        ]);
+      } catch (error) {
+        const message = cleanText(error.message, 500);
+        claimIngestFailures.push({
+          source_card_id: card.id,
+          url: result.canonical_url,
+          error: message,
+        });
+        fs.appendFileSync(logFile, `full-source claim ingest skipped for ${card.id}: ${message}\n`);
+      }
+    }
+    const promoted = {
+      card_id: card.id,
+      url: result.canonical_url,
+      family: result.source_family || classifySource(result),
+      wiki_page_id: pageId,
+      ingest_job_id: job.id,
+      read_depth: "full-text",
+    };
+    linkedCards.push(promoted);
+    fullSourceCards.push(promoted);
+    fs.appendFileSync(sourcesFile, `${JSON.stringify({ result, card, full_source: promoted })}\n`);
+    return promoted;
+  } catch (error) {
+    fullSourceFailures.push({
+      url: result.canonical_url || result.url,
+      reason: cleanText(error.message, 700),
+    });
+    fs.appendFileSync(logFile, `full-source ingest failed for ${result.canonical_url}: ${error.message}\n`);
+    return null;
+  }
+}
+
+function hostResultsFromSearch(search, query, maxSelected) {
+  const hostResults = [];
+  for (const result of search.results || []) {
+    const canonical = canonicalUrl(result.url);
+    if (!canonical) continue;
+    hostResults.push({
+      rank: result.rank,
+      title: cleanText(result.title, 240) || canonical,
+      url: canonical,
+      snippet: cleanText(result.snippet, 1000),
+      published_at: null,
+      source_family_guess: classifySource(result),
+      provider_metadata: {
+        origin: "deep_research_production_proof",
+        provider: search.provider,
+        retrieved_at: result.retrieved_at,
+        search_query: query,
+      },
+      selected_for_ingest: hostResults.length < maxSelected,
+    });
+  }
+  return hostResults;
+}
+
+function runConvergence(bin, env, logFile, args, convergeArgs, workerRuns) {
+  if (!args.workerConvergence) {
+    return runJson(bin, env, logFile, convergeArgs);
+  }
+  const enqueueArgs = [...convergeArgs];
+  enqueueArgs[1] = "converge-enqueue";
+  const job = runJson(bin, env, logFile, enqueueArgs);
+  const worker = runJson(bin, env, logFile, ["worker", "run-once", "--max-jobs", "1"]);
+  workerRuns.push({ job, worker });
+  return { queued_job: job, worker };
+}
+
+function executeChallengeSearchTasks({
+  bin,
+  env,
+  logFile,
+  runId,
+  args,
+  challengeSearchResults,
+  searches,
+  searchesFile,
+  linkedCards,
+  fullSourceCards,
+  claimIngestFailures,
+  fullSourceFailures,
+  sourcesFile,
+  phase,
+}) {
+  const stats = {
+    executed: 0,
+    withSelectedResults: 0,
+    fullSourceCards: 0,
+  };
+  const challengeTaskSearches = runJson(bin, env, logFile, [
+    "research",
+    "convergence-host-search-tasks",
+    runId,
+  ]);
+  for (const task of (Array.isArray(challengeTaskSearches) ? challengeTaskSearches : [])
+    .filter((task) => task.status === "pending")
+    .slice(0, args.maxChallengeSearchTasks)) {
+    const query = String(task.query || "").trim();
+    if (!query) continue;
+    const search = runJson(bin, env, logFile, [
+      "research",
+      "search",
+      "--provider",
+      args.provider,
+      "--max-results",
+      String(challengeSearchResults),
+      "--",
+      query,
+    ]);
+    searches.push(search);
+    fs.appendFileSync(searchesFile, `${JSON.stringify({ phase, challenge_task: task, search })}\n`);
+    const hostResults = hostResultsFromSearch(search, query, 2);
+    if (hostResults.length > 0) {
+      runJson(bin, env, logFile, [
+        "research",
+        "host-search-record",
+        runId,
+        query,
+        "--host",
+        "arcwell-production-proof",
+        "--tool-surface",
+        `research_search:${args.provider}:challenge-task:${phase}`,
+        "--query-intent",
+        `Exact convergence challenge task ${task.id} for ${task.challenge_type} (${phase}).`,
+        "--results-json",
+        JSON.stringify(hostResults),
+      ]);
+      stats.withSelectedResults += hostResults.some((result) => result.selected_for_ingest)
+        ? 1
+        : 0;
+      for (const hostResult of hostResults.filter((item) => item.selected_for_ingest)) {
+        if (fullSourceCards.length >= args.maxFullSourceIngests) break;
+        const promoted = promoteFullSource({
+          bin,
+          env,
+          logFile,
+          runId,
+          result: {
+            ...hostResult,
+            canonical_url: hostResult.url,
+            source_family: hostResult.source_family_guess || "secondary",
+            source_type: sourceType(hostResult),
+            search_query: query,
+          },
+          args,
+          linkedCards,
+          fullSourceCards,
+          claimIngestFailures,
+          fullSourceFailures,
+          sourcesFile,
+          reason: `Full-source read for convergence challenge task ${task.id} (${phase})`,
+        });
+        if (promoted) stats.fullSourceCards += 1;
+      }
+    }
+    stats.executed += 1;
+  }
+  return stats;
+}
+
+function runChallengeSearchRounds(context) {
+  const totals = {
+    executed: 0,
+    withSelectedResults: 0,
+    fullSourceCards: 0,
+  };
+  for (let round = 0; round < context.args.challengeSearchRounds; round += 1) {
+    const stats = executeChallengeSearchTasks({
+      ...context,
+      phase: `${context.phase}-round-${round + 1}`,
+    });
+    totals.executed += stats.executed;
+    totals.withSelectedResults += stats.withSelectedResults;
+    totals.fullSourceCards += stats.fullSourceCards;
+    if (stats.executed === 0) break;
+    runConvergence(
+      context.bin,
+      context.env,
+      context.logFile,
+      context.args,
+      context.convergeArgs,
+      context.workerRuns
+    );
+  }
+  return totals;
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const profile = profiles[args.profile];
+  if (!profile) {
+    throw new Error(`unknown profile: ${args.profile}`);
+  }
+  const topic = args.topic || profile.topic;
+  const allQueries = [...(args.queries.length ? args.queries : profile.queries)];
+  const queries = allQueries.slice(0, args.maxQueries || allQueries.length);
+  const minCandidates = args.minCandidates || profile.minCandidates;
+  const minSourceCards = args.minSourceCards || profile.minSourceCards;
+  const minFullSourceCards = args.minFullSourceCards || profile.minFullSourceCards || 0;
+  const maxResults = Math.min(Math.max(args.maxResults, 1), 20);
+  const challengeSearchResults = Math.min(Math.max(args.challengeSearchResults, 1), 10);
+  const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "Z");
+  const proofDir = args.home
+    ? path.resolve(args.home)
+    : path.join(root, ".arcwell-dev", "proofs", `deep-research-production-proof-${timestamp}`);
+  const home = proofDir;
+  fs.mkdirSync(home, { recursive: true });
+  const logFile = path.join(home, "commands.log");
+  const searchesFile = path.join(home, "searches.jsonl");
+  const sourcesFile = path.join(home, "sources.jsonl");
+  const summaryFile = path.join(home, "summary.json");
+  const packetFile = path.join(home, "proof-packet.md");
+  const bin = path.join(root, "target", "debug", "arcwell");
+  if (!fs.existsSync(bin)) {
+    throw new Error(`missing debug binary: ${bin}; run cargo build -p arcwell`);
+  }
+  const env = buildEnv(home, args.provider);
+  ensureProviderEnv(env, args.provider, args.noEditorial, args.editorialProvider);
+
+  let success = false;
+  try {
+    const workflow = runJson(bin, env, logFile, ["research", "run", topic]);
+    const runId = workflow.run.id;
+    const candidates = [];
+    const seen = new Set();
+    const searches = [];
+    const proofWarnings = [];
+    const workerRuns = [];
+
+    for (const query of queries) {
+      const search = runJson(bin, env, logFile, [
+        "research",
+        "search",
+        "--provider",
+        args.provider,
+        "--max-results",
+        String(maxResults),
+        "--",
+        query,
+      ]);
+      searches.push(search);
+      fs.appendFileSync(searchesFile, `${JSON.stringify(search)}\n`);
+      const hostResults = [];
+      for (const result of search.results || []) {
+        const canonical = canonicalUrl(result.url);
+        if (!canonical) continue;
+        const key = canonical.toLowerCase();
+        const selected = candidates.length < args.maxSourceCards;
+        const enriched = {
+          ...result,
+          canonical_url: canonical,
+          search_query: query,
+          source_family: classifySource(result),
+          source_type: sourceType(result),
+        };
+        if (!seen.has(key)) {
+          seen.add(key);
+          candidates.push(enriched);
+        }
+        hostResults.push({
+          rank: result.rank,
+          title: cleanText(result.title, 240) || canonical,
+          url: canonical,
+          snippet: cleanText(result.snippet, 1000),
+          published_at: null,
+          source_family_guess: classifySource(result),
+          provider_metadata: {
+            origin: "deep_research_production_proof",
+            provider: search.provider,
+            retrieved_at: result.retrieved_at,
+            search_query: query,
+          },
+          selected_for_ingest: selected,
+        });
+      }
+      if (hostResults.length > 0) {
+        runJson(bin, env, logFile, [
+          "research",
+          "host-search-record",
+          runId,
+          query,
+          "--host",
+          "arcwell-production-proof",
+          "--tool-surface",
+          `research_search:${args.provider}`,
+          "--query-intent",
+          "Production proof source discovery for saturated deep research.",
+          "--results-json",
+          JSON.stringify(hostResults),
+        ]);
+      }
+    }
+
+    const selected = candidates.slice(0, args.maxSourceCards);
+    const linkedCards = [];
+    const fullSourceCards = [];
+    const fullSourceFailures = [];
+    const claimIngestFailures = [];
+    for (const result of selected) {
+      const title = cleanText(result.title, 180) || result.canonical_url;
+      const snippet = cleanText(result.snippet, 900);
+      const summary = cleanText(`${title}. ${snippet}`, 1000) || title;
+      const card = runJson(bin, env, logFile, [
+        "source-card",
+        "add",
+        "--title",
+        title,
+        "--url",
+        result.canonical_url,
+        "--source-type",
+        result.source_type,
+        "--provider",
+        `production-proof-${args.provider}`,
+        "--summary",
+        summary,
+      ]);
+      runJson(bin, env, logFile, [
+        "research",
+        "link-source-card",
+        runId,
+        card.id,
+        "--source-family",
+        result.source_family,
+        "--read-depth",
+        "snippet-only",
+        "--triage-status",
+        result.source_family === "primary" || result.source_family === "paper"
+          ? "must-read-primary"
+          : "candidate",
+        "--notes",
+        `Selected from production proof query: ${result.search_query}`,
+      ]);
+      linkedCards.push({ card_id: card.id, url: result.canonical_url, family: result.source_family });
+      const cardClaim = Array.isArray(card.claims) ? card.claims[0] : null;
+      const claimText = cleanText(cardClaim?.claim || summary, 900);
+      if (claimText) {
+        const output = {
+          claims: [
+            {
+              text: claimText,
+              kind: claimKindFor(result, cardClaim),
+              confidence: boundedConfidence(cardClaim?.confidence, 0.55),
+              caveats: [
+                "Imported by the production proof harness from provider search snippet/source-card evidence; verify against full source text before publication.",
+              ],
+              quote: claimText.slice(0, 500),
+              source_anchor: "provider search snippet",
+            },
+          ],
+        };
+        try {
+          runJson(bin, env, logFile, [
+            "research",
+            "ingest-claims",
+            runId,
+            card.id,
+            "--provider",
+            "production-proof",
+            "--model",
+            "source-card-snippet",
+            "--output-json",
+            JSON.stringify(output),
+          ]);
+        } catch (error) {
+          const message = cleanText(error.message, 500);
+          claimIngestFailures.push({
+            source_card_id: card.id,
+            url: result.canonical_url,
+            error: message,
+          });
+          fs.appendFileSync(logFile, `claim ingest skipped for ${card.id}: ${message}\n`);
+        }
+      }
+      fs.appendFileSync(sourcesFile, `${JSON.stringify({ result, card })}\n`);
+      if (fullSourceCards.length < args.maxFullSourceIngests) {
+        promoteFullSource({
+          bin,
+          env,
+          logFile,
+          runId,
+          result,
+          args,
+          linkedCards,
+          fullSourceCards,
+          claimIngestFailures,
+          fullSourceFailures,
+          sourcesFile,
+          reason: `Full-source read for initial production proof query: ${result.search_query}`,
+        });
+      }
+    }
+
+    if (candidates.length < minCandidates) {
+      throw new Error(`candidate floor not met: ${candidates.length} < ${minCandidates}`);
+    }
+    if (linkedCards.length < minSourceCards) {
+      throw new Error(`source-card floor not met: ${linkedCards.length} < ${minSourceCards}`);
+    }
+    if (fullSourceCards.length < minFullSourceCards) {
+      proofWarnings.push(
+        `full-source source-card floor not met before convergence: ${fullSourceCards.length} < ${minFullSourceCards}`
+      );
+    }
+
+    runJson(bin, env, logFile, ["research", "clusters", runId]);
+    runJson(bin, env, logFile, ["research", "skeptic", runId]);
+    const audit = runJson(bin, env, logFile, ["research", "audit-run", runId]);
+    runJson(bin, env, logFile, [
+      "research",
+      "report",
+      runId,
+      `Production proof stopped after ${queries.length} live provider queries, ${candidates.length} deduped candidates, and ${linkedCards.length} linked source cards.`,
+    ]);
+
+    const convergenceMaxSources = Math.max(linkedCards.length * 3, minSourceCards, 100);
+    const convergeArgs = [
+      "research",
+      "converge",
+      runId,
+      "--max-iterations",
+      String(args.maxConvergenceIterations),
+      "--max-sources",
+      String(convergenceMaxSources),
+      "--require-active-fact-check",
+      "true",
+      "--cost-cap-usd",
+      String(args.editorialCostCapUsd),
+    ];
+    runConvergence(bin, env, logFile, args, convergeArgs, workerRuns);
+
+    let challengeSearchTasksExecuted = 0;
+    let challengeSearchTasksWithSelectedResults = 0;
+    let challengeFullSourceCards = 0;
+    const preCloseChallengeStats = runChallengeSearchRounds({
+      bin,
+      env,
+      logFile,
+      runId,
+      args,
+      challengeSearchResults,
+      searches,
+      searchesFile,
+      linkedCards,
+      fullSourceCards,
+      claimIngestFailures,
+      fullSourceFailures,
+      sourcesFile,
+      phase: "pre-close",
+      convergeArgs,
+      workerRuns,
+    });
+    challengeSearchTasksExecuted += preCloseChallengeStats.executed;
+    challengeSearchTasksWithSelectedResults += preCloseChallengeStats.withSelectedResults;
+    challengeFullSourceCards += preCloseChallengeStats.fullSourceCards;
+    if (!args.noEditorial) {
+      try {
+        runConvergence(bin, env, logFile, args, [
+          ...convergeArgs,
+          "--max-provider-calls",
+          "2",
+          "--editorial-provider",
+          args.editorialProvider,
+          "--editorial-model-name",
+          args.editorialModelName,
+          "--editorial-timeout-seconds",
+          "45",
+        ], workerRuns);
+      } catch (error) {
+        proofWarnings.push(`model-backed convergence editorial failed: ${cleanText(error.message, 500)}`);
+      }
+    }
+
+    const closeArgs = [
+      "research",
+      "convergence-close-loop",
+      runId,
+      "--provider",
+      args.provider,
+      "--provider-max-tasks",
+      "6",
+      "--provider-max-results",
+      "5",
+      "--provider-max-provider-calls",
+      "6",
+      "--provider-cost-cap-usd",
+      String(args.providerCostCapUsd),
+      "--max-iterations",
+      String(args.maxConvergenceIterations),
+      "--max-sources",
+      String(convergenceMaxSources),
+      "--require-active-fact-check",
+      "true",
+      "--cost-cap-usd",
+      String(args.editorialCostCapUsd),
+    ];
+    let closeLoop = runJson(bin, env, logFile, closeArgs);
+    const postCloseChallengeStats = runChallengeSearchRounds({
+      bin,
+      env,
+      logFile,
+      runId,
+      args,
+      challengeSearchResults,
+      searches,
+      searchesFile,
+      linkedCards,
+      fullSourceCards,
+      claimIngestFailures,
+      fullSourceFailures,
+      sourcesFile,
+      phase: "post-close",
+      convergeArgs,
+      workerRuns,
+    });
+    challengeSearchTasksExecuted += postCloseChallengeStats.executed;
+    challengeSearchTasksWithSelectedResults += postCloseChallengeStats.withSelectedResults;
+    challengeFullSourceCards += postCloseChallengeStats.fullSourceCards;
+    if (postCloseChallengeStats.executed > 0) {
+      closeLoop = runJson(bin, env, logFile, closeArgs);
+    }
+    if (!args.noEditorial) {
+      const prePostCloseJudgments = runJson(bin, env, logFile, ["research", "report-judgments", runId]);
+      const alreadyHasModelBackedJudgment = Array.isArray(prePostCloseJudgments)
+        ? prePostCloseJudgments.some((judgment) => judgment.scores?.model_backed_convergence_editorial)
+        : false;
+      if (!alreadyHasModelBackedJudgment) {
+        try {
+          runConvergence(bin, env, logFile, args, [
+            ...convergeArgs,
+            "--max-provider-calls",
+            "2",
+            "--editorial-provider",
+            args.editorialProvider,
+            "--editorial-model-name",
+            args.editorialModelName,
+            "--editorial-timeout-seconds",
+            "45",
+          ], workerRuns);
+        } catch (error) {
+          proofWarnings.push(`post-close model-backed editorial failed: ${cleanText(error.message, 500)}`);
+        }
+      }
+    }
+
+    const claims = runJson(bin, env, logFile, ["research", "claims", runId]);
+    const hostSearches = runJson(bin, env, logFile, ["research", "host-searches", runId]);
+    const status = runJson(bin, env, logFile, ["research", "convergence-status", runId]);
+    const judgments = runJson(bin, env, logFile, ["research", "report-judgments", runId]);
+    const modelBackedEditorial = Array.isArray(judgments)
+      ? judgments.some((judgment) => judgment.scores?.model_backed_convergence_editorial)
+      : false;
+    const modelBackedAccepted = Array.isArray(judgments)
+      ? judgments.some(
+          (judgment) => judgment.scores?.model_backed_convergence_editorial?.accepted === true
+        )
+      : false;
+    const rejectedJudgment = Array.isArray(judgments)
+      ? judgments.find((judgment) => judgment.overall_decision === "reject")
+      : null;
+    const blockers = [
+      ...((audit.findings || [])
+        .filter((finding) => ["critical", "error"].includes(finding.severity))
+        .map((finding) => `audit ${finding.severity}: ${finding.message}`)),
+      ...((closeLoop.blockers || []).map((blocker) => `close-loop: ${blocker}`)),
+      ...proofWarnings,
+    ];
+    if (!args.noEditorial && !modelBackedEditorial) {
+      blockers.push("model-backed editorial judgment was not recorded");
+    }
+    if (!args.noEditorial && modelBackedEditorial && !modelBackedAccepted) {
+      blockers.push("model-backed editorial judgment was recorded but not accepted");
+    }
+    if (fullSourceCards.length < minFullSourceCards) {
+      blockers.push(`full-source source-card floor not met: ${fullSourceCards.length} < ${minFullSourceCards}`);
+    }
+    if (challengeSearchTasksExecuted === 0) {
+      blockers.push("no exact convergence host-search tasks were executed");
+    }
+    if (challengeSearchTasksExecuted > 0 && challengeSearchTasksWithSelectedResults === 0) {
+      blockers.push("exact convergence host-search tasks produced no selected results");
+    }
+    if (rejectedJudgment) {
+      blockers.push(`report judgment rejected: ${rejectedJudgment.id}`);
+    }
+    if (Array.isArray(claims) && claims.length < Math.floor(minSourceCards * 0.8)) {
+      blockers.push(`structured claim floor not met: ${claims.length} < ${Math.floor(minSourceCards * 0.8)}`);
+    }
+    const summary = {
+      generated_at: new Date().toISOString(),
+      profile: args.profile,
+      topic,
+      home,
+      provider: args.provider,
+      editorial_provider: args.noEditorial ? null : args.editorialProvider,
+      editorial_model_name: args.noEditorial ? null : args.editorialModelName,
+      worker_convergence: args.workerConvergence,
+      worker_convergence_runs: workerRuns.length,
+      max_convergence_iterations: args.maxConvergenceIterations,
+      challenge_search_rounds: args.challengeSearchRounds,
+      queries_attempted: queries.length,
+      candidates: candidates.length,
+      source_cards: linkedCards.length,
+      full_source_cards: fullSourceCards.length,
+      full_source_failures: fullSourceFailures.length,
+      host_searches: Array.isArray(hostSearches) ? hostSearches.length : 0,
+      claims: Array.isArray(claims) ? claims.length : 0,
+      claim_ingest_failures: claimIngestFailures.length,
+      challenge_search_tasks_executed: challengeSearchTasksExecuted,
+      challenge_search_tasks_with_selected_results: challengeSearchTasksWithSelectedResults,
+      challenge_full_source_cards: challengeFullSourceCards,
+      open_challenges: status.open_challenges?.length || 0,
+      strong_refutations: status.strong_refutations?.length || 0,
+      report_judgments: Array.isArray(judgments) ? judgments.length : 0,
+      model_backed_editorial: modelBackedEditorial,
+      model_backed_accepted: modelBackedAccepted,
+      closure_status: closeLoop.closure_status || null,
+      blockers,
+      files: {
+        searches: searchesFile,
+        sources: sourcesFile,
+        commands: logFile,
+        summary: summaryFile,
+        packet: packetFile,
+      },
+      run_id: runId,
+      full_source_failure_sample: fullSourceFailures.slice(0, 20),
+    };
+    fs.writeFileSync(summaryFile, `${JSON.stringify(summary, null, 2)}\n`);
+    fs.writeFileSync(packetFile, markdownProofPacket(summary));
+    console.log(JSON.stringify(summary, null, 2));
+    success = true;
+    if (blockers.length > 0) {
+      process.exit(2);
+    }
+  } finally {
+    if (!success && args.home === undefined && !args.keepHome) {
+      fs.rmSync(home, { recursive: true, force: true });
+    } else if (!success) {
+      console.error(`proof home retained: ${home}`);
+    }
+  }
+}
+
+try {
+  main();
+} catch (error) {
+  console.error(`deep-research-production-proof failed: ${error.message}`);
+  process.exit(1);
+}

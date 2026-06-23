@@ -321,6 +321,7 @@ smoke() {
   "$DEV_WRAPPER" memory events --limit 10 >/tmp/arcwell-dev-events.json
   "$DEV_WRAPPER" memory hook-recall --event user-prompt-submit --user-id dev-smoke <<<'{"prompt":"Ophelia"}' >/tmp/arcwell-dev-hook-recall.json
   "$DEV_WRAPPER" memory hook-capture --event stop --user-id dev-smoke <<<'{"transcript":"Smoke hook capture input."}' >/tmp/arcwell-dev-hook-capture.json
+  check_dev_research_schema strict
 
   node - "$DEV_PLUGIN/hooks/hooks.json" "$DEV_WRAPPER" <<'NODE'
 const fs = require("fs");
@@ -367,6 +368,217 @@ NODE
   echo "dev smoke passed"
 }
 
+print_plugin_provenance() {
+  need_cmd node
+  local cache="$1"
+  node - "$STABLE_PLUGIN" "$DEV_PLUGIN" "$cache" "$DEV_WRAPPER" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const [stablePlugin, devPlugin, cachePlugin, devWrapper] = process.argv.slice(2);
+
+const readJson = (file) => {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+};
+
+const pluginInfo = (root) => {
+  if (!root) return null;
+  const manifest = readJson(path.join(root, ".codex-plugin", "plugin.json"));
+  const mcp = readJson(path.join(root, ".mcp.json"));
+  const server = mcp?.mcpServers?.arcwell;
+  return {
+    root,
+    exists: fs.existsSync(root),
+    name: manifest?.name || null,
+    displayName: manifest?.interface?.displayName || null,
+    description: manifest?.description || null,
+    mcpCommand: server?.command || null,
+    mcpArgs: server?.args || null,
+    usesDevWrapper: server?.command === devWrapper,
+  };
+};
+
+const stable = pluginInfo(stablePlugin);
+const dev = pluginInfo(devPlugin);
+const cache = pluginInfo(cachePlugin);
+
+const print = (label, info) => {
+  if (!info) {
+    console.log(`${label}: unavailable`);
+    return;
+  }
+  console.log(`${label}: ${info.root}`);
+  console.log(`  exists: ${info.exists}`);
+  console.log(`  name/display: ${info.name || "unknown"} / ${info.displayName || "unknown"}`);
+  console.log(`  mcp command: ${info.mcpCommand || "missing"}`);
+  console.log(`  uses dev wrapper: ${info.usesDevWrapper}`);
+};
+
+print("stable plugin provenance", stable);
+print("materialized dev provenance", dev);
+print("installed cache provenance", cache);
+
+if (cache && cache.exists && !cache.usesDevWrapper) {
+  console.log("WARNING: installed cache does not point at the dev wrapper; run scripts/arcwell-dev sync and start a new Codex thread for MCP schema changes.");
+}
+if (dev && dev.exists && !dev.usesDevWrapper) {
+  console.log("WARNING: materialized dev plugin does not point at the dev wrapper; run scripts/arcwell-dev materialize.");
+}
+NODE
+}
+
+check_dev_research_schema() {
+  local mode="${1:-strict}"
+  if [ ! -x "$DEV_WRAPPER" ]; then
+    if [ "$mode" = "warn" ]; then
+      echo "research schema freshness: skipped; dev wrapper missing"
+      return 0
+    fi
+    echo "research schema freshness failed: dev wrapper missing" >&2
+    return 1
+  fi
+  need_cmd node
+  if node - "$DEV_WRAPPER" <<'NODE'
+const { spawnSync } = require("child_process");
+const [wrapper] = process.argv.slice(2);
+
+const run = (args, input) => {
+  const result = spawnSync(wrapper, args, {
+    input,
+    encoding: "utf8",
+    env: { ...process.env, ARCWELL_MEMORY_PROVIDER: "mock" },
+  });
+  if (result.status !== 0) {
+    throw new Error(`${wrapper} ${args.join(" ")} failed: ${(result.stderr || result.stdout || "").trim()}`);
+  }
+  return result.stdout.trim();
+};
+
+const capabilities = JSON.parse(run(["research", "capabilities"]));
+if (capabilities.schema_version !== 3) {
+  throw new Error(`research capabilities schema_version mismatch: ${capabilities.schema_version}`);
+}
+if (!capabilities.document_extraction?.supported_extensions?.includes("xlsx")) {
+  throw new Error("research capabilities missing xlsx extraction support");
+}
+if (capabilities.role_orchestration?.completed_requires_output_artifact_id !== true) {
+  throw new Error("research capabilities missing completed role output requirement");
+}
+if (capabilities.iterated_epistemic_convergence?.status_tool !== "research_convergence_status") {
+  throw new Error("research capabilities missing convergence contract");
+}
+
+const request = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) + "\n";
+const mcp = JSON.parse(run(["mcp"], request));
+const tools = mcp.result?.tools || [];
+const byName = new Map(tools.map((tool) => [tool.name, tool]));
+if (!byName.has("research_capabilities")) {
+  throw new Error("MCP tools/list missing research_capabilities");
+}
+const hostSearch = byName.get("research_host_search_record");
+const resultItems = hostSearch?.inputSchema?.properties?.results?.items;
+if (resultItems?.type !== "object" || !resultItems.properties?.selected_for_ingest) {
+  throw new Error("MCP research_host_search_record schema is stale or too thin");
+}
+const roleFinish = byName.get("research_role_finish");
+if (!roleFinish?.inputSchema?.properties?.output_artifact_id) {
+  throw new Error("MCP research_role_finish schema missing output_artifact_id");
+}
+const documentExtract = byName.get("research_document_extract");
+if (!documentExtract?.inputSchema?.properties?.media_type) {
+  throw new Error("MCP research_document_extract schema missing media_type");
+}
+const editorialInvoke = byName.get("research_editorial_invoke");
+if (!editorialInvoke?.inputSchema?.properties?.model_provider) {
+  throw new Error("MCP research_editorial_invoke schema missing model_provider");
+}
+for (const name of [
+  "research_convergence_start",
+  "research_convergence_step",
+  "research_convergence_run",
+  "research_convergence_enqueue",
+  "research_convergence_status",
+  "research_convergence_host_search_tasks",
+  "research_convergence_provider_search",
+  "research_active_fact_check",
+  "research_convergence_close_loop",
+  "research_convergence_report_compile",
+]) {
+  if (!byName.has(name)) {
+    throw new Error(`MCP tools/list missing ${name}`);
+  }
+}
+for (const name of ["research_convergence_run", "research_convergence_enqueue"]) {
+  const properties = byName.get(name)?.inputSchema?.properties || {};
+  for (const property of [
+    "max_provider_calls",
+    "editorial_provider",
+    "editorial_model_name",
+    "editorial_endpoint",
+    "editorial_timeout_seconds",
+  ]) {
+    if (!properties[property]) {
+      throw new Error(`MCP ${name} schema missing ${property}`);
+    }
+  }
+}
+const providerSearch = byName.get("research_convergence_provider_search");
+for (const property of [
+  "provider",
+  "max_tasks",
+  "max_results",
+  "max_provider_calls",
+  "enqueue_selected_url_ingest",
+  "max_ingest_jobs",
+  "cost_cap_usd",
+]) {
+  if (!providerSearch?.inputSchema?.properties?.[property]) {
+    throw new Error(`MCP research_convergence_provider_search schema missing ${property}`);
+  }
+}
+const activeFactCheck = byName.get("research_active_fact_check");
+for (const property of [
+  "artifact_id",
+  "max_sentences",
+  "create_challenges",
+]) {
+  if (!activeFactCheck?.inputSchema?.properties?.[property]) {
+    throw new Error(`MCP research_active_fact_check schema missing ${property}`);
+  }
+}
+const closeLoop = byName.get("research_convergence_close_loop");
+for (const property of [
+  "artifact_id",
+  "max_sentences",
+  "create_challenges",
+  "provider",
+  "provider_max_tasks",
+  "provider_max_results",
+  "provider_max_provider_calls",
+  "provider_cost_cap_usd",
+  "rerun_after_check",
+  "compile_final_report",
+]) {
+  if (!closeLoop?.inputSchema?.properties?.[property]) {
+    throw new Error(`MCP research_convergence_close_loop schema missing ${property}`);
+  }
+}
+NODE
+  then
+    echo "research schema freshness: ok"
+  else
+    if [ "$mode" = "warn" ]; then
+      echo "research schema freshness: stale or failed; run scripts/arcwell-dev sync and start a new Codex thread"
+      return 0
+    fi
+    echo "research schema freshness failed" >&2
+    return 1
+  fi
+}
+
 status() {
   echo "repo: $REPO_ROOT"
   echo "debug binary: $REPO_ROOT/target/debug/arcwell"
@@ -386,6 +598,8 @@ status() {
   else
     echo "Codex cache: $DEV_PLUGIN_REF not installed"
   fi
+  print_plugin_provenance "$cache"
+  check_dev_research_schema warn
   if command -v codex >/dev/null 2>&1; then
     echo "codex CLI: $(command -v codex)"
   else

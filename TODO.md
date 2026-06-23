@@ -1,6 +1,6 @@
 # Arcwell Remaining Work
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
 
 This file is intentionally only unfinished work. Completed historical checklist
 items were removed. Existing unchecked items from the prior `TODO.md` have been
@@ -16,6 +16,20 @@ where relevant, docs, `STATUS.md`, and this file agree.
 - [ ] Every meaningful feature names its behavioral claim before coding.
 - [ ] Every feature has at least one test that tries to refute that claim.
 - [ ] Every P0/P1 feature has a severe/adversarial test gate before completion.
+- [ ] Every P0/P1 feature has an explicit "mirage check" listing what would
+      make the work look complete while still being hollow.
+- [ ] Every P0/P1 feature has a proof packet before completion: claim ledger,
+      changed files, test commands, live-smoke commands when relevant,
+      adversarial review notes, performance/resource notes, and remaining risk.
+- [ ] Every feature that writes durable state has idempotency, duplicate input,
+      partial failure, migration/backfill, backup/export, and recovery behavior
+      stated before completion.
+- [ ] Every feature that reads external/untrusted content has malicious input,
+      prompt-injection-as-data, malformed payload, oversized payload, Unicode,
+      and escaping/redaction tests before completion.
+- [ ] Every feature that touches a provider, model, worker, delivery path, or
+      remote write has policy, cost, secret-redaction, retry, rate-limit, and
+      source-health/ops visibility gates before completion.
 - [ ] Every external integration has one local/mock test and one documented live
       smoke test.
 - [ ] Every agent-facing command or skill must fail honestly when the capability
@@ -24,6 +38,45 @@ where relevant, docs, `STATUS.md`, and this file agree.
       installed and reliable."
 - [ ] Do not call generated summaries "research" or "memory" unless source,
       provenance, and uncertainty are inspectable.
+- [ ] Do not call a migration complete until an old-schema fixture, a populated
+      database, an empty database, and a rerun/idempotency case are all tested.
+- [ ] Do not call a sync complete until cursor advancement, all-items-rejected,
+      partial-provider-error, provider 401/403/429/5xx, and duplicate-page cases
+      are tested.
+- [ ] Do not call a UI complete until browser desktop/mobile smoke, XSS/escaping
+      fixtures, empty states, stale states, and clipped/overlapping content have
+      been inspected.
+- [ ] Do not call a model-backed feature complete until deterministic fixtures,
+      malformed model output, evidence grounding, cost records, and adversarial
+      evaluator gates are all in place.
+- [ ] Do not call an ops-visible feature complete unless healthy, stale,
+      failed, blocked, partial, retrying, and unknown states are distinguishable.
+- [ ] Do not call a slash command/MCP feature complete unless CLI, MCP schema,
+      slash prompt, skill docs, package README, and verifier coverage agree.
+
+### Proof Packet Template
+
+Before checking off any P0/P1 item, attach or record this packet in the issue,
+PR, implementation note, or final report:
+
+- [ ] Feature name and status: Missing, Scaffold, Partial, Local Proof, Live
+      Proof, Operational, or Done.
+- [ ] User-visible claim in one sentence.
+- [ ] Exact inputs accepted and exact outputs promised.
+- [ ] Durable rows/files/remote state written.
+- [ ] Failure semantics for invalid input, provider errors, partial writes,
+      interrupted execution, stale credentials, and policy denial.
+- [ ] Idempotency rule for repeats, duplicates, retries, and reruns.
+- [ ] Security/privacy boundary: auth, policy, cost, secret redaction, prompt
+      injection, SSRF/path handling, and export/backup behavior.
+- [ ] Completeness measures: row counts, fixture coverage, command parity,
+      source-health state, ops visibility, and live proof where relevant.
+- [ ] Severe tests added, including which broken/scaffold behavior they would
+      catch.
+- [ ] Performance/resource budget or explicit reason no budget is needed.
+- [ ] Commands run and pass/fail result.
+- [ ] Adversarial review judgement by the implementer: promote, hold, or block.
+- [ ] Remaining risks and next action for each risk.
 
 ## 1. Live Telegram And Mobile Channel Loop
 
@@ -86,6 +139,139 @@ where relevant, docs, `STATUS.md`, and this file agree.
 
 ## 5. Proactive Delivery: Email, Telegram, Librarian, And X
 
+- [ ] Complete the Arcwell X anti-mirage plan in
+      `docs/arcwell-x-architecture-implementation-plan.md` before marking X
+      beyond `Partial`.
+- [ ] Keep `arcwell-x` status honest: every checked X item must state whether
+      it is only local proof, copied-home live proof, real-home live proof, or
+      operational scheduled proof.
+- [ ] Expand canonical X storage beyond the first local-search stage. Local
+      JSON/X API imports now write conversation/reply/quote/retweet fields and
+      `x_tweet_refs`; local archive import now records an `import_archive`
+      sync run for supported tweets/bookmarks/likes; remaining work is
+      source-health summaries by account/stream, portable/scoring sync ledgers,
+      and rollback tests for projection/FTS failures.
+- [ ] Add a canonical X proof packet for Phase 1: schema version, migration
+      fixture, backfill counts, canonical/compatibility count parity, source
+      card/wiki projection links, FTS row count, and rollback behavior.
+- [ ] Add canonical X dual-write tests that would fail if a command only writes
+      `x_items` and does not write canonical profiles/tweets/edges/collections.
+- [ ] Add canonical X read-path tests that would fail if CLI reads canonical
+      rows but MCP, slash commands, package docs, or report generation still use
+      stale compatibility assumptions.
+- [ ] Extend X sync-run ledgers beyond the implemented import-json,
+      import-archive, recent-search, bookmark-import, and watch-source monitor
+      streams to portable import and future scoring jobs before any of those
+      streams are described as operational.
+- [ ] Add X sync-run tests for started/completed/failed/superseded statuses,
+      count accuracy, previous/new cursor recording, cost decision linkage, and
+      redacted error storage.
+- [ ] Add X source-health tests for healthy, stale, rate_limited,
+      auth_failed, policy_denied, projection_failed, partial, and unknown states.
+- [ ] Add X cursor-safety tests for malformed provider payloads, all rows
+      rejected, duplicate newest ids, older newest ids, source-card projection
+      failure, FTS failure, process interruption, and quota/rate limits.
+- [ ] Extend X repair beyond the implemented local CLI/MCP layer: `x stats`,
+      `/ops`, `/ops/ui`, `ops_snapshot`, and strict `doctor` now surface FTS
+      drift, failed projections, non-healthy X source-health, and failed X sync
+      runs; `x repair-projections` / `x_repair_projections` repair missing or
+      failed source-card/wiki projections idempotently; next add explicit
+      doctor/ops repair guidance or authenticated ops controls for projection
+      repair and FTS rebuild.
+- [ ] Extend X archive import beyond the implemented local tweets/bookmarks/
+      likes MVP. Current `x import-archive` / `x_import_archive` supports local
+      directories or zip files, explicit `--select`, JavaScript wrapper parsing
+      as data, zip-slip rejection before writes, file/byte limits, no network
+      calls, `import_archive` sync runs, canonical writes/FTS/projections, and
+      MCP round-trip tests. `x discover-archives` / `x_discover_archives` now
+      performs no-write, shallow candidate discovery with bounded ZIP member
+      inspection, unsafe-member warnings, and MCP round-trip coverage. Remaining
+      work is old/new archive fixture corpus breadth, decompression-bomb
+      fixture, account identity conflict failure, broader selected-slice
+      preservation, and operator reporting for unsupported slices. Current tests
+      also prove reimport idempotency for the local tweet archive path and fail
+      malformed selected slices before writes.
+- [ ] Add X archive apply coverage for authored tweets, note tweets, profiles,
+      followers, following, media metadata, malformed slices, selected imports
+      preserving unselected state, and explicit proof that no secret values are
+      read. Likes/bookmarks/tweets have a first local fixture path only.
+- [ ] Extend the implemented X URL/link index beyond the current local
+      extraction and explicit expansion layers. `x extract-links` /
+      `x_extract_links` index safe URL occurrences without fetching; `x links`
+      / `x_links` list the local index; `x expand-links` / `x_expand_links`
+      fetch indexed links through URL-ingest safety with policy/cost gates,
+      redirect/private-host checks, content-type and size limits, and durable
+      expansion status rows. Remaining work is richer cache freshness,
+      expansion provenance in reports/digests, large-corpus performance
+      fixtures, and downstream research/digest integration.
+- [ ] Extend X thread expansion beyond the implemented local-only CLI/MCP
+      layer. `x thread` / `x_thread` now expand already-imported conversation,
+      reply, quote, and retweet refs with cycle detection, depth caps, stable
+      ordering, and missing-context labels; remaining work is optional
+      policy/cost-gated live mode, larger performance fixtures, archive-thread
+      fixtures, and report/digest integration.
+- [ ] Add X research brief generation only when every claim/quote links to
+      canonical tweet ids or source cards, empty evidence fails honestly,
+      no-write mode performs no writes, and prompt-injection tweets remain
+      quoted evidence.
+- [ ] Add X digest candidate hardening: canonical tweet/thread id linkage,
+      source-card linkage, candidate dedupe, review states, score freshness,
+      delivery-denial audit, delivery-attempt integration, quiet-hours schedule,
+      and no model-score-only sending.
+- [ ] Add X heuristic scoring before model scoring, with score rows as overlays,
+      stale-score labels, schema-validated model output, eval fixtures,
+      cost-decision rows, private-content exclusion, and proof that scores never
+      mutate canonical truth or authorize delivery.
+- [ ] Extend X ops/doctor visibility beyond the implemented stats/drift layer
+      to source-health freshness, projection backlog repair actions, digest
+      queues, credential scope/expiry detail, richer archive import run
+      summaries, portable export freshness, monitor staleness, and future failed/superseded
+      archive/export/scoring syncs.
+- [ ] Add X browser validation for ops UI: hostile tweet/profile/link/error
+      strings are escaped, token-like strings are redacted, dense tables do not
+      clip/overlap on desktop/mobile, empty states are clear, and POST controls
+      require auth/origin/CSRF/idempotency/policy.
+- [x] Add X portable export/import/validate for canonical tweet rows with
+      deterministic JSONL shards, manifest hashes, row counts, token-like
+      content scan, malformed JSONL failure, idempotent import, unsafe shard
+      path rejection, FTS/cache exclusion, and raw DM exclusion by default.
+      Current tests prove disposable restore searchability and MCP round trip;
+      broader entity coverage remains separate from this MVP.
+- [ ] Add X backup/recovery drill integration proving portable export freshness,
+      scheduled backup policy, and provenance/source-card reference behavior are
+      reported explicitly for real backup/restore workflows.
+- [ ] Add X follow graph only as snapshots/current edges/events with complete
+      vs partial snapshot semantics, duplicate snapshot idempotency, account
+      scoping, profile-entity extraction as data, and no silent switch to full
+      following graph as the default watch seed.
+- [ ] Add X media cache as metadata-first, archive-byte extraction optional,
+      live fetch opt-in, media-root path safety, content-type/size/pacing/retry
+      limits, dry-run, ops stats, and default portable export without bytes.
+- [ ] Add X DM support only after explicit retention opt-in, default-off import,
+      default-off FTS/export, prompt-injection-as-data tests, participant
+      scoping, malformed event handling, and forget/retention behavior exist.
+- [ ] Add X moderation/social writes only after read substrate is operational,
+      with account-scoped confirmation, exact action preview, policy approval,
+      audit-before-remote-call, idempotent retry, target-spoofing tests, and
+      disposable-target live proof.
+- [ ] Add X worker/scheduled sync only after CLI paths are operational, with
+      shared implementation, job input validation, policy/cost guards,
+      heartbeat, source-health, sync runs, bounded retries, dead letters, and
+      no default job without explicit config.
+- [ ] Add X performance/stress fixtures: large archive, many duplicate tweets,
+      large follow graph, FTS rebuild over a large corpus, export/import over
+      large shards, bounded URL expansion, and ops UI row limits.
+- [ ] Add X malicious-input corpus covering SQL-ish strings, shell metacharacters,
+      markdown/HTML/script tags, prompt-injection text, control characters,
+      RTL/Unicode normalization, huge strings, duplicate ids, stale cursors,
+      malformed JSON/XML-ish payloads, bad URLs, and hostile filenames.
+- [ ] Add X live proof discipline: rebuild fresh binary, use copied/disposable
+      home when possible, distinguish app bearer from user-context OAuth,
+      record scopes, inspect source-health/cursors after the smoke, redact
+      artifacts, and never call local replay a live provider proof.
+- [ ] Add X adversarial review report before every X phase status promotion,
+      using the score rubric in the architecture plan and ending with a clear
+      judgment: promote, hold, or block.
 - [ ] Wire email/librarian digest delivery with schedule, threshold, quiet
       hours, dedupe, policy/cost checks, recipient authorization, delivery
       attempts, and retry behavior.
@@ -109,11 +295,285 @@ where relevant, docs, `STATUS.md`, and this file agree.
       deep-research substrate.
 - [x] Prove live OpenAI editorial invocation with cost records and fail-closed
       behavior on insufficient evidence.
+- [x] Expose rich deep-research MCP schemas plus `research_capabilities`, and
+      smoke the dev wrapper/cache for schema freshness before fresh-thread use.
+- [x] Run disposable MCP reference-topic smokes for London AI, image
+      compression, and safe cloud code execution with host-search proof,
+      role artifacts, document anchors, editorial gates, audit, and reports.
+- [x] Filter source/corpus bookkeeping claims out of executive judgment,
+      analyst takeaways, and evidence narrative while keeping them inspectable
+      in the report appendix.
+- [x] Implement the local deterministic convergence substrate: durable
+      iterations, statements, challenges, disproofs, revisions, fact-checks,
+      snapshots, convergence report artifacts, and report judgments over
+      persisted evidence.
+- [ ] Implement iterated epistemic convergence from
+      `docs/iterated-epistemic-convergence-design.md`. Do not mark complete
+      until schema, CLI, MCP, skill docs, severe tests, full proof runs, report
+      judgments, `STATUS.md`, and this file agree.
+- [ ] Add convergence run config: max iterations, wall time, cost cap, source
+      cap, provider-call cap, freshness needs, privacy/no-write flags, and
+      stop-rule serialization.
+- [ ] Severe-test convergence run config with missing limits, huge limits,
+      negative/NaN/infinite values, no-write propagation, user stop before the
+      next expensive action, and long-run requests without approval.
+- [x] Add `research_iterations` schema, indexes, Rust structs, row mappers,
+      store methods, CLI read/list, MCP read/list, status embedding, redacted
+      error fields, and migration ledger entries.
+- [ ] Severe-test iterations for cross-run artifact rejection, duplicate
+      iteration indexes, failed iteration preservation, long error redaction,
+      parent lineage validation, database reopen, and 1000-iteration listing.
+- [x] Add `research_statements` schema with statement type, scope, temporal
+      scope, confidence, certainty, status, importance, evidence,
+      counterevidence, assumptions, caveats, stable keys, and lineage.
+- [ ] Severe-test statements with empty/overlong text, invalid enums,
+      invalid confidence, cross-run evidence ids, duplicate stable keys,
+      prompt-injection text, HTML/Markdown escaping, SQL metacharacters,
+      Unicode spoofing, and cross-run statement attachment attempts.
+- [ ] Build the statement compiler from source cards, claims, clusters, skeptic
+      notes, and prior iterations, preserving temporal scope and filtering
+      source/corpus bookkeeping and generated-output recursion.
+- [ ] Severe-test the statement compiler with compound-statement splitting,
+      metadata-only corpora, conflicting claims, unsupported model prose,
+      currentness-sensitive statements, SEO spam, vendor-only evidence, and
+      contradictory benchmark claims.
+- [ ] Add `research_challenges` schema plus deterministic challenge templates
+      by statement type/domain, expected-information-gain ranking, required
+      source-family output, and challenge lifecycle states.
+- [x] Add initial `research_challenges` schema, deterministic challenge
+      templates, required source-family output, and lifecycle states.
+- [ ] Severe-test challenges for missing/cross-run statement ids, unknown
+      challenge types, missing severity, empty search plans for high-severity
+      challenges, prompt injection that tries to waive challenges, and duplicate
+      ids.
+- [ ] Add challenge-ranked disproof retrieval that records host-native search
+      proof before reliance, falls back to configured provider search only
+      through policy/cost gates, links search/source cards to challenges, and
+      records blocked searches honestly.
+- [x] Add initial challenge-linked host-search proof consumption: planned
+      challenge queries can be answered only by matching
+      `research_host_search_record` entries with selected linked research
+      sources, and convergence disproof evidence records the host-search/result
+      ids before treating the challenge as answered.
+- [x] Add first-class convergence host-search task surface:
+      `research_convergence_host_search_tasks` derives exact pending/recorded
+      task rows from challenge search plans plus recorded host-search proof,
+      appears in convergence status/CLI/MCP/capabilities, refreshes matching
+      existing challenges when proof is recorded, and severe-tests wrong-query
+      selected results so they cannot satisfy a planned challenge.
+- [x] Add policy/cost-gated provider fallback for pending convergence
+      host-search tasks: `research_convergence_provider_search` runs
+      Brave/OpenAI/Perplexity provider search through existing policy and cost
+      gates, records safe selected provider results as auditable search proof,
+      can optionally enqueue bounded worker `ingest_url` jobs for selected safe
+      results, stores blocked provider attempts as artifacts, and severe-tests
+      cost cap, budget denial, unsafe URL filtering, cost-decision linkage,
+      ingest enqueue caps, and task proof updates.
+- [ ] Severe-test disproof retrieval with known contradiction discovery,
+      duplicate source novelty suppression, blocked-search unresolved status,
+      low-reliability contradictions, SSRF URLs, redirects to localhost or
+      metadata IPs, search-snippet prompt injection, and local-file URL abuse.
+- [ ] Extend evidence extraction/claim ingest so source cards, claims, document
+      spans, tables, and table cells can be linked to challenge/disproof ids
+      with same-run validation and extractor warnings.
+- [ ] Severe-test iterative evidence extraction with malformed claim JSON,
+      uncertainty-loss rejection, cross-run anchors, nonexistent span/table/cell
+      anchors, unsupported formats, PDF prompt injection, XLSX/CSV formula
+      payloads, oversized files, and report-rendering injection.
+- [x] Add `research_disproofs` schema with verdict, strength, evidence,
+      reasoning summary, confidence delta, and `requires_revision`.
+- [ ] Severe-test disproof verdicts with direct contradictions, partial-scope
+      mismatches, irrelevant evidence, missing evidence, stale vs official
+      corrections, generated-synthesis misuse, low-quality source overreach,
+      and numeric unit/date mismatches.
+- [x] Add `research_revisions` schema with dropped/narrowed/downgraded/
+      upgraded/split/merged/reframed/replaced/caveated lineage and links to
+      trigger disproof ids.
+- [ ] Severe-test revisions so refuted statements cannot remain final without
+      caveat/replacement, rewording cannot hide a refuted stable key,
+      confidence cannot increase after weakening without new evidence, and
+      dropped statements remain visible in appendices.
+- [x] Add `research_convergence_snapshots` with source novelty, claim novelty,
+      statement change count, confidence deltas, open critical/high challenges,
+      strong refutations, active fact-check summaries, evaluator scores,
+      elapsed time, cost, and stop-rule JSON.
+- [ ] Severe-test stop rules so critical unresolved challenges, strong
+      refutations without revisions, wrong high-impact fact checks, no-progress
+      loops, time caps, cost caps, provider-call caps, and user stop all block
+      `settled` or stop incomplete as appropriate.
+- [ ] Performance-test convergence metrics with 10,000 candidate sources,
+      2,000 source cards, 50,000 claims, 5,000 statements, 20,000
+      challenges/disproofs, 100 iterations, large report appendices, and
+      bounded status reads.
+- [x] Add active fact-checking for convergence runs that extracts report
+      statements, verifies them against source cards plus fresh retrieval,
+      labels right/wrong/unknown/not-checkable, and feeds wrong/unknown
+      high-impact facts back into the next iteration. Current implementation:
+      `research_active_fact_check` extracts factual report/generated-synthesis
+      sentences, matches source-backed convergence statements as `right`,
+      creates statement-backed `unknown` checks for unsupported high-impact
+      sentences, marks status as resumable `continue`, and creates citation-gap
+      host-search tasks for fresh retrieval.
+- [x] Add first-class active fact-check closure orchestration:
+      `research_convergence_close_loop` compiles/checks a convergence report,
+      runs active fact-checking, optionally runs policy/cost-gated provider
+      fallback for pending citation-gap searches, reruns convergence, compiles
+      a final report judgment, and returns `closure_status` plus blockers.
+      Severe fixtures prove unsupported report prose stays `needs_host_search`
+      without retrieval proof, while provider-recorded proof plus rerun can
+      settle and accept the final judgment.
+- [ ] Severe-test active fact-checking with seeded false report sentences,
+      uncited true sentences, vague opinions, unknown high-impact claims,
+      verifier prompt injection, self-validating source text, cross-run source
+      cards, and generated-summary evidence misuse. Current coverage includes
+      supported/unsupported/vague sentence extraction plus close-loop blocked
+      and provider-proof closure; prompt-injection, cross-run, and generated
+      evidence misuse fixtures still need expansion.
+- [x] Add convergence-aware report rendering: final position, what changed,
+      survived/weakened/refuted statements, unresolved disproofs, source
+      coverage, saturation, active fact-check summary, convergence stop reason,
+      and statement/disproof/revision appendices. The current renderer now
+      includes bottom-line readiness, iteration deltas, source/search
+      saturation, host-search proof coverage, residual risks, blockers,
+      revisions, evidence ledger, and method notes, with a severe regression
+      asserting those analyst-grade sections remain present.
+- [x] Add initial convergence report rendering with executive judgment, current
+      position, pressure-test results, metrics, blockers, revisions, evidence
+      ledger, and method notes.
+- [ ] Add `research_report_judgment` artifacts written by Codex/main agent with
+      scores for source coverage, primary-source depth, citation support,
+      contradiction handling, uncertainty preservation, narrative clarity,
+      decision usefulness, novelty/design quality, safety reasoning, and
+      cost/time proportionality.
+- [x] Add initial `research_report_judgment` ledger with accept/reject/
+      incomplete decisions, blocking findings, non-blocking findings, evidence
+      checked, remaining risks, and commands/artifacts reviewed.
+- [x] Add opt-in model-backed convergence editorial/evaluator gate:
+      `editorial_provider` plus `max_provider_calls>=2` on synchronous and
+      queued convergence, fail-closed `no_write`/invalid-provider handling,
+      citation-verifier plus adversarial-evaluator invocations, persisted
+      nested judgment scores, terminal replay idempotency without duplicate
+      provider calls, and severe direct/MCP round-trip tests. Regression
+      coverage now proves incomplete terminal states such as `max_iterations`
+      still invoke and persist the model-backed gate instead of silently
+      skipping evaluation.
+- [ ] Severe-test report rendering so refuted statements cannot appear as final
+      conclusions, unresolved severe disproofs appear in executive caveats,
+      metadata-only corpora do not fake judgment, appendices preserve
+      traceability, and source Markdown/HTML is escaped.
+- [ ] Add long-running convergence execution with resumable worker state,
+      leases, heartbeats, idempotency keys, progress snapshots, cost
+      reservations, stale-lease reclaim, dead-letter behavior, and user stop.
+- [x] Add initial worker-resumable convergence queue execution via
+      `research_convergence_enqueue`/`research_convergence_run` jobs with
+      worker leases, retry/dead-letter behavior, stopped-run no-op handling,
+      deterministic replay idempotency, terminal report/judgment compilation,
+      CLI/MCP callability, and severe tests for resume, replay, malformed
+      payloads, and user stop.
+- [ ] Severe-test long-running execution with crashes after statement compile,
+      challenge generation, provider call, and revision; duplicate-write
+      prevention; stale lease reclaim; stop during sleep/search; retry-storm
+      cost blocking; and bounded worker memory over many iterations.
+- [ ] Update `$deep-research` skill and role prompts for position compiler,
+      red teamer, disproof scout, verifier, reviser, convergence auditor,
+      output-artifact requirements, host-search proof per challenge, and
+      stale-schema reload caveats.
+- [ ] Severe-test Codex/subagent orchestration with completed roles missing
+      output artifacts, cross-run ids, source prompt injection, missing caveats,
+      unavailable host search, accepted/rejected proposals, and a fresh Codex
+      thread live smoke.
+- [x] Update `$deep-research` skill with convergence loop, ledger inspection,
+      settled/incomplete semantics, report judgment use, and stale-schema
+      caveats.
+- [x] Add CLI/MCP parity for convergence start/step/run/enqueue/status,
+      iteration read/list, statements, challenges, disproofs, revisions,
+      convergence report compile, and `research_capabilities` convergence
+      fields, including host-search task, provider fallback, and model-backed
+      editorial/evaluator convergence fields.
+- [ ] Severe-test CLI/MCP parity with unknown ids, malformed JSON, missing
+      required fields, large bounded responses, stale schema detection, and
+      equivalent CLI/MCP state transitions.
+- [ ] Add invention/new-tech branch handling for `design_proposal` statements,
+      prior-art challenges, feasibility challenges, threat-model challenges,
+      benchmark/experiment-plan artifacts, "not proven" report language, and
+      explicit graduation criteria.
+- [ ] Severe-test invention runs with known prior art, feasibility gaps,
+      security flaws, proposed-design/fact separation, missing experiment
+      evidence, and report language that refuses "proven" claims.
+- [x] Run deterministic convergence fixture proof with at least 30 source
+      cards, 80 claims, seeded contradictions, stale claims, malicious source
+      text, unsupported report sentences, revisions, active fact-check, audit,
+      and report judgment. `severe_research_convergence_saturated_fixture_preserves_bad_evidence_and_report_gate`
+      seeds 30 linked source cards and 82 claims, preserves a structured
+      contradiction, downgrades stale evidence, keeps prompt-injection source
+      text out of the analyst narrative, and turns unsupported report prose
+      into citation-gap host-search work.
+- [x] Add the live saturated production-proof harness for the technical profile
+      and make it fail closed when model-backed editorial/evaluator gates reject
+      the output. `scripts/deep-research-production-proof --profile
+      image-compression` preserves the disposable run home, command log, proof
+      packet, report, host-search proof, source-card ledger, structured claims,
+      convergence loop output, close-loop result, and OpenAI editorial/evaluator
+      records. The harness now also promotes selected URLs into full-text
+      source cards where bounded URL ingestion succeeds, executes exact
+      convergence challenge-search tasks with `--`-safe query handling,
+      dedupes normalized challenge tasks, supports worker-resumable convergence
+      mode, and records challenge/full-source/worker settings in the proof
+      packet.
+- [ ] Run an accepted live host-search technical proof on image compression
+      algorithms with papers, codec docs, benchmarks, dissenting analyses,
+      numeric/table anchors or caveats, and model-backed report acceptance.
+      Latest bounded orchestration proof home
+      `.arcwell-dev/proofs/deep-research-production-proof-20260623T181935Z`
+      ran 2 live Brave queries, linked 12 source cards, promoted 4 full-source
+      cards, executed 20 exact challenge host-search tasks, ran 4 worker
+      convergence jobs, and recorded live OpenAI model-backed editorial on a
+      `max_iterations` incomplete terminal state. It correctly remains blocking
+      with `closure_status: stopped_incomplete`, unaccepted model-backed
+      judgment, one unknown high-impact fact check, and rejected final report
+      judgment. Earlier saturated proof home
+      `.arcwell-dev/proofs/deep-research-production-proof-20260623T155121Z`
+      produced 12 live Brave queries, 131 deduped candidates, 80 linked source
+      cards, 80 structured claims, 18 host-search records, `closure_status:
+      closed`, and live OpenAI verifier/evaluator records. It correctly remains
+      blocking because the adversarial evaluator found snippet-derived
+      medium-confidence evidence, unsupported/overreaching conclusions, missing
+      caveats, and 474 pending challenge-search tasks. Earlier failed attempts
+      caught and fixed HTTPS URL filtering, source-card-vs-structured-claim
+      confusion, active fact-check recursion over generated convergence report
+      sections, a too-low convergence source cap, model-backed judgment
+      overwrite, bodyless structured provider responses, pending-search prompt
+      scoring, and evaluator routing over synthesized score artifacts.
+- [ ] Run live market/ecosystem proof on London AI startups with official,
+      company, funding, job, news, and social source families, hype downgrades,
+      currentness labels, contradiction handling, and report judgment average
+      score at least 4.
+- [ ] Run live security/architecture proof on safe cloud code execution with
+      standards, sandbox literature, policy engines, compiler/static-analysis
+      papers, platform docs, threat-model challenges, and no unsafe overclaims.
+- [ ] Run invention/new-tech proof proposing a verified cloud code execution
+      architecture, with prior-art search, feasibility attacks, threat-model
+      review, experiment plan, and report separation of facts/proposal/risks.
+- [ ] Run long-running resume proof that simulates interruption, resumes
+      without duplicate statements/challenges/disproofs, preserves cost/time
+      limits, and honors user stop before the next expensive action.
+- [ ] Maintain a production-readiness scorecard for iterated convergence:
+      data model, CLI/MCP parity, skill clarity, statement quality, challenge
+      quality, disproof retrieval, revision correctness, stop rules,
+      fact-checking, report quality, malicious input resistance, invalid input
+      handling, restart/resume, performance, cost/policy, live proof coverage,
+      and documentation honesty. No category below 4 before production-ready.
 - [ ] Add native host-search pathway for Claude where available and finish
       full-report host-search orchestration for Codex/OpenAI.
-- [ ] Run live provider-backed research/editorial synthesis and adversarial eval
-      quality smokes over saturated source-card corpora with cost records and
-      artifacts.
+- [x] Run live provider-backed research/editorial synthesis and adversarial eval
+      smokes over a saturated source-card corpus with cost records and artifacts
+      for the technical/literature profile, proving provider invocation,
+      structured score parsing, judgment persistence, fail-closed routing, and
+      rejection behavior. Accepted analyst-grade quality remains open above;
+      remaining live market and security profiles stay open below.
+- [ ] Regenerate fresh hundred-source reports through the narrative-filtered
+      compiler and evaluate them for analyst-grade judgment quality, not just
+      structural completion.
 - [ ] Expand difficult-document fixture coverage for PDFs, XLSX, precise table
       extraction, formula/cell handling, and publication-grade citation links.
 - [ ] Add publication-grade claim/report citation-quality checks that block

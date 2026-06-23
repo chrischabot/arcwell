@@ -12,6 +12,7 @@ import {
   parseSourceXml,
   defaultInputArgs,
   resolveAgainst,
+  runCommand,
   soapEnvelope,
 } from "./lumin.mjs";
 
@@ -163,4 +164,15 @@ test("CLAIM: HTTP fetches enforce response-size limits", async () => {
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("CLAIM: external command timeouts do not hang on stubborn children", async () => {
+  const started = Date.now();
+  const result = await runCommand(process.execPath, [
+    "-e",
+    "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+  ], 50);
+  assert.equal(result.ok, false);
+  assert.equal(result.timedOut, true);
+  assert.ok(Date.now() - started < 2000);
 });

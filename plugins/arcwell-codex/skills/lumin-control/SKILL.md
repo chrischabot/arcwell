@@ -112,10 +112,31 @@ node plugins/arcwell-codex/skills/lumin-control/scripts/lumin.mjs soap \
 
 ## Validation
 
-Run the skill's severe fixture tests after editing the script:
+Run the skill's severe fixture tests and mock live smoke after editing the
+script:
 
 ```sh
+node --check plugins/arcwell-codex/skills/lumin-control/scripts/lumin.mjs
+node --check plugins/arcwell-codex/skills/lumin-control/scripts/lumin-live-smoke.mjs
 node --test plugins/arcwell-codex/skills/lumin-control/scripts/lumin.test.mjs
+node plugins/arcwell-codex/skills/lumin-control/scripts/lumin-live-smoke.mjs
+python3 /Users/chabotc/.codex/skills/.system/skill-creator/scripts/quick_validate.py plugins/arcwell-codex/skills/lumin-control
+```
+
+For live P1 checks, prefer read-only probes first:
+
+```sh
+node plugins/arcwell-codex/skills/lumin-control/scripts/lumin.mjs bonjour --filter lumin --timeout-ms 5000 --json
+node plugins/arcwell-codex/skills/lumin-control/scripts/lumin.mjs spotify-info --host "$LUMIN_P1_HOST" --json
+node plugins/arcwell-codex/skills/lumin-control/scripts/lumin.mjs udp --host "$LUMIN_P1_HOST" --command pause --dry-run --json
+```
+
+After changing skill text, commands, hooks, docs, or MCP-facing descriptions,
+run the Arcwell plugin loop:
+
+```sh
+scripts/arcwell-dev sync
+scripts/arcwell-dev smoke
 ```
 
 ## References

@@ -411,6 +411,11 @@ Intent: import, search, and report on X/Twitter material as source evidence.
 Main tools:
 
 - `x_import_json_file`
+- `x_discover_archives`
+- `x_import_archive`
+- `x_export_portable`
+- `x_validate_portable`
+- `x_import_portable`
 - `x_rebuild_definitive_watch_sources`
 - `x_import_following_watch_sources`
 - `x_oauth_authorize_url`
@@ -418,6 +423,13 @@ Main tools:
 - `x_oauth_refresh`
 - `x_recent_search`
 - `x_enqueue_recent_search`
+- `x_search_tweets`
+- `x_thread`
+- `x_extract_links`
+- `x_expand_links`
+- `x_links`
+- `x_repair_projections`
+- `x_stats`
 - `x_list`
 - `x_report`
 
@@ -425,15 +437,43 @@ CLI:
 
 ```sh
 arcwell x import-json ./x-items.json
+arcwell x discover-archives --dir ~/Downloads --limit 25
+arcwell x import-archive ./twitter-archive.zip --select tweets,bookmarks,likes --limit 10000
 arcwell x rebuild-definitive-watch-sources --bookmark-days 92 --max-bookmarks 1000 --max-recent-follows 100
 arcwell x recent-search "from:openai" --max-results 10
+arcwell x search-tweets "agents" --limit 20
+arcwell x thread 123 --max-depth 50
+arcwell x extract-links --limit 1000
+arcwell x expand-links --limit 100
+arcwell x links --query example.com --limit 100
+arcwell x rebuild-fts
+arcwell x repair-projections --limit 1000
+arcwell x stats
 arcwell x list --query agents
 arcwell x report --query agents
 ```
 
 Data store:
 
-- SQLite `x_items`
+- SQLite `x_items` compatibility rows
+- canonical X account, profile, tweet, edge, bookmark collection, projection,
+  sync-run, thread-reference, and FTS rows
+- stats over compatibility/canonical parity, FTS drift, source health, watch
+  sources, projections, and sync runs
+- idempotent local repair for missing or failed canonical tweet source-card/wiki
+  projections
+- local-only thread expansion over already-imported conversation, reply, quote,
+  and retweet refs, with missing parent/quote/retweet context labeled instead
+  of inferred
+- explicit local URL occurrence extraction/listing over imported tweets, with
+  unsafe hosts skipped and no URL fetch/expansion during extraction
+- explicit URL expansion for indexed X links through the URL-ingest safety path,
+  with policy/cost gates, redirect/private-host validation, content-type and
+  size limits, durable expansion status rows, and untrusted-source rendering
+- ops/doctor visibility for X drift, failed projections, non-healthy X source
+  health, and failed X sync runs
+- sync-run ledger rows for local JSON import, live recent search, live bookmark
+  import, and watch-source monitor polls
 - source cards and wiki pages for imported items
 - SQLite `watch_sources` for followed-account monitor handles
 - cursor keys such as `x:recent-search:<query>`

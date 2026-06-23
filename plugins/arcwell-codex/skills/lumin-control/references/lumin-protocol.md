@@ -15,6 +15,19 @@ Retrieval date: 2026-06-22.
   playlist, metadata, and volume experience. It also says Spotify, Roon,
   QQMusic, and AirPlay largely bypass the LUMIN App.
 
+## Live P1 Observations
+
+From the user's LAN on 2026-06-22, the P1 was reachable at `192.168.0.8`.
+Bonjour advertised `LUMIN P1` over AirPlay/RAOP and Spotify Connect, and
+Spotify zeroconf reported `remoteName: LUMIN P1`, `deviceType: SPEAKER`,
+`brandDisplayName: LUMIN`, and `modelDisplayName: P1`.
+
+The AirPlay endpoint on port `7000` responded as `AirTunes/366.0`, and the
+Spotify Connect endpoint on port `43669` served `/zc?action=getInfo&version=2`.
+Repeated SSDP/OpenHome discovery attempts from this host returned no
+`LOCATION`, so OpenHome SOAP control remains fixture-tested but not live-proven
+against this P1 until the device description URL is captured.
+
 ## UDP Shortcut Protocol
 
 Send a 16-byte UDP packet to the player IP on port `23456`.

@@ -1,0 +1,1489 @@
+# Arcwell Radar And Digest Implementation Plan
+
+Date: 2026-06-23
+
+Reference study: temporary clone of `Thysrael/Horizon` at
+`/tmp/horizon-arcwell.21dBh1/Horizon`.
+
+Status: design and execution plan only. No implementation is claimed by this
+document.
+
+## Objective
+
+Build the full value of Horizon inside Arcwell as a native, inspectable,
+source-backed, policy-aware radar and digest system.
+
+The product claim is not "Arcwell can summarize some links." The claim is:
+
+> Arcwell can continuously ingest real production signals from configured
+> source families, normalize and index them durably, rank what matters,
+> explain why it matters with source-grounded evidence, generate useful reports,
+> and send authorized updates through existing Arcwell delivery surfaces without
+> hiding uncertainty, skipping provenance, leaking secrets, or silently breaking
+> under real data volume.
+
+This plan is intentionally anti-mirage. A feature is not done because a table,
+prompt, README, MCP schema, or happy-path smoke exists. It is done only when
+the production-data proof gates in this document pass and the status surfaces
+agree.
+
+## Horizon Lessons To Absorb
+
+Horizon is not a broad app shell. It is a focused daily information pipeline.
+The reusable lessons are structural:
+
+1. Normalize everything into one item shape before ranking.
+   Horizon uses `ContentItem` with source type, title, URL, content, author,
+   timestamps, metadata, score, reason, summary, and tags.
+
+2. Keep pipeline stages explicit.
+   Horizon stages fetch, URL dedupe, score, threshold filter, semantic dedupe,
+   category balance, enrich, summarize, and deliver. Its MCP layer exposes
+   those as re-enterable stages with run artifacts.
+
+3. Score before spending enrichment effort.
+   Horizon enriches only selected high-value items. Arcwell should do the same
+   to control cost, latency, and noise.
+
+4. Dedupe twice.
+   Horizon first dedupes exact/canonical URLs, then topic-dedupes scored items
+   so repeated releases/incidents do not dominate a digest.
+
+5. Balance the final digest.
+   Horizon's category quotas prevent one loud source family from drowning out
+   everything else.
+
+6. Treat source discovery as part of the product.
+   Horizon's presets, wizard, AI recommendation path, and HorizonHub design
+   show that good source management is not setup fluff. Source quality,
+   signal-to-noise, output volume, and decay detection become product data.
+
+7. Delivery is a pipeline stage, not an afterthought.
+   Email, webhooks, MCP summaries, and local artifacts all receive the same
+   summary output. Arcwell should route through email, Telegram/channels,
+   source cards, wiki pages, digest candidates, and ops records.
+
+## Arcwell Native Shape
+
+Do not vendor Horizon as a Python sidecar. That would bypass Arcwell's existing
+strengths:
+
+- local SQLite and Markdown source of truth
+- source cards with trust/provenance metadata
+- wiki pages and FTS indexing
+- watch sources, cursors, source health, and worker jobs
+- X canonical rows and source-card projections
+- policy, cost, secret redaction, and ops visibility
+- Codex plugin slash commands and MCP parity
+- email/Telegram/channel delivery boundaries
+
+Implement this as a new native package:
+
+```text
+packages/arcwell-radar/
+crates/arcwell-core/src/lib.rs      # storage, stages, scoring, reports
+crates/arcwell-cli/src/main.rs      # CLI and MCP tools
+plugins/arcwell-codex/commands/    # slash prompts
+plugins/arcwell-codex/skills/      # operator skill if needed
+docs/horizon-radar-digest-implementation-plan.md
+```
+
+The package can initially live inside `arcwell-core` like the current wiki,
+librarian, X, and research surfaces. Split into a crate only if the code size
+or dependency boundary justifies it.
+
+## Status Ladder
+
+Every radar capability must carry one of these labels:
+
+- `Missing`: no code.
+- `Scaffold`: schemas, prompts, or docs exist but behavior is not proven.
+- `Local Fixture Proof`: deterministic fixtures pass. This is not enough for
+  production data claims.
+- `Production Data Proof`: real public or authorized private source data has
+  passed the relevant gate in a disposable or controlled Arcwell home.
+- `Operational`: production-data proof plus scheduled/resumable operation,
+  source-health monitoring, delivery records, recovery drills, and docs.
+- `Done`: only for stable, maintained, regression-covered operational features.
+
+No item may jump from `Scaffold` or `Local Fixture Proof` to `Done`.
+
+## Product Surfaces
+
+### CLI
+
+Target commands:
+
+```sh
+arcwell radar profile create <name> --from-template ai-infra
+arcwell radar profile list
+arcwell radar profile read <profile-id>
+arcwell radar profile update <profile-id> ...
+arcwell radar source recommend "agent infrastructure"
+arcwell radar source import-presets <file-or-url>
+arcwell radar run <profile-id> --window-hours 24
+arcwell radar fetch <run-id>
+arcwell radar score <run-id>
+arcwell radar filter <run-id>
+arcwell radar enrich <run-id>
+arcwell radar summarize <run-id> --language en
+arcwell radar deliver <run-id> --channel telegram --recipient <authorized-subject>
+arcwell radar runs
+arcwell radar stage <run-id> <raw|normalized|indexed|scored|filtered|enriched>
+arcwell radar summary <run-id> --language en
+arcwell radar audit <run-id>
+arcwell radar source-quality
+arcwell radar repair <run-id>
+```
+
+### MCP
+
+Target tools:
+
+```text
+radar_profile_create
+radar_profile_list
+radar_profile_read
+radar_source_recommend
+radar_run_create
+radar_fetch
+radar_score
+radar_filter
+radar_enrich
+radar_summarize
+radar_deliver
+radar_runs
+radar_stage_read
+radar_summary_read
+radar_audit_run
+radar_source_quality
+```
+
+Target resources:
+
+```text
+arcwell://radar
+arcwell://radar-runs
+arcwell://radar-profiles
+arcwell://radar-source-quality
+arcwell://radar-deliveries
+```
+
+### Slash Commands
+
+Target commands:
+
+```text
+/radar-run
+/radar-runs
+/radar-stage
+/radar-summary
+/radar-deliver
+/radar-source-quality
+/radar-recommend-sources
+```
+
+Every slash command needs a CLI or MCP alias and must be covered by
+`scripts/verify-codex-plugin-docs`.
+
+## Data Model
+
+Use additive migrations. Do not mutate existing source-card, watch-source,
+source-health, X, or digest-candidate semantics unless explicitly required.
+
+### `radar_profiles`
+
+Purpose: named configuration for a recurring digest/radar view.
+
+Fields:
+
+- `id TEXT PRIMARY KEY`
+- `name TEXT NOT NULL UNIQUE`
+- `description TEXT NOT NULL DEFAULT ''`
+- `status TEXT NOT NULL`
+- `window_hours INTEGER NOT NULL`
+- `min_score REAL NOT NULL`
+- `max_items INTEGER`
+- `languages_json TEXT NOT NULL`
+- `category_groups_json TEXT NOT NULL`
+- `source_selectors_json TEXT NOT NULL`
+- `delivery_policy_json TEXT NOT NULL`
+- `model_policy_json TEXT NOT NULL`
+- `metadata_json TEXT NOT NULL DEFAULT '{}'`
+- `created_at TEXT NOT NULL`
+- `updated_at TEXT NOT NULL`
+
+Invariants:
+
+- `window_hours > 0`.
+- `min_score` is between `0` and `10`.
+- `languages_json` is non-empty.
+- `source_selectors_json` references source kinds Arcwell understands or marks
+  unsupported selectors as disabled with an explicit reason.
+- Delivery targets are references to authorized channels/recipients, not raw
+  secrets or unverified addresses.
+
+### `radar_runs`
+
+Purpose: one execution ledger from fetch through delivery.
+
+Fields:
+
+- `id TEXT PRIMARY KEY`
+- `profile_id TEXT NOT NULL`
+- `status TEXT NOT NULL`
+- `window_start TEXT NOT NULL`
+- `window_end TEXT NOT NULL`
+- `stage TEXT NOT NULL`
+- `source_selection_json TEXT NOT NULL`
+- `raw_count INTEGER NOT NULL DEFAULT 0`
+- `normalized_count INTEGER NOT NULL DEFAULT 0`
+- `indexed_count INTEGER NOT NULL DEFAULT 0`
+- `scored_count INTEGER NOT NULL DEFAULT 0`
+- `filtered_count INTEGER NOT NULL DEFAULT 0`
+- `enriched_count INTEGER NOT NULL DEFAULT 0`
+- `summary_count INTEGER NOT NULL DEFAULT 0`
+- `delivery_count INTEGER NOT NULL DEFAULT 0`
+- `error TEXT`
+- `metadata_json TEXT NOT NULL DEFAULT '{}'`
+- `started_at TEXT NOT NULL`
+- `finished_at TEXT`
+- `updated_at TEXT NOT NULL`
+
+Statuses:
+
+- `created`
+- `fetching`
+- `fetched`
+- `indexing`
+- `indexed`
+- `scoring`
+- `scored`
+- `filtering`
+- `filtered`
+- `enriching`
+- `enriched`
+- `summarizing`
+- `summarized`
+- `delivering`
+- `completed`
+- `failed`
+- `blocked`
+- `stopped`
+
+Invariants:
+
+- Terminal states preserve all successful prior stage artifacts.
+- Failure never deletes prior stages.
+- Rerun with the same `run_id` is idempotent for completed stages unless
+  explicitly forced.
+- A later stage cannot run if required earlier artifacts are missing.
+
+### `radar_items`
+
+Purpose: normalized item rows for all source families.
+
+Fields:
+
+- `id TEXT PRIMARY KEY`
+- `run_id TEXT NOT NULL`
+- `stable_key TEXT NOT NULL`
+- `source_kind TEXT NOT NULL`
+- `provider TEXT NOT NULL`
+- `source_locator TEXT NOT NULL`
+- `native_id TEXT`
+- `canonical_url TEXT`
+- `title TEXT NOT NULL`
+- `author TEXT`
+- `published_at TEXT`
+- `fetched_at TEXT NOT NULL`
+- `content_text TEXT NOT NULL DEFAULT ''`
+- `content_sha256 TEXT NOT NULL`
+- `metadata_json TEXT NOT NULL DEFAULT '{}'`
+- `source_card_id TEXT`
+- `wiki_page_id TEXT`
+- `canonical_entity_ref TEXT`
+- `trust_level TEXT NOT NULL DEFAULT 'untrusted_external_evidence'`
+- `created_at TEXT NOT NULL`
+- `updated_at TEXT NOT NULL`
+- `UNIQUE(run_id, stable_key)`
+
+`canonical_entity_ref` examples:
+
+- `x_tweet:<x_id>`
+- `source_card:<source_card_id>`
+- `wiki_page:<page_id>`
+- `github_release:<owner>/<repo>@<tag>`
+- `rss_entry:<feed_hash>:<entry_hash>`
+
+Invariants:
+
+- External text is never instruction text.
+- Source text written into Markdown or UI is escaped or fenced.
+- Unsafe URLs are rejected before source-card/wiki projection.
+- If a source-card projection fails, the item remains with explicit
+  `projection_failed` status metadata and ops visibility.
+
+### `radar_item_fts`
+
+Purpose: search over normalized radar rows.
+
+Use SQLite FTS5:
+
+```sql
+CREATE VIRTUAL TABLE radar_item_fts
+USING fts5(id UNINDEXED, title, content_text, author, source_kind);
+```
+
+Invariants:
+
+- Every active `radar_items` row with indexable text has one FTS row.
+- `radar audit` reports FTS drift.
+- Repair can rebuild FTS from `radar_items`.
+
+### `radar_scores`
+
+Purpose: score overlays, not source truth.
+
+Fields:
+
+- `id TEXT PRIMARY KEY`
+- `run_id TEXT NOT NULL`
+- `item_id TEXT NOT NULL`
+- `score_kind TEXT NOT NULL`
+- `score REAL NOT NULL`
+- `reason TEXT NOT NULL`
+- `tags_json TEXT NOT NULL DEFAULT '[]'`
+- `model_provider TEXT`
+- `model_name TEXT`
+- `cost_decision_id TEXT`
+- `input_artifact_id TEXT`
+- `output_artifact_id TEXT`
+- `schema_version INTEGER NOT NULL`
+- `status TEXT NOT NULL`
+- `error TEXT`
+- `created_at TEXT NOT NULL`
+- `UNIQUE(item_id, score_kind, schema_version)`
+
+Score kinds:
+
+- `heuristic_v1`
+- `model_interestingness_v1`
+- `discussion_quality_v1`
+- `source_quality_v1`
+- `freshness_v1`
+- `user_profile_relevance_v1`
+
+Invariants:
+
+- Scores never mutate source rows.
+- Model score output is schema-validated.
+- Malformed model output records `failed` and cannot silently become `0` unless
+  the reason explicitly says `model_output_invalid`.
+- Model scoring requires policy and cost decisions before provider calls.
+- Private X/DM-like content is excluded from model scoring unless an explicit
+  retention and scoring policy exists.
+
+### `radar_dedup_groups`
+
+Purpose: exact URL and semantic topic deduplication trace.
+
+Fields:
+
+- `id TEXT PRIMARY KEY`
+- `run_id TEXT NOT NULL`
+- `dedup_kind TEXT NOT NULL`
+- `primary_item_id TEXT NOT NULL`
+- `member_item_ids_json TEXT NOT NULL`
+- `reason TEXT NOT NULL`
+- `confidence REAL NOT NULL`
+- `model_provider TEXT`
+- `cost_decision_id TEXT`
+- `created_at TEXT NOT NULL`
+
+Dedup kinds:
+
+- `canonical_url`
+- `same_native_id`
+- `same_x_conversation`
+- `semantic_topic`
+
+Invariants:
+
+- Dedup never deletes items.
+- Dropped digest members stay inspectable.
+- Semantic dedupe requires either deterministic evidence or validated model
+  output with the exact compared titles/summaries preserved.
+
+### `radar_enrichments`
+
+Purpose: background/context/discussion enrichment for filtered items.
+
+Fields:
+
+- `id TEXT PRIMARY KEY`
+- `run_id TEXT NOT NULL`
+- `item_id TEXT NOT NULL`
+- `language TEXT NOT NULL`
+- `whats_new TEXT NOT NULL`
+- `why_it_matters TEXT NOT NULL`
+- `key_details TEXT NOT NULL`
+- `background TEXT NOT NULL DEFAULT ''`
+- `community_discussion TEXT NOT NULL DEFAULT ''`
+- `source_card_ids_json TEXT NOT NULL DEFAULT '[]'`
+- `research_artifact_ids_json TEXT NOT NULL DEFAULT '[]'`
+- `model_provider TEXT`
+- `model_name TEXT`
+- `cost_decision_id TEXT`
+- `status TEXT NOT NULL`
+- `error TEXT`
+- `created_at TEXT NOT NULL`
+
+Invariants:
+
+- Every factual sentence in enrichment must be grounded in the original item,
+  linked source cards, URL ingest artifacts, or research artifacts.
+- Generated summaries and generated wiki pages do not count as primary
+  evidence.
+- If grounding is insufficient, enrichment status is `blocked_weak_evidence`.
+
+### `radar_summaries`
+
+Purpose: final report artifacts.
+
+Fields:
+
+- `id TEXT PRIMARY KEY`
+- `run_id TEXT NOT NULL`
+- `language TEXT NOT NULL`
+- `format TEXT NOT NULL`
+- `title TEXT NOT NULL`
+- `body_markdown TEXT NOT NULL`
+- `item_ids_json TEXT NOT NULL`
+- `source_card_ids_json TEXT NOT NULL`
+- `audit_status TEXT NOT NULL`
+- `metadata_json TEXT NOT NULL DEFAULT '{}'`
+- `created_at TEXT NOT NULL`
+- `UNIQUE(run_id, language, format)`
+
+Formats:
+
+- `brief_markdown`
+- `full_report_markdown`
+- `telegram_markdown`
+- `email_markdown`
+- `json_summary`
+
+Invariants:
+
+- The report includes source counts, source-family coverage, score thresholds,
+  dedup removals, enrichment failures, delivery status, and caveats.
+- The report cannot claim "today's top stories" unless the source-health state
+  shows the configured production sources were actually polled within the
+  run window.
+
+### `radar_deliveries`
+
+Purpose: authorized update sending.
+
+Fields:
+
+- `id TEXT PRIMARY KEY`
+- `run_id TEXT NOT NULL`
+- `summary_id TEXT NOT NULL`
+- `channel TEXT NOT NULL`
+- `recipient_ref TEXT NOT NULL`
+- `status TEXT NOT NULL`
+- `policy_decision_id TEXT`
+- `cost_decision_id TEXT`
+- `delivery_attempt_id TEXT`
+- `quiet_hours_deferred_until TEXT`
+- `idempotency_key TEXT NOT NULL UNIQUE`
+- `error TEXT`
+- `created_at TEXT NOT NULL`
+- `updated_at TEXT NOT NULL`
+
+Invariants:
+
+- No delivery without recipient authorization.
+- No delivery to a raw address/chat id unless it is resolved into a durable
+  authorized recipient reference.
+- Quiet hours defer, not drop.
+- Retries reuse the idempotency key.
+- Delivery failure is ops-visible and does not mark the run completed unless
+  delivery is optional for that profile.
+
+### `radar_source_quality`
+
+Purpose: local HorizonHub-style source quality telemetry.
+
+Fields:
+
+- `id TEXT PRIMARY KEY`
+- `source_kind TEXT NOT NULL`
+- `locator TEXT NOT NULL`
+- `window_start TEXT NOT NULL`
+- `window_end TEXT NOT NULL`
+- `raw_count INTEGER NOT NULL`
+- `accepted_count INTEGER NOT NULL`
+- `average_score REAL`
+- `score_p50 REAL`
+- `score_p90 REAL`
+- `signal_to_noise REAL`
+- `duplicate_rate REAL`
+- `delivery_contribution_count INTEGER NOT NULL DEFAULT 0`
+- `failure_count INTEGER NOT NULL DEFAULT 0`
+- `status TEXT NOT NULL`
+- `created_at TEXT NOT NULL`
+- `UNIQUE(source_kind, locator, window_start, window_end)`
+
+Invariants:
+
+- Source quality uses local run evidence, not global claims.
+- A source can be recommended only if its quality window is current enough or
+  clearly labeled `unproven`.
+- Decay detection compares windows and records why quality changed.
+
+## Pipeline
+
+### Stage 0: Profile And Source Selection
+
+Inputs:
+
+- radar profile
+- watch sources
+- X watch-source registry
+- explicit source selectors
+- source preset library
+- source-quality history
+
+Outputs:
+
+- `radar_runs.source_selection_json`
+- policy/cost preflight plan for network/model stages
+
+Checklist:
+
+- [ ] Implement `radar_profiles` migration and structs.
+- [ ] Implement profile CRUD with validation.
+- [ ] Add profile source selectors for `rss`, `github_release`,
+      `github_owner`, `arxiv`, `x_handle`, `source_card_query`, `hackernews`,
+      `reddit`, `telegram_public`, `ossinsight`, and `openbb`.
+- [ ] Add source preset import from local JSON.
+- [ ] Add Horizon-style keyword/tag source matching.
+- [ ] Add AI source recommendation only behind explicit model config, policy,
+      cost gate, and schema validation.
+- [ ] Add source recommendation output that proposes watch-source additions but
+      does not auto-write them without explicit user action.
+- [ ] Add profile read output showing unsupported or unproven source selectors.
+
+Anti-mirage gate:
+
+- [ ] A profile with unsupported selectors must not appear healthy.
+- [ ] Source recommendation must distinguish `recommended`, `already_watched`,
+      `requires_secret`, `requires_policy`, `unproven_quality`, and
+      `unsupported`.
+
+Production-data proof:
+
+- [ ] Run source recommendation against the user's real Arcwell watch-source
+      registry plus real source-quality history.
+- [ ] Import at least one real preset set containing RSS, GitHub, Reddit,
+      Hacker News, and X selectors.
+- [ ] Prove no source is auto-added without explicit user approval.
+
+### Stage 1: Fetch
+
+Inputs:
+
+- selected source selectors
+- source-health cursors
+- source credentials from env or SQLite secret values
+- policy and cost decisions
+
+Outputs:
+
+- raw provider payload artifacts
+- `radar_items` candidate rows
+- source-health updates
+- cursor updates only after durable writes
+
+Source adapters:
+
+- RSS/Atom: reuse current wiki RSS adapter where possible.
+- GitHub releases/commits/owner events: reuse current wiki GitHub adapters.
+- arXiv: reuse current wiki arXiv adapter.
+- X handles: reuse canonical `x_monitor_watch_sources` and project into radar.
+- Source-card query: read existing local source cards.
+- Hacker News: new adapter inspired by Horizon, including story comments.
+- Reddit: new adapter inspired by Horizon, including top comments and RSS
+  fallback where appropriate.
+- Public Telegram channels: optional new adapter inspired by Horizon web preview
+  scraping. Keep separate from Arcwell's Telegram bot/channel authority.
+- OSS Insight: optional new adapter for trending repos.
+- OpenBB: optional new adapter for financial/news watchlists.
+
+Checklist:
+
+- [ ] Define adapter trait returning normalized fetch records plus raw artifact
+      references.
+- [ ] Add fetch ledger fields to `radar_runs`.
+- [ ] Implement source-card query adapter first, because it uses existing local
+      durable data and proves the staged shape.
+- [ ] Implement RSS/GitHub/arXiv projection from existing wiki jobs/source
+      cards before adding new network adapters.
+- [ ] Implement X projection from canonical X rows and source-card projections.
+- [ ] Add Hacker News adapter with real Firebase API, comment capture, and
+      rate-limit/error classification.
+- [ ] Add Reddit adapter with public JSON, RSS fallback, top-comment capture,
+      rate-limit/error classification, and user-agent discipline.
+- [ ] Add public Telegram adapter with explicit `telegram_public` source kind,
+      HTML parsing as untrusted evidence, and no confusion with authorized bot
+      chats.
+- [ ] Add OSS Insight adapter with trending repo metadata.
+- [ ] Add OpenBB adapter only if optional dependency/runtime boundary is
+      acceptable; otherwise use a separate command path and mark source kind
+      `requires_optional_runtime`.
+- [ ] Add per-source raw payload size caps and content truncation rules.
+- [ ] Add cursor advancement after all accepted source cards/radar rows/FTS rows
+      are durable.
+- [ ] Add source-health statuses: `healthy`, `empty`, `stale`, `rate_limited`,
+      `auth_failed`, `policy_denied`, `cost_denied`, `partial`,
+      `projection_failed`, `blocked`, `unknown`.
+
+Anti-mirage gate:
+
+- [ ] A fetch run that only returns mock/local fixture rows cannot satisfy
+      production proof.
+- [ ] A fetch run that writes radar rows but skips source cards, source-health,
+      or cursors is only `Scaffold`.
+- [ ] A source with provider errors cannot be hidden under `completed`.
+
+Production-data proof:
+
+- [ ] Run against real current RSS feeds from the user's existing watch sources.
+- [ ] Run against real GitHub owner/repo release sources.
+- [ ] Run against real arXiv query sources.
+- [ ] Run against real X watch sources in a copied/disposable home when
+      authenticated user-context data is involved.
+- [ ] Run against real Hacker News top stories.
+- [ ] Run against real Reddit subreddits/users configured by profile.
+- [ ] Run against at least one real public Telegram channel only if that source
+      kind is enabled.
+- [ ] Run against real OSS Insight data if adapter is included.
+- [ ] Run against real OpenBB data if adapter is included and credentials or
+      provider settings are configured.
+- [ ] Production proof must include at least five source families and enough
+      real returned rows to exercise dedupe, scoring, filtering, enrichment,
+      summary, and delivery. If production sources return too few rows on a
+      quiet day, extend the time window rather than shrinking the proof.
+
+### Stage 2: Normalize, Project, And Index
+
+Inputs:
+
+- raw fetch records
+- canonical X rows
+- existing source cards
+- URL ingest results
+
+Outputs:
+
+- `radar_items`
+- source cards
+- wiki pages
+- FTS rows
+- projection status metadata
+
+Checklist:
+
+- [ ] Implement canonical URL normalization shared with source-card dedupe.
+- [ ] Add stable keys by source kind and native id.
+- [ ] Add source-card projection for every accepted external item unless the
+      source kind already has a canonical source-card projection.
+- [ ] Preserve raw external text as evidence, not instructions.
+- [ ] Store item metadata with source-specific metrics: HN score/comments,
+      Reddit score/upvote ratio/comments, GitHub repo/tag/event, X metrics,
+      RSS feed category/tags, Telegram public message URL, OSS Insight stars,
+      OpenBB tickers/provider.
+- [ ] Add FTS indexing for title/content/author/source kind.
+- [ ] Add repair command that rebuilds FTS and missing safe projections.
+- [ ] Add audit command that reports item/source-card/wiki/FTS drift.
+
+Anti-mirage gate:
+
+- [ ] The run is not indexed if `radar_items` exists but FTS rows are missing.
+- [ ] The run is not indexed if accepted external items lack source-card or
+      explicit no-projection reason.
+- [ ] The run is not indexed if hostile Markdown/HTML is rendered as trusted
+      text.
+
+Production-data proof:
+
+- [ ] On a real production-data run, randomly sample at least 50 accepted items
+      or all items if fewer than 50, and verify item -> source card -> wiki page
+      -> FTS searchability.
+- [ ] Run `radar audit` after indexing and prove zero unexplained projection or
+      FTS drift.
+- [ ] Run restart/reopen proof: close process, reopen store, read run stages,
+      search indexed rows, and repair no-op.
+
+### Stage 3: Exact And Semantic Dedupe
+
+Inputs:
+
+- indexed radar items
+- canonical URLs
+- source-specific native ids
+- title/summary/metadata
+- optional model semantic dedupe
+
+Outputs:
+
+- `radar_dedup_groups`
+- filtered candidate set for scoring/reporting
+
+Checklist:
+
+- [ ] Implement exact URL dedupe.
+- [ ] Implement source-native dedupe for same X id, same GitHub release, same
+      RSS entry id/link, same HN item, same Reddit post, same Telegram public
+      message.
+- [ ] Implement cross-source canonical URL merging while preserving all sources.
+- [ ] Implement semantic topic dedupe only after initial scoring and only with
+      preserved evidence.
+- [ ] Add model semantic-dedupe output schema with primary id, duplicate ids,
+      reason, confidence.
+- [ ] Add model semantic-dedupe cost/policy gate.
+- [ ] Add deterministic fallback that skips semantic dedupe rather than hiding
+      parse failure.
+
+Anti-mirage gate:
+
+- [ ] Dedupe cannot delete source evidence.
+- [ ] Dedupe cannot collapse "same product, different event" without explicit
+      evidence.
+- [ ] Model semantic dedupe failure cannot silently drop items.
+
+Production-data proof:
+
+- [ ] Run on real production sources where the same story appears in at least
+      two source families.
+- [ ] Inspect dedup groups and verify both kept and duplicate source evidence
+      remain readable.
+- [ ] Seed production run with real common topics, not synthetic duplicates,
+      such as a GitHub release appearing in GitHub, HN, Reddit, RSS, or X.
+
+### Stage 4: Interestingness Ranking
+
+Ranking must not be a single opaque model score.
+
+Score layers:
+
+1. `heuristic_v1`
+   - recency
+   - source family
+   - source quality
+   - engagement metrics
+   - source-card reliability
+   - watched org/person/topic signal
+   - novelty vs prior runs
+   - duplicate/corroboration signal
+
+2. `discussion_quality_v1`
+   - HN/Reddit/X/Telegram public comment quality where available
+   - disagreement/concern signal
+   - technical specificity
+
+3. `source_quality_v1`
+   - rolling source signal-to-noise
+   - failure/staleness penalties
+   - source decay
+
+4. `user_profile_relevance_v1`
+   - explicit radar profile interests
+   - Arcwell profile preferences only when safe and relevant
+   - no private memory leakage into model prompts without explicit design
+
+5. `model_interestingness_v1`
+   - optional
+   - schema-validated
+   - source-grounded
+   - cost/policy gated
+
+Checklist:
+
+- [ ] Implement score tables and score read APIs.
+- [ ] Implement deterministic heuristic score first.
+- [ ] Add explanation fields that name positive and negative signals.
+- [ ] Add stale-score labels when source rows or profile config changed after
+      scoring.
+- [ ] Add category quota and max-item selection after scoring.
+- [ ] Add per-source cap so one source cannot dominate unless profile says so.
+- [ ] Add model-backed ranking only after deterministic score and stage
+      inspection exist.
+- [ ] Add model output schema validation and malformed-output severe tests.
+- [ ] Add score distribution metrics to run metadata and ops.
+
+Anti-mirage gate:
+
+- [ ] A model score alone cannot authorize delivery.
+- [ ] A score without reason is invalid.
+- [ ] A score that references unavailable evidence is invalid.
+- [ ] Private or unauthorized content cannot be sent to a model as ranking
+      context.
+
+Production-data proof:
+
+- [ ] Score a real production run with at least five source families.
+- [ ] Compare top 25 and bottom 25 items manually or with an adversarial review
+      artifact.
+- [ ] Prove score reasons cite actual available fields.
+- [ ] Prove category balancing changes at least one real run where a source
+      family would otherwise dominate.
+- [ ] Record cost decisions and actual provider usage where available for
+      model scoring.
+
+### Stage 5: Filter And Balance Digest
+
+Inputs:
+
+- scored rows
+- dedup groups
+- profile category quotas
+- source quality
+
+Outputs:
+
+- final selected item set
+- rejected-but-inspectable rows with reasons
+
+Checklist:
+
+- [ ] Implement score threshold filter.
+- [ ] Implement per-category group quotas.
+- [ ] Implement global max item cap.
+- [ ] Implement per-source max cap.
+- [ ] Implement "must include if critical" override only with explicit profile
+      config and audit note.
+- [ ] Store rejection reasons: `below_threshold`, `duplicate_topic`,
+      `category_quota`, `source_quota`, `unsafe_source`, `weak_evidence`,
+      `delivery_policy_denied`.
+
+Anti-mirage gate:
+
+- [ ] Rejected items must remain inspectable.
+- [ ] Empty digest must explain whether the day was quiet, sources failed,
+      threshold was too high, or scoring failed.
+- [ ] A filtered run cannot be marked healthy if all source families failed.
+
+Production-data proof:
+
+- [ ] Run threshold and balancing on a real high-volume window.
+- [ ] Prove selected and rejected counts by source family.
+- [ ] Prove an empty digest path on real data by using a deliberately high
+      threshold, and verify it reports threshold cause rather than pretending
+      no sources exist.
+
+### Stage 6: Enrichment
+
+Inputs:
+
+- selected items
+- original source cards
+- expanded safe URLs
+- local wiki pages
+- research artifacts where needed
+
+Outputs:
+
+- `radar_enrichments`
+- linked source-card/research evidence
+
+Checklist:
+
+- [ ] Extract concepts that need background only from title, content, summary,
+      tags, or comments.
+- [ ] Use Arcwell URL ingest and local source cards for web grounding instead
+      of ad hoc untracked search.
+- [ ] Use host-native search or `research_web_search` only when explicitly
+      configured for enrichment and record the proof.
+- [ ] Store linked source-card ids for every enrichment.
+- [ ] Add `blocked_weak_evidence` when background cannot be grounded.
+- [ ] Add community discussion summaries only from captured HN/Reddit/X/public
+      Telegram discussion text.
+- [ ] Add language-specific enrichment fields.
+- [ ] Add citation verification pass for model-generated enrichment.
+
+Anti-mirage gate:
+
+- [ ] Enrichment without linked evidence is not complete.
+- [ ] Web search snippets alone are not enough for high-confidence background.
+- [ ] Generated reports, expanded pages, and summaries cannot recursively
+      ground enrichment.
+
+Production-data proof:
+
+- [ ] Enrich at least 25 real selected production items or all selected items
+      if fewer than 25 in a high-volume run.
+- [ ] For each enriched item in the proof sample, verify at least one source
+      card or original source supports the enrichment.
+- [ ] Include at least one item with community discussion and one without, and
+      prove both render correctly.
+
+### Stage 7: Summary And Report Writing
+
+Outputs:
+
+- executive digest
+- detailed report
+- item-by-item appendix
+- evidence appendix
+- source-health appendix
+- delivery-ready variants
+
+Report sections:
+
+1. Title and run metadata.
+2. Bottom line: what matters today.
+3. Top items with score, reason, source, and evidence links.
+4. Category-balanced sections.
+5. What changed since previous run.
+6. Source family coverage.
+7. Weak evidence and blocked enrichment.
+8. Delivery status.
+9. Evidence appendix.
+10. Method notes and caveats.
+
+Checklist:
+
+- [ ] Implement Markdown renderer over `radar_summaries`.
+- [ ] Implement compact Telegram renderer with safe Markdown and length caps.
+- [ ] Implement email renderer with inert Markdown/HTML conversion policy.
+- [ ] Implement JSON renderer for programmatic consumers.
+- [ ] Include source-card ids and URLs for each item.
+- [ ] Include dedupe and rejection stats.
+- [ ] Include score distribution and category quotas.
+- [ ] Include source-health status at time of run.
+- [ ] Include stale/failed/missing source warnings in the executive caveats.
+- [ ] Add no-write mode that renders but writes no summary rows.
+
+Anti-mirage gate:
+
+- [ ] A report cannot say "daily" or "latest" if the run window/source health
+      does not prove current polling.
+- [ ] A report cannot hide failed source families.
+- [ ] A report cannot omit caveats when enrichment/audit failed.
+- [ ] A report cannot cite generated summaries as source evidence.
+
+Production-data proof:
+
+- [ ] Generate reports from real production runs for at least three profiles:
+      `agent-infrastructure`, `security-sandboxing`, and `market-ecosystem`.
+- [ ] Each report must include at least five source families unless a profile
+      explicitly narrows the source set and says so.
+- [ ] Run adversarial report review that scores source coverage, ranking
+      usefulness, evidence support, contradiction handling, delivery readiness,
+      and caveat honesty. No production promotion if any score is below 4/5.
+
+### Stage 8: Delivery
+
+Delivery routes:
+
+- Telegram authorized subjects through existing Telegram/channel delivery.
+- Email authorized recipients through existing email send/reply infrastructure.
+- Local wiki/source-card digest page.
+- Optional webhook only after an Arcwell-owned webhook delivery model exists.
+
+Checklist:
+
+- [ ] Add recipient authorization lookup.
+- [ ] Add delivery profile config for channel, recipient, quiet hours, max
+      frequency, and summary format.
+- [ ] Add policy check before delivery.
+- [ ] Add cost check where provider delivery has cost.
+- [ ] Add idempotency keys per run/summary/recipient.
+- [ ] Add quiet-hours deferral.
+- [ ] Add retry with bounded attempts and dead-letter behavior.
+- [ ] Add delivery attempt records linked to `radar_deliveries`.
+- [ ] Add delivery status to ops snapshot.
+- [ ] Add manual `radar deliver` confirmation path.
+- [ ] Add scheduled delivery only after manual delivery is proven.
+
+Anti-mirage gate:
+
+- [ ] Generating a summary is not delivery.
+- [ ] Sending to a test chat/address is not production delivery unless it uses
+      the real Arcwell authorization, policy, cost, delivery-attempt, and retry
+      surfaces.
+- [ ] A failed delivery cannot be hidden by marking the run completed unless
+      delivery was explicitly optional.
+
+Production-data proof:
+
+- [ ] Send one real production-data digest to an authorized Telegram recipient
+      or disposable authorized Telegram test chat.
+- [ ] Send one real production-data digest to an authorized email recipient or
+      disposable authorized email route.
+- [ ] Prove quiet-hours deferral with a real delivery row and no provider send.
+- [ ] Prove retry/dead-letter with a controlled provider failure or disabled
+      route, without leaking secrets.
+
+### Stage 9: Source Quality And Recommendation Loop
+
+Inputs:
+
+- production run history
+- source health
+- score distributions
+- duplicate rates
+- delivery contributions
+- removal/disable reasons
+
+Outputs:
+
+- local source-quality records
+- source recommendations
+- source decay warnings
+
+Checklist:
+
+- [ ] Compute per-source signal-to-noise.
+- [ ] Compute average/p50/p90 scores per source over rolling windows.
+- [ ] Compute duplicate/corroboration rate.
+- [ ] Compute output frequency.
+- [ ] Detect source decay and staleness.
+- [ ] Recommend complementary sources based on category gaps and source
+      quality.
+- [ ] Flag overlapping sources where dedupe shows persistent duplication.
+- [ ] Add source removal feedback recording.
+- [ ] Add source-quality section in ops.
+
+Anti-mirage gate:
+
+- [ ] Source recommendations cannot claim quality without local quality data.
+- [ ] Global/community quality is future work unless an explicit Arcwell Hub is
+      built. Do not imply HorizonHub telemetry exists locally.
+
+Production-data proof:
+
+- [ ] Run at least seven days of real scheduled or manually repeated
+      production radar runs before claiming decay/quality trend behavior.
+- [ ] Show at least one source-quality ranking generated from real local run
+      history.
+- [ ] Show at least one recommended source and one overlap warning, with the
+      local evidence used.
+
+## Worker And Scheduling Design
+
+Worker job kinds:
+
+- `radar_run`
+- `radar_fetch`
+- `radar_score`
+- `radar_filter`
+- `radar_enrich`
+- `radar_summarize`
+- `radar_deliver`
+- `radar_source_quality_rollup`
+
+Checklist:
+
+- [ ] Add job input schema validation for every radar job kind.
+- [ ] Add worker execution that resumes from durable run stage.
+- [ ] Add idempotency keys for stage jobs.
+- [ ] Add stale-lease recovery.
+- [ ] Add stop/cancel semantics before next expensive action.
+- [ ] Add retry/backoff by error class.
+- [ ] Add dead-letter records with redacted errors.
+- [ ] Add ops visibility for radar jobs and stale runs.
+
+Production-data proof:
+
+- [ ] Queue a real production-data radar run and drain it through
+      `arcwell worker run-once` without manual stage calls.
+- [ ] Kill or interrupt after fetch, resume, and prove no duplicate source
+      cards, no cursor corruption, and no duplicate delivery.
+- [ ] Let a provider/source fail and prove the run becomes partial/blocked with
+      source-health evidence.
+
+## Real Production Data Proof Profiles
+
+Mocks, toy fixtures, and small synthetic datasets are useful for unit tests,
+but they do not satisfy completion. The production proof must use real source
+data at natural volume.
+
+### Profile A: Agent Infrastructure
+
+Required source families:
+
+- real RSS feeds
+- real GitHub releases or owner activity
+- real Hacker News stories
+- real Reddit discussions
+- real X watch-source rows from copied/disposable authenticated home or public
+  recent search if credentials permit
+- real arXiv or web/research source cards where relevant
+
+Minimum proof:
+
+- [ ] Fetch at least a full 7-day window if 24 hours produces too little data.
+- [ ] Include at least 100 raw items or document why the real configured source
+      universe produced fewer after a 7-day window.
+- [ ] Select at least 15 digest candidates after scoring unless source volume
+      genuinely prevents it.
+- [ ] Enrich at least 10 items.
+- [ ] Produce full report and delivery-ready summary.
+
+### Profile B: Security And Sandboxing
+
+Required source families:
+
+- security RSS feeds
+- GitHub repos/releases for sandbox/runtime projects
+- HN/Reddit security or programming discussions
+- arXiv or standards/document source cards
+- X/watch-source rows if configured
+
+Minimum proof:
+
+- [ ] Include source-family caveats because security topics are high-risk.
+- [ ] Verify no generated advice is delivered as operational security guidance
+      without citations.
+- [ ] Include adversarial report review focused on overclaiming and stale
+      vulnerability data.
+
+### Profile C: Market Ecosystem
+
+Required source families:
+
+- company/blog RSS
+- GitHub/project release data
+- X/watch-source rows
+- news/search source cards
+- optional OpenBB company news
+- optional Reddit/HN discussion
+
+Minimum proof:
+
+- [ ] Include currentness labels by item.
+- [ ] Separate launch claims, funding claims, hiring claims, product claims,
+      and community reaction.
+- [ ] Mark weak/company-only evidence clearly.
+
+### Profile D: Source Quality Stress Run
+
+Purpose: prove source-quality and balancing.
+
+Required:
+
+- [ ] Run with enough sources that one family would dominate without quotas.
+- [ ] Show source-quality table.
+- [ ] Show category quota effects.
+- [ ] Show overlap/dedupe groups.
+- [ ] Show at least one stale/failing source or controlled disabled source
+      surfaced honestly.
+
+## Severe Test Matrix
+
+### Schema And Migration
+
+- [ ] Empty database migration.
+- [ ] Populated database migration.
+- [ ] Old-schema fixture migration.
+- [ ] Rerun migration idempotency.
+- [ ] Backup/restore drill with radar rows.
+- [ ] Corrupt `metadata_json` row reports clear error or repair path.
+- [ ] Missing FTS table rebuild.
+
+### Source Fetch
+
+- [ ] RSS malformed XML.
+- [ ] RSS duplicate GUID/link.
+- [ ] RSS private/metadata redirect rejected when URL ingest is used.
+- [ ] GitHub 401/403/429/5xx.
+- [ ] HN deleted/dead/comment HTML.
+- [ ] Reddit 429 and RSS fallback.
+- [ ] Reddit blocked JSON response.
+- [ ] Public Telegram hostile HTML/Markdown.
+- [ ] X expired token, forbidden tier, rate limit, partial data, malformed row.
+- [ ] OSS Insight empty/malformed rows.
+- [ ] OpenBB optional dependency missing.
+- [ ] All rows rejected does not advance cursor.
+- [ ] Partial provider failure records source-health `partial`.
+
+### Normalization And Indexing
+
+- [ ] Duplicate stable keys.
+- [ ] Duplicate canonical URLs.
+- [ ] Hostile title/content with script tags.
+- [ ] Markdown image/link injection.
+- [ ] Unicode RTL/control characters.
+- [ ] Huge content truncation.
+- [ ] Null bytes.
+- [ ] FTS drift.
+- [ ] Source-card projection failure rollback.
+- [ ] Process interruption after source-card write before radar item write.
+
+### Ranking
+
+- [ ] Score bounds reject NaN, infinity, negative, over 10.
+- [ ] Missing score reason invalid.
+- [ ] Malformed model JSON rejected.
+- [ ] Prompt-injection content cannot alter scoring schema.
+- [ ] Cost denial blocks model scoring but leaves deterministic scoring.
+- [ ] Private content excluded from model prompt.
+- [ ] Stale score detected after item/profile change.
+
+### Dedupe
+
+- [ ] Same URL across source families groups correctly.
+- [ ] Same product different events stay separate.
+- [ ] Model dedupe parse failure keeps items.
+- [ ] Duplicate group preserves all member evidence.
+- [ ] Dedup does not affect source-quality raw counts incorrectly.
+
+### Enrichment
+
+- [ ] Enrichment refuses unsupported facts.
+- [ ] Search/provider blocked records `blocked_weak_evidence`.
+- [ ] Generated summary recursion rejected.
+- [ ] Citation URL not in evidence rejected.
+- [ ] Community discussion prompt injection quoted as data.
+- [ ] Bilingual output validates language fields if multilingual is enabled.
+
+### Report Writing
+
+- [ ] Empty digest report explains cause.
+- [ ] Failed source families appear in caveats.
+- [ ] Source-health stale state appears in caveats.
+- [ ] Refuted/weak evidence cannot appear as confident conclusion.
+- [ ] Markdown/HTML escaped in report.
+- [ ] Long report bounded.
+- [ ] Telegram compact renderer length cap.
+- [ ] Email renderer strips active HTML.
+
+### Delivery
+
+- [ ] Unauthorized recipient blocked.
+- [ ] Quiet hours defer.
+- [ ] Duplicate delivery idempotency.
+- [ ] Provider failure retry.
+- [ ] Retry exhaustion dead-letters.
+- [ ] Delivery error redacts tokens/addresses where required.
+- [ ] Policy denial records decision.
+- [ ] Cost denial records decision.
+
+### Ops
+
+- [ ] Radar run visible in ops.
+- [ ] Radar stale run visible in ops.
+- [ ] Radar failed source-health visible in ops.
+- [ ] Radar delivery failures visible in ops.
+- [ ] Ops UI escapes hostile item text.
+- [ ] Doctor reports radar drift.
+
+## Implementation Order
+
+### Phase 0: Design Lock And Guardrails
+
+- [ ] Add this plan.
+- [ ] Add `packages/arcwell-radar/README.md` with `Status: Missing/Design`.
+- [ ] Add `TODO.md` references only after user approves touching the dirty
+      planning files.
+- [ ] Add `STATUS.md` row only when first code lands.
+- [ ] Define proof packet template for radar features.
+
+Exit gate:
+
+- [ ] User and implementer agree that Horizon is a design input, not a runtime
+      dependency.
+- [ ] No code claims exist yet.
+
+### Phase 1: Staged Local Skeleton
+
+- [ ] Add radar tables.
+- [ ] Add structs and row mappers.
+- [ ] Add profile CRUD.
+- [ ] Add run create/read/list.
+- [ ] Add stage read API.
+- [ ] Add source-card query adapter only.
+- [ ] Add deterministic normalization into `radar_items`.
+- [ ] Add FTS indexing.
+- [ ] Add audit/repair for item/source-card/wiki/FTS drift.
+- [ ] Add CLI/MCP tools for profile, run, stage, audit.
+- [ ] Add severe local tests.
+
+Exit gate:
+
+- [ ] Production proof over existing real local source cards, not synthetic
+      toy data.
+- [ ] Database reopen and repair no-op proof.
+
+### Phase 2: Existing Arcwell Source Integration
+
+- [ ] Integrate RSS/GitHub/arXiv watch-source outputs.
+- [ ] Integrate X canonical rows and source-card projections.
+- [ ] Integrate digest candidate creation from selected radar rows.
+- [ ] Add source-health/cursor propagation.
+- [ ] Add worker `radar_fetch` and `radar_run` job.
+
+Exit gate:
+
+- [ ] Real production run over existing Arcwell watch sources.
+- [ ] At least five source families if configured; otherwise document missing
+      source families and keep status below `Production Data Proof`.
+
+### Phase 3: Horizon-Inspired New Adapters
+
+- [ ] Hacker News.
+- [ ] Reddit.
+- [ ] Public Telegram.
+- [ ] OSS Insight.
+- [ ] OpenBB optional.
+- [ ] Source preset import and recommendation.
+
+Exit gate:
+
+- [ ] Each adapter has a real production-data smoke and source-health proof.
+- [ ] Each adapter has severe malformed/rate-limit tests.
+
+### Phase 4: Ranking, Dedupe, Balance
+
+- [ ] Heuristic scoring.
+- [ ] Score explanations.
+- [ ] Exact URL/native dedupe.
+- [ ] Category/source balancing.
+- [ ] Optional model scoring.
+- [ ] Optional semantic dedupe.
+
+Exit gate:
+
+- [ ] Real production ranking review across at least three profiles.
+- [ ] Model scoring cannot promote if deterministic scoring/audit fails.
+
+### Phase 5: Enrichment And Report Writing
+
+- [ ] Evidence-grounded enrichment.
+- [ ] Citation verification.
+- [ ] Markdown summaries.
+- [ ] Detailed reports.
+- [ ] Telegram/email renderers.
+- [ ] Report audit.
+
+Exit gate:
+
+- [ ] Real production reports for Agent Infrastructure, Security/Sandboxing,
+      and Market Ecosystem profiles.
+- [ ] Adversarial review average score at least 4/5, no blocking findings.
+
+### Phase 6: Delivery And Scheduling
+
+- [ ] Manual authorized delivery.
+- [ ] Quiet-hours deferral.
+- [ ] Retry/dead-letter.
+- [ ] Scheduled worker runs.
+- [ ] Source-quality rollups.
+- [ ] Ops/doctor visibility.
+
+Exit gate:
+
+- [ ] Real production-data digest delivered to authorized Telegram/email target.
+- [ ] Scheduled run completes without manual stage calls.
+- [ ] Interrupted run resumes without duplicate delivery.
+
+### Phase 7: Operational Hardening
+
+- [ ] Seven-day source-quality trend proof.
+- [ ] Backup/restore drill.
+- [ ] Performance/stress proof over large production windows.
+- [ ] Ops UI browser validation desktop/mobile.
+- [ ] Documentation and plugin parity.
+- [ ] Release readiness smoke.
+
+Exit gate:
+
+- [ ] Operational scorecard has no category below 4/5.
+- [ ] `STATUS.md`, `TODO.md`, package README, CLI, MCP, slash commands, and
+      tests agree.
+
+## Production Proof Commands
+
+Exact scripts should be added as the implementation lands. Target shape:
+
+```sh
+cargo fmt -- --check
+cargo test --all --all-features
+cargo test -p arcwell-core radar_ -- --nocapture
+cargo test -p arcwell severe_radar -- --nocapture
+scripts/radar-production-proof --profile agent-infrastructure --window-hours 168
+scripts/radar-production-proof --profile security-sandboxing --window-hours 168
+scripts/radar-production-proof --profile market-ecosystem --window-hours 168
+scripts/radar-delivery-proof --run-id <run-id> --channel telegram --recipient <authorized-test-subject>
+scripts/radar-delivery-proof --run-id <run-id> --channel email --recipient <authorized-test-recipient>
+scripts/arcwell-dev smoke
+scripts/arcwell-dev sync
+scripts/verify-codex-plugin-docs
+```
+
+For X user-context production proof, use a copied/disposable source home and do
+not rewrite the real watch list unless the user explicitly requests it:
+
+```sh
+set -a
+. ./.env
+set +a
+X_USER_CONTEXT_SOURCE_HOME="$ARCWELL_HOME" scripts/radar-production-proof --profile agent-infrastructure --window-hours 168
+```
+
+## Proof Packet For Every Phase
+
+Each phase must produce a packet with:
+
+- [ ] Feature name and status.
+- [ ] User-visible claim in one sentence.
+- [ ] Exact accepted inputs and promised outputs.
+- [ ] Durable rows/files written.
+- [ ] Source families used.
+- [ ] Real production data window.
+- [ ] Row counts by source family.
+- [ ] Cursor and source-health before/after.
+- [ ] Score distribution.
+- [ ] Dedupe groups.
+- [ ] Rejected item reasons.
+- [ ] Enrichment evidence links.
+- [ ] Summary/report artifact paths.
+- [ ] Delivery attempt rows, if applicable.
+- [ ] Policy and cost decisions.
+- [ ] Secret redaction evidence.
+- [ ] Commands run.
+- [ ] Adversarial review findings.
+- [ ] Remaining risks.
+- [ ] Promotion decision: promote, hold, or block.
+
+## Things That Must Not Be Claimed
+
+- Do not claim "Horizon integrated" because Horizon was cloned or its docs were
+  summarized.
+- Do not claim "digest works" because a Markdown string was generated.
+- Do not claim "delivery works" because a summary exists.
+- Do not claim "current" or "latest" without source-health and cursor proof.
+- Do not claim "ranked intelligently" because a model returned scores.
+- Do not claim "source quality" without real run history.
+- Do not claim "production data proof" from synthetic fixtures.
+- Do not claim "scheduled" from a foreground manual command.
+- Do not claim "safe" without malicious input and policy/cost/secret tests.
+
+## First Implementation Slice Recommendation
+
+Start with the smallest real slice that still threatens the mirage:
+
+1. `radar_profiles`, `radar_runs`, `radar_items`, `radar_item_fts`.
+2. Source-card query adapter over existing real Arcwell source cards.
+3. Run create/fetch/index/stage-read/audit.
+4. Production proof over the user's current real local source-card corpus.
+5. Then integrate existing RSS/GitHub/arXiv/X watch-source outputs.
+
+Do not begin with model scoring or delivery. Those are where a fake shell would
+look impressive fastest. The durable ingestion/indexing spine must be real
+first.
