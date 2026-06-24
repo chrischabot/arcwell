@@ -21793,7 +21793,13 @@ impl Store {
             .read_radar_profile(&run.profile_id)?
             .with_context(|| format!("radar profile not found: {}", run.profile_id))?;
         let audit = self.audit_radar_run(run_id)?;
-        if !audit.ok {
+        let audit_allows_missing_provenance_block_only = !audit.ok
+            && !audit.findings.is_empty()
+            && audit
+                .findings
+                .iter()
+                .all(|finding| finding.code == "radar_missing_source_card");
+        if !audit.ok && !audit_allows_missing_provenance_block_only {
             bail!(
                 "radar model scoring requires an audit-ok run; finding_count={}",
                 audit.findings.len()
@@ -21844,6 +21850,15 @@ impl Store {
         let mut eligible_scores = Vec::new();
         let mut excluded_scores = Vec::new();
         for (item, score) in heuristic_scores {
+            if audit_allows_missing_provenance_block_only {
+                excluded_scores.push((
+                    item,
+                    score,
+                    "radar audit failed before model scoring: missing source-card provenance"
+                        .to_string(),
+                ));
+                continue;
+            }
             let source_card = if let Some(source_card_id) = item.source_card_id.as_deref() {
                 self.read_source_card(source_card_id)?
             } else {
@@ -47276,10 +47291,20 @@ reason = "X OAuth disabled during policy test"
         // SEVERITY: Severe because capping blocked rows by prompt budget would
         // make a run look privacy-audited while silently omitting exclusions.
         let store = test_store("radar-model-score-excluded-limit-backfill");
-        for idx in 0..8 {
+        let private_titles = [
+            "Restricted alpha orchard",
+            "Confidential beta turbine",
+            "Secret gamma lattice",
+            "Private delta archive",
+            "Sensitive epsilon ledger",
+            "Internal zeta telescope",
+            "Owner-only eta capsule",
+            "Members-only theta relay",
+        ];
+        for (idx, title) in private_titles.iter().enumerate() {
             store
                 .add_source_card(SourceCardInput {
-                    title: format!("Agent private canary {idx}"),
+                    title: title.to_string(),
                     url: format!("https://example.com/radar-private-canary-{idx}"),
                     source_type: "note".to_string(),
                     provider: "fixture".to_string(),
@@ -47293,9 +47318,14 @@ reason = "X OAuth disabled during policy test"
                 .unwrap();
         }
         for idx in 0..2 {
+            let title = if idx == 0 {
+                "Agent wasm kernel release".to_string()
+            } else {
+                "MCP vector index study".to_string()
+            };
             store
                 .add_source_card(SourceCardInput {
-                    title: format!("Agent public backfill {idx}"),
+                    title,
                     url: format!("https://example.com/radar-public-backfill-{idx}"),
                     source_type: "note".to_string(),
                     provider: "fixture".to_string(),
@@ -47333,8 +47363,8 @@ reason = "X OAuth disabled during policy test"
             .read_wiki_page(&model.input_artifact_id)
             .unwrap()
             .unwrap();
-        assert!(input_artifact.content.contains("Agent public backfill 0"));
-        assert!(input_artifact.content.contains("Agent public backfill 1"));
+        assert!(input_artifact.content.contains("Agent wasm kernel release"));
+        assert!(input_artifact.content.contains("MCP vector index study"));
         assert!(!input_artifact.content.contains("PRIVATE_LIMIT_LEAK_"));
         assert!(!input_artifact.content.contains("sk-private-limit-"));
 
@@ -47503,7 +47533,7 @@ reason = "X OAuth disabled during policy test"
                 .error
                 .as_deref()
                 .unwrap_or("")
-                .contains("provenance missing linked source card")
+                .contains("missing source-card provenance")
         );
     }
 
