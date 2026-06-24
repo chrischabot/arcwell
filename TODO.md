@@ -627,6 +627,59 @@ PR, implementation note, or final report:
 - [ ] Add browser-rendered JavaScript readability extraction for pages that
       require rendering.
 
+## 6A. Qualified Commerce Research
+
+- [x] Capture the qualified commerce research design in
+      `docs/qualified-commerce-research-design.md`, covering retail, rentals,
+      travel, private context, exact-variant availability proof, browser
+      verification, broad outputs, privacy boundaries, severe tests, and live
+      proof gates.
+- [x] Expand the qualified commerce design with anti-mirage claim ledger,
+      false-done traps, proof levels, dependency order, report acceptance gate,
+      proof packet template, and operational promotion requirements.
+- [ ] Keep qualified commerce status at `Scaffold` until durable candidate and
+      availability-proof storage, browser verification, context packet
+      redaction, CLI/MCP read surfaces, severe tests, live proof packets, and
+      docs/status agreement exist.
+- [ ] Add browser-rendered commerce extraction as a deep-research fetch path:
+      rendered DOM/page text, URL after redirects, timestamp, visible title,
+      selected variant, availability signal, price, geography/shipping caveat,
+      screenshot or page snapshot, blocked-state reporting, and source text as
+      untrusted evidence.
+- [ ] Add commerce candidate and availability-proof artifacts or tables with
+      same-run validation, exact variant keys, checked timestamps, proof
+      methods, confidence/caveats, CLI/MCP read surfaces, and report rendering.
+- [ ] Add a bounded private context packet compiler for commerce runs using
+      Arcwell memory/profile, Garderobe, and later approved browser history,
+      screenshots, spreadsheets, and emails, with raw private data excluded from
+      public wiki/source-card outputs by default.
+- [ ] Implement the first `$qualified-commerce-research` skill profile for UK
+      fashion retail: broad search, 20+ target qualified candidates when the
+      market supports it, exact size availability proof, comfort/style/quality
+      scoring, review evidence where available, and disqualified near-miss
+      reporting.
+- [ ] Severe-test commerce research with disabled/crossed-out sizes, wrong-size
+      availability, variant-specific price changes, region/shipping caveats,
+      JS-only pages, sold marketplace listings, size-system ambiguity, stale
+      search results, retailer and wardrobe prompt injection, blocked pages,
+      private-context leakage, and unverified candidates appearing in the main
+      recommendation list.
+- [ ] Add a preserved commerce proof packet script that exits non-zero when
+      blockers remain and records feature status, user-visible claims, request,
+      privacy/context sources, search providers, cost/policy decisions, raw and
+      checked candidate counts, availability-proof methods, blocked/unknown/
+      disqualified counts, artifacts, audit result, surfaces exercised, and
+      promotion judgment.
+- [ ] Run preserved live proofs for UK loafers in UK 8.5 and a denim shirt
+      search, with browser-verified availability, context-derived preferences,
+      review evidence where available, disqualified near misses, and final
+      report audit before claiming the workflow works.
+- [ ] Add ops/recovery requirements before any operational claim: worker leases
+      or resumable state for long runs, retry/dead-letter behavior, source or
+      provider health, cost caps, idempotent reruns, user-stop handling, and ops
+      visibility for healthy, stale, blocked, failed, partial, retrying, and
+      unknown states.
+
 ## 7. Memory, Work Graph, And Procedural Retrieval Loop
 
 - [ ] Add consolidation job that can surface unresolved risks, recurring
