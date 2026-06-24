@@ -370,6 +370,7 @@ arcwell research report <run-id> "coverage satisfied or limit reached"
 arcwell radar profile create ai-infra --source-card-query agent --min-score 3
 arcwell radar run ai-infra
 arcwell radar run ai-infra --fetch-live
+arcwell radar enqueue ai-infra --fetch-live
 arcwell radar stage <run-id>
 arcwell radar audit <run-id>
 arcwell project status-sync-record <project-id> active "Fresh Codex thread summary" --host codex --thread-id <thread-id>

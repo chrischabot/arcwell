@@ -154,6 +154,7 @@ typing part of the name. Use the displayed command name from the picker.
 - `/radar-profiles` uses `radar_profile_list`.
 - `/radar-profile-read` uses `radar_profile_read`.
 - `/radar-run` uses `radar_run`.
+- `/radar-enqueue` uses `radar_enqueue`.
 - `/radar-runs` uses `radar_runs`.
 - `/radar-stage` uses `radar_stage_read`.
 - `/radar-summarize` uses `radar_summarize`.

@@ -968,6 +968,7 @@ const SLASH_COMMAND_ALIASES: &[(&str, SlashAliasTarget)] = &[
         "radar-profiles",
         SlashAliasTarget::Mcp("radar_profile_list"),
     ),
+    ("radar-enqueue", SlashAliasTarget::Mcp("radar_enqueue")),
     ("radar-run", SlashAliasTarget::Mcp("radar_run")),
     ("radar-runs", SlashAliasTarget::Mcp("radar_runs")),
     ("radar-stage", SlashAliasTarget::Mcp("radar_stage_read")),
@@ -2215,6 +2216,13 @@ enum RadarSubcommand {
         command: RadarProfileSubcommand,
     },
     Run {
+        profile: String,
+        #[arg(long)]
+        window_hours: Option<i64>,
+        #[arg(long)]
+        fetch_live: bool,
+    },
+    Enqueue {
         profile: String,
         #[arg(long)]
         window_hours: Option<i64>,
@@ -3685,6 +3693,11 @@ fn radar(store: Store, args: RadarCommand) -> Result<()> {
         } => {
             print_json(&store.run_radar_profile_with_options(&profile, window_hours, fetch_live)?)
         }
+        RadarSubcommand::Enqueue {
+            profile,
+            window_hours,
+            fetch_live,
+        } => print_json(&store.enqueue_radar_run_job(&profile, window_hours, fetch_live)?),
         RadarSubcommand::Runs => print_json(&store.list_radar_runs()?),
         RadarSubcommand::Stage { run_id } => print_json(&store.read_radar_stage(&run_id)?),
         RadarSubcommand::Summarize {
@@ -8532,6 +8545,16 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 fetch_live,
             )?))
         }
+        "radar_enqueue" => {
+            let profile = required_string(&arguments, "profile")?;
+            let window_hours = arguments.get("window_hours").and_then(Value::as_i64);
+            let fetch_live = optional_bool(&arguments, "fetch_live", false);
+            Ok(json!(store.enqueue_radar_run_job(
+                &profile,
+                window_hours,
+                fetch_live
+            )?))
+        }
         "radar_runs" => Ok(json!(store.list_radar_runs()?)),
         "radar_stage_read" => {
             let run_id = required_string(&arguments, "run_id")?;
@@ -9996,6 +10019,16 @@ fn mcp_tools() -> Vec<Value> {
                 "profile": string_schema("Radar profile id or name."),
                 "window_hours": integer_schema("Optional run window override in hours."),
                 "fetch_live": boolean_schema("Opt in to live adapter fetches before source-card projection.")
+            }),
+            &["profile"],
+        ),
+        tool_with_schema(
+            "radar_enqueue",
+            "Enqueue a radar profile run for the local worker. The worker writes the same radar_runs/items/FTS/scores state as radar_run and records blocked/partial status when live adapters fail.",
+            json!({
+                "profile": string_schema("Radar profile id or name."),
+                "window_hours": integer_schema("Optional run window override in hours."),
+                "fetch_live": boolean_schema("Opt in to live adapter fetches during worker execution.")
             }),
             &["profile"],
         ),
@@ -11753,7 +11786,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         command_names.sort();
-        assert_eq!(command_names.len(), 128);
+        assert_eq!(command_names.len(), 129);
         let missing = command_names
             .into_iter()
             .filter(|name| slash_alias_target(name).is_none() && !slash_alias_is_dynamic(name))
@@ -13148,6 +13181,40 @@ reason = "MCP secret writes are denied for this token"
             Some(true)
         );
 
+        let queued = call_mcp_tool(
+            &paths,
+            "radar_enqueue",
+            json!({ "profile": profile.get("id").and_then(Value::as_str).unwrap() }),
+        )
+        .unwrap();
+        assert_eq!(
+            queued.get("kind").and_then(Value::as_str),
+            Some("radar_run")
+        );
+        assert_eq!(
+            queued.get("status").and_then(Value::as_str),
+            Some("pending")
+        );
+        let worker = call_mcp_tool(&paths, "worker_run_once", json!({ "max_jobs": 1 })).unwrap();
+        assert_eq!(worker.get("processed").and_then(Value::as_u64), Some(1));
+        assert_eq!(worker.get("completed").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            worker.pointer("/jobs/0/kind").and_then(Value::as_str),
+            Some("radar_run")
+        );
+        assert_eq!(
+            worker
+                .pointer("/jobs/0/result_json/status")
+                .and_then(Value::as_str),
+            Some("scored")
+        );
+        assert_eq!(
+            worker
+                .pointer("/jobs/0/result_json/items_inserted")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
         let summary_read = call_mcp_tool(
             &paths,
             "radar_summary_read",
@@ -13186,6 +13253,7 @@ reason = "MCP secret writes are denied for this token"
         for expected in [
             "radar_profile_create",
             "radar_run",
+            "radar_enqueue",
             "radar_stage_read",
             "radar_summarize",
             "radar_summary_read",
@@ -13211,6 +13279,24 @@ reason = "MCP secret writes are denied for this token"
         );
         assert_eq!(
             radar_run_tool
+                .pointer("/inputSchema/required")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+            vec![json!("profile")]
+        );
+        let radar_enqueue_tool = mcp_tools()
+            .into_iter()
+            .find(|tool| tool.get("name").and_then(Value::as_str) == Some("radar_enqueue"))
+            .expect("radar_enqueue tool should exist");
+        assert!(
+            radar_enqueue_tool
+                .pointer("/inputSchema/properties/fetch_live")
+                .is_some(),
+            "radar_enqueue should expose fetch_live"
+        );
+        assert_eq!(
+            radar_enqueue_tool
                 .pointer("/inputSchema/required")
                 .and_then(Value::as_array)
                 .cloned()

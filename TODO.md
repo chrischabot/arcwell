@@ -227,9 +227,11 @@ PR, implementation note, or final report:
       no-write mode performs no writes, and prompt-injection tweets remain
       quoted evidence.
 - [ ] Add X digest candidate hardening: canonical tweet/thread id linkage,
-      source-card linkage, candidate dedupe, review states, score freshness,
-      delivery-denial audit, delivery-attempt integration, quiet-hours schedule,
-      and no model-score-only sending.
+      source-card linkage, review states, score freshness, delivery-denial
+      audit, delivery-attempt integration, quiet-hours schedule, and no
+      model-score-only sending. Generic digest candidate creation now normalizes
+      and dedupes exact same-topic/source-card sets so repeated X/watch flows do
+      not inflate the queue.
 - [ ] Add X heuristic scoring before model scoring, with score rows as overlays,
       stale-score labels, schema-validated model output, eval fixtures,
       cost-decision rows, private-content exclusion, and proof that scores never

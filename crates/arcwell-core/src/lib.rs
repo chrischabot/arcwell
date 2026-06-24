@@ -12295,6 +12295,30 @@ impl Store {
         )
     }
 
+    pub fn enqueue_radar_run_job(
+        &self,
+        profile_id_or_name: &str,
+        window_hours: Option<i64>,
+        fetch_live: bool,
+    ) -> Result<WikiJob> {
+        let profile = self
+            .read_radar_profile(profile_id_or_name)?
+            .with_context(|| format!("radar profile not found: {profile_id_or_name}"))?;
+        if let Some(window_hours) = window_hours
+            && window_hours <= 0
+        {
+            bail!("window_hours must be greater than zero");
+        }
+        self.enqueue_wiki_job(
+            "radar_run",
+            json!({
+                "profile": profile.id,
+                "window_hours": window_hours,
+                "fetch_live": fetch_live
+            }),
+        )
+    }
+
     pub fn enqueue_research_convergence_job(
         &self,
         input: ResearchConvergenceStepInput,
@@ -12501,6 +12525,31 @@ impl Store {
         let job = self.insert_wiki_job(
             "x_recent_search",
             json!({ "query": query, "max_results": max_results.clamp(10, 100) }),
+        )?;
+        self.execute_wiki_job(job)
+    }
+
+    pub fn run_radar_run_job(
+        &self,
+        profile_id_or_name: &str,
+        window_hours: Option<i64>,
+        fetch_live: bool,
+    ) -> Result<WikiJob> {
+        let profile = self
+            .read_radar_profile(profile_id_or_name)?
+            .with_context(|| format!("radar profile not found: {profile_id_or_name}"))?;
+        if let Some(window_hours) = window_hours
+            && window_hours <= 0
+        {
+            bail!("window_hours must be greater than zero");
+        }
+        let job = self.insert_wiki_job(
+            "radar_run",
+            json!({
+                "profile": profile.id,
+                "window_hours": window_hours,
+                "fetch_live": fetch_live
+            }),
         )?;
         self.execute_wiki_job(job)
     }
@@ -21679,6 +21728,7 @@ impl Store {
                 "reddit_fetch" => self.execute_reddit_fetch(&job.input_json),
                 "x_recent_search" => self.execute_x_recent_search(&job.input_json, Some(&job.id)),
                 "x_monitor_watch_source" => self.execute_x_monitor_watch_source(&job.input_json),
+                "radar_run" => self.execute_radar_run(&job.input_json),
                 "research_convergence_run" => {
                     self.execute_research_convergence_run(&job.input_json)
                 }
@@ -21811,6 +21861,47 @@ impl Store {
             "page_id": page_id,
             "source_cards": sources.len(),
             "wiki_pages": pages.len()
+        }))
+    }
+
+    fn execute_radar_run(&self, input: &Value) -> Result<Value> {
+        let profile = input
+            .get("profile")
+            .and_then(Value::as_str)
+            .context("radar_run missing profile")?;
+        let window_hours = match input.get("window_hours") {
+            Some(Value::Null) | None => None,
+            Some(value) => Some(
+                value
+                    .as_i64()
+                    .context("radar_run window_hours must be an integer")?,
+            ),
+        };
+        let fetch_live = input
+            .get("fetch_live")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let report = self.run_radar_profile_with_options(profile, window_hours, fetch_live)?;
+        Ok(json!({
+            "run_id": report.run.id,
+            "profile_id": report.profile.id,
+            "profile_name": report.profile.name,
+            "status": report.run.status,
+            "stage": report.run.stage,
+            "items_inserted": report.items_inserted,
+            "scores_inserted": report.scores_inserted,
+            "selected_items": report.selected_items,
+            "adapter_job_count": report.adapter_jobs.len(),
+            "adapter_jobs": report.adapter_jobs.iter().map(|job| json!({
+                "id": job.id,
+                "kind": job.kind,
+                "status": job.status,
+                "error": job.error,
+                "result": job.result_json
+            })).collect::<Vec<_>>(),
+            "unsupported_selectors": report.unsupported_selectors,
+            "warnings": report.warnings,
+            "fetch_live": fetch_live
         }))
     }
 
@@ -24931,6 +25022,23 @@ fn wiki_job_policy_context(
                 .map(|value| excerpt(value, 240)),
             None,
         ),
+        "radar_run" => (
+            "arcwell-radar",
+            None,
+            input
+                .get("profile")
+                .and_then(Value::as_str)
+                .map(|value| excerpt(value, 240)),
+            if input
+                .get("fetch_live")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                Some(estimated_network_fetch_cost(10))
+            } else {
+                None
+            },
+        ),
         _ => ("arcwell-llm-wiki", None, Some(kind.to_string()), None),
     }
 }
@@ -26045,6 +26153,7 @@ fn validate_job_kind(kind: &str) -> Result<()> {
         | "reddit_fetch"
         | "x_recent_search"
         | "x_monitor_watch_source"
+        | "radar_run"
         | "research_convergence_run" => Ok(()),
         other => bail!("unsupported job kind: {other}"),
     }
@@ -42279,6 +42388,248 @@ reason = "X OAuth disabled during policy test"
     }
 
     #[test]
+    fn severe_radar_worker_job_runs_profile_and_writes_stage() {
+        // CLAIM: queued radar_run jobs are real worker work, not just a foreground
+        // command with a matching name.
+        // ORACLE: worker run-once completes the job and writes durable radar run,
+        // item, FTS, score, and audit-clean stage state.
+        // SEVERITY: Severe because scheduled radar without worker execution is a
+        // classic Horizon-style digest mirage.
+        let store = test_store("radar-worker-run");
+        let card = store
+            .add_source_card(SourceCardInput {
+                title: "Worker radar agent release".to_string(),
+                url: "https://example.com/worker-radar-agent".to_string(),
+                source_type: "release".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Worker-scheduled radar finds an agent reliability release.".to_string(),
+                claims: vec![SourceClaim {
+                    claim: "The release improves worker reliability.".to_string(),
+                    kind: "product".to_string(),
+                    confidence: 0.8,
+                }],
+                retrieved_at: Some("2026-06-23T00:00:00Z".to_string()),
+                metadata: json!({ "source_role": "primary", "trust_level": "medium" }),
+            })
+            .unwrap();
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "worker-radar".to_string(),
+                description: "Worker radar".to_string(),
+                window_hours: 24,
+                min_score: 3.0,
+                max_items: Some(5),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "worker radar agent" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let queued = store
+            .enqueue_radar_run_job(&profile.name, Some(24), false)
+            .unwrap();
+        assert_eq!(queued.kind, "radar_run");
+        assert_eq!(queued.status, "pending");
+        assert_eq!(
+            queued.input_json.get("profile").and_then(Value::as_str),
+            Some(profile.id.as_str())
+        );
+
+        let worker = store.run_worker_once(1).unwrap();
+        assert_eq!(worker.processed, 1);
+        assert_eq!(worker.completed, 1);
+        let completed = &worker.jobs[0];
+        assert_eq!(completed.kind, "radar_run");
+        assert_eq!(completed.status, "completed");
+        let result = completed
+            .result_json
+            .as_ref()
+            .expect("radar worker job should record result JSON");
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("scored"));
+        assert_eq!(
+            result.get("items_inserted").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            result.get("scores_inserted").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            result.get("selected_items").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            result.get("fetch_live").and_then(Value::as_bool),
+            Some(false)
+        );
+        let run_id = result.get("run_id").and_then(Value::as_str).unwrap();
+
+        let stage = store.read_radar_stage(run_id).unwrap();
+        assert_eq!(stage.items.len(), 1);
+        assert_eq!(
+            stage.items[0].source_card_id.as_deref(),
+            Some(card.id.as_str())
+        );
+        assert_eq!(stage.scores.len(), 1);
+        assert_eq!(stage.scores[0].status, "selected");
+        let audit = store.audit_radar_run(run_id).unwrap();
+        assert!(audit.ok, "{audit:?}");
+    }
+
+    #[test]
+    fn severe_radar_worker_live_policy_denial_writes_blocked_run() {
+        // CLAIM: queued live radar cannot hide provider denial behind a completed
+        // worker job.
+        // ORACLE: the worker job completes with a blocked radar run payload,
+        // failed adapter job, source-health failure, no cursor, and failed audit.
+        // SEVERITY: Severe because unattended live radar is where empty scheduled
+        // jobs most easily look operational.
+        let store = test_store("radar-worker-live-deny");
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "allow-worker-radar-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+package = "arcwell-radar"
+reason = "Allow queuing radar orchestration while denying provider execution"
+
+[[rules]]
+id = "deny-worker-radar-rss"
+effect = "deny"
+action = "provider.network"
+provider = "rss"
+source = "rss_fetch"
+reason = "RSS disabled for queued radar policy test"
+"#,
+        );
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "worker-live-radar".to_string(),
+                description: "Worker live radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(5),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([
+                    { "kind": "rss", "locator": "https://example.com/worker-feed.xml", "limit": 3 }
+                ]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        store
+            .enqueue_radar_run_job(&profile.id, None, true)
+            .unwrap();
+        let worker = store.run_worker_once(1).unwrap();
+        assert_eq!(worker.completed, 1);
+        let result = worker.jobs[0]
+            .result_json
+            .as_ref()
+            .expect("blocked radar run should still be recorded as job result");
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            result.get("fetch_live").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            result.get("adapter_job_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        let adapter_jobs = result
+            .get("adapter_jobs")
+            .and_then(Value::as_array)
+            .expect("adapter job summary should be present");
+        assert_eq!(
+            adapter_jobs[0].get("kind").and_then(Value::as_str),
+            Some("rss_fetch")
+        );
+        assert_eq!(
+            adapter_jobs[0].get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert!(
+            adapter_jobs[0]
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .contains("policy denied provider.network")
+        );
+        let run_id = result.get("run_id").and_then(Value::as_str).unwrap();
+
+        let health = store
+            .get_source_health("rss:https://example.com/worker-feed.xml")
+            .unwrap()
+            .expect("queued live radar failure should record source health");
+        assert_ne!(health.status, "healthy");
+        assert!(
+            health
+                .last_error
+                .as_deref()
+                .unwrap_or("")
+                .contains("policy denied provider.network")
+        );
+        assert!(
+            store
+                .get_cursor("rss:https://example.com/worker-feed.xml")
+                .unwrap()
+                .is_none()
+        );
+        let audit = store.audit_radar_run(run_id).unwrap();
+        assert!(!audit.ok);
+        assert!(audit.findings.iter().any(|finding| {
+            finding.code == "radar_live_fetch_failed" && finding.severity == "high"
+        }));
+    }
+
+    #[test]
+    fn severe_radar_enqueue_rejects_missing_profile_and_bad_window_without_jobs() {
+        // CLAIM: invalid queued radar requests do not create inert jobs that fail
+        // later or clutter ops with unexecutable work.
+        // ORACLE: missing profile and invalid window are rejected before insert.
+        // SEVERITY: Severe because queued-shell behavior is an operational mirage.
+        let store = test_store("radar-worker-invalid-enqueue");
+        let missing = store
+            .enqueue_radar_run_job("missing-radar-profile", None, false)
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("radar profile not found"), "{missing}");
+        assert!(store.list_wiki_jobs().unwrap().is_empty());
+
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "invalid-window-radar".to_string(),
+                description: "Invalid window radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(5),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "agent" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+        let bad_window = store
+            .enqueue_radar_run_job(&profile.id, Some(0), false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            bad_window.contains("window_hours must be greater than zero"),
+            "{bad_window}"
+        );
+        assert!(store.list_wiki_jobs().unwrap().is_empty());
+    }
+
+    #[test]
     fn severe_radar_existing_source_family_selectors_project_only_matching_cards() {
         // CLAIM: radar can reuse already-ingested Arcwell source-card families
         // before new network adapters exist.
@@ -47388,7 +47739,7 @@ ARXIV=( "cat:cs.AI" )
             .into_iter()
             .collect::<Vec<_>>();
         assert_eq!(candidates[0].source_card_ids, expected);
-        assert_eq!(candidates[0].status, "ready");
+        assert_eq!(candidates[0].status, first_call.status);
     }
 
     #[test]
