@@ -339,6 +339,10 @@ PR, implementation note, or final report:
 - [x] Add deterministic radar Markdown summary artifacts over selected scored
       items, CLI/MCP/slash surfaces, no-delivery/no-source-evidence boundaries,
       severe tests, and copied-home production-data proof.
+- [x] Add local queued radar execution with `radar_enqueue` /
+      `arcwell radar enqueue`, `worker run-once` processing, result JSON, MCP
+      round trip, severe source-card success proof, provider-denial blocked-run
+      proof, source-health/cursor assertions, and invalid-enqueue rejection.
 - [ ] Add radar semantic dedupe, score freshness, source-quality windows,
       category/source balancing, model-backed synthesis, delivery attempts, ops
       UI visibility, and status promotion only after real-data gates pass.
