@@ -238,10 +238,10 @@ Evidence:
   dedupe breadth over real source cards, not model semantic dedupe.
 - Production-data live-adapter semantic/topic dedupe breadth proof now exists
   through `scripts/radar-live-semantic-dedupe-production-proof`, preserved at
-  `.arcwell-dev/proofs/radar-live-semantic-dedupe-production-proof-20260624T110348Z-17349/artifacts/proof-packet.json`.
+  `.arcwell-dev/proofs/radar-live-semantic-dedupe-production-proof-20260624T111008Z-75958/artifacts/proof-packet.json`.
   A worker-drained fresh public RSS/GitHub/arXiv/Hacker News run wrote 62
-  normalized/indexed/scored radar items, selected 48, kept 10
-  `semantic_topic` groups and 14 `duplicate_topic` rows inspectable with
+  normalized/indexed/scored radar items, selected 47, kept 11
+  `semantic_topic` groups and 15 `duplicate_topic` rows inspectable with
   source-card/wiki provenance across live source families, exposed matching
   run/ops score-distribution counts, advanced healthy cursors/source-health,
   passed audit, and wrote a non-delivery summary. This proves deterministic

@@ -418,10 +418,10 @@ PR, implementation note, or final report:
 - [x] Run live-adapter production-data semantic/topic dedupe breadth proof over
       freshly fetched public sources:
       `scripts/radar-live-semantic-dedupe-production-proof` preserved
-      `.arcwell-dev/proofs/radar-live-semantic-dedupe-production-proof-20260624T110348Z-17349`,
+      `.arcwell-dev/proofs/radar-live-semantic-dedupe-production-proof-20260624T111008Z-75958`,
       worker-drained real RSS, GitHub owner, arXiv, and Hacker News adapters,
-      wrote 62 radar items/FTS rows/scores, selected 48 items, kept 10
-      `semantic_topic` groups and 14 `duplicate_topic` rows inspectable with
+      wrote 62 radar items/FTS rows/scores, selected 47 items, kept 11
+      `semantic_topic` groups and 15 `duplicate_topic` rows inspectable with
       source-card/wiki provenance, passed audit, and wrote a non-delivery
       summary.
 - [x] Add local/manual radar summary delivery attempts through authorized
