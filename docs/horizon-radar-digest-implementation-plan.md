@@ -228,7 +228,7 @@ Evidence:
   arbitrary future topic taxonomies.
 - Production-data topical taxonomy balance proof now exists through
   `scripts/radar-taxonomy-balance-production-proof`, preserved at
-  `.arcwell-dev/proofs/radar-taxonomy-balance-production-proof-20260624T111251Z-4350/artifacts/proof-packet.json`.
+  `.arcwell-dev/proofs/radar-taxonomy-balance-production-proof-20260624T111820Z-48709/artifacts/proof-packet.json`.
   A worker-drained live public RSS/GitHub/arXiv/Hacker News profile used
   non-source-family quotas `agent:1` and `ai:2`, wrote 62
   normalized/indexed/scored radar items, selected 34, found raw live taxonomy

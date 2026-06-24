@@ -499,7 +499,7 @@ PR, implementation note, or final report:
       `category_quota` rows carried category-specific rejection tags/reasons,
       score distribution counts matched ops, cursors/source-health were
       healthy, audit passed, and a non-delivery summary was written at
-      `.arcwell-dev/proofs/radar-taxonomy-balance-production-proof-20260624T111251Z-4350`.
+      `.arcwell-dev/proofs/radar-taxonomy-balance-production-proof-20260624T111820Z-48709`.
 - [ ] Add model-backed synthesis, live production delivery proof, live external
       scheduled delivery/service proof, production cross-channel delivery proof,
       production quiet-hours deferral, arbitrary/model-generated taxonomy
