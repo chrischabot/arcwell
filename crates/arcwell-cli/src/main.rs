@@ -976,6 +976,10 @@ const SLASH_COMMAND_ALIASES: &[(&str, SlashAliasTarget)] = &[
     ("radar-summary", SlashAliasTarget::Mcp("radar_summary_read")),
     ("radar-audit", SlashAliasTarget::Mcp("radar_audit_run")),
     (
+        "radar-source-quality",
+        SlashAliasTarget::Mcp("radar_source_quality"),
+    ),
+    (
         "radar-repair-fts",
         SlashAliasTarget::Mcp("radar_rebuild_fts"),
     ),
@@ -2249,6 +2253,9 @@ enum RadarSubcommand {
         format: String,
     },
     Audit {
+        run_id: String,
+    },
+    SourceQuality {
         run_id: String,
     },
     RepairFts {
@@ -3717,6 +3724,9 @@ fn radar(store: Store, args: RadarCommand) -> Result<()> {
             format,
         } => print_json(&store.read_radar_summary(&run_id, &language, &format)?),
         RadarSubcommand::Audit { run_id } => print_json(&store.audit_radar_run(&run_id)?),
+        RadarSubcommand::SourceQuality { run_id } => {
+            print_json(&store.list_radar_source_quality(&run_id)?)
+        }
         RadarSubcommand::RepairFts { run_id } => {
             print_json(&json!({ "rebuilt": store.rebuild_radar_fts(run_id.as_deref())? }))
         }
@@ -6983,6 +6993,7 @@ fn dispatch_mcp(paths: &AppPaths, method: &str, params: Value) -> Result<Value> 
                 { "uri": "arcwell://research", "name": "Research Runs", "mimeType": "application/json" },
                 { "uri": "arcwell://radar", "name": "Radar Runs", "mimeType": "application/json" },
                 { "uri": "arcwell://radar-profiles", "name": "Radar Profiles", "mimeType": "application/json" },
+                { "uri": "arcwell://radar-source-quality", "name": "Radar Source Quality", "mimeType": "application/json" },
                 { "uri": "arcwell://edge-events", "name": "Edge Inbox Events", "mimeType": "application/json" },
                 { "uri": "arcwell://channels", "name": "Channel Messages", "mimeType": "application/json" },
                 { "uri": "arcwell://projects", "name": "Projects", "mimeType": "application/json" },
@@ -7016,6 +7027,7 @@ fn dispatch_mcp(paths: &AppPaths, method: &str, params: Value) -> Result<Value> 
                 "arcwell://research" => json!(store.list_research_runs()?),
                 "arcwell://radar" => json!(store.list_radar_runs()?),
                 "arcwell://radar-profiles" => json!(store.list_radar_profiles()?),
+                "arcwell://radar-source-quality" => json!(store.list_all_radar_source_quality()?),
                 "arcwell://edge-events" => json!(store.list_edge_events()?),
                 "arcwell://channels" => json!(store.list_channel_messages()?),
                 "arcwell://projects" => json!(store.list_projects()?),
@@ -8589,6 +8601,10 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
             let run_id = required_string(&arguments, "run_id")?;
             Ok(json!(store.audit_radar_run(&run_id)?))
         }
+        "radar_source_quality" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_radar_source_quality(&run_id)?))
+        }
         "radar_rebuild_fts" => {
             let run_id = arguments.get("run_id").and_then(Value::as_str);
             Ok(json!({ "rebuilt": store.rebuild_radar_fts(run_id)? }))
@@ -10084,7 +10100,12 @@ fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "radar_audit_run",
-            "Audit a radar run for FTS drift, missing provenance, unscored items, corrupt dedupe groups, empty output, and unsupported selectors.",
+            "Audit a radar run for FTS drift, missing provenance, unscored items, missing source-quality windows, corrupt dedupe groups, empty output, and unsupported selectors.",
+            [("run_id", "string", "Radar run id.")],
+        ),
+        tool(
+            "radar_source_quality",
+            "List source-quality windows materialized for one scored radar run, including accepted counts, score percentiles, duplicate rate, and source-health failure contribution.",
             [("run_id", "string", "Radar run id.")],
         ),
         tool(
@@ -11812,7 +11833,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         command_names.sort();
-        assert_eq!(command_names.len(), 130);
+        assert_eq!(command_names.len(), 131);
         let missing = command_names
             .into_iter()
             .filter(|name| slash_alias_target(name).is_none() && !slash_alias_is_dynamic(name))
@@ -13182,6 +13203,20 @@ reason = "MCP secret writes are denied for this token"
 
         let audit = call_mcp_tool(&paths, "radar_audit_run", json!({ "run_id": run_id })).unwrap();
         assert_eq!(audit.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            audit.get("source_quality_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        let source_quality =
+            call_mcp_tool(&paths, "radar_source_quality", json!({ "run_id": run_id })).unwrap();
+        assert_eq!(
+            source_quality
+                .as_array()
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("raw_count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
 
         let summary = call_mcp_tool(
             &paths,
@@ -13267,7 +13302,6 @@ reason = "MCP secret writes are denied for this token"
                 .unwrap()
                 .contains("mcp-radar-proof")
         );
-
         let tool_names: BTreeSet<_> = mcp_tools()
             .into_iter()
             .filter_map(|tool| {
@@ -13284,6 +13318,7 @@ reason = "MCP secret writes are denied for this token"
             "radar_summarize",
             "radar_summary_read",
             "radar_audit_run",
+            "radar_source_quality",
         ] {
             assert!(tool_names.contains(expected), "missing MCP tool {expected}");
         }

@@ -26,7 +26,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 pub const APP_NAME: &str = "arcwell";
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 pub const SOURCE_CARD_SCHEMA_VERSION: u64 = 1;
 const MAX_COST_USD: f64 = 1_000_000.0;
 const SOURCE_CARD_STALE_DAYS: i64 = 180;
@@ -723,6 +723,27 @@ pub struct RadarDedupGroup {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarSourceQuality {
+    pub id: String,
+    pub run_id: String,
+    pub source_kind: String,
+    pub locator: String,
+    pub window_start: String,
+    pub window_end: String,
+    pub raw_count: i64,
+    pub accepted_count: i64,
+    pub average_score: Option<f64>,
+    pub score_p50: Option<f64>,
+    pub score_p90: Option<f64>,
+    pub signal_to_noise: Option<f64>,
+    pub duplicate_rate: Option<f64>,
+    pub delivery_contribution_count: i64,
+    pub failure_count: i64,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RadarFetchReport {
     pub run: RadarRun,
     pub profile: RadarProfile,
@@ -740,6 +761,7 @@ pub struct RadarStageReport {
     pub items: Vec<RadarItem>,
     pub scores: Vec<RadarScore>,
     pub dedup_groups: Vec<RadarDedupGroup>,
+    pub source_quality: Vec<RadarSourceQuality>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -774,6 +796,7 @@ pub struct RadarAuditReport {
     pub fts_count: i64,
     pub scored_count: i64,
     pub dedup_group_count: i64,
+    pub source_quality_count: i64,
     pub findings: Vec<RadarAuditFinding>,
 }
 
@@ -4308,6 +4331,16 @@ impl Store {
             ensure_x_canonical_schema_on(conn)?;
             Ok(())
         })?;
+        self.apply_schema_migration(11, "radar_source_quality_windows", false, None, |conn| {
+            ensure_radar_schema_on(conn)?;
+            ensure_column_on(
+                conn,
+                "radar_source_quality",
+                "run_id",
+                "ALTER TABLE radar_source_quality ADD COLUMN run_id TEXT NOT NULL DEFAULT ''",
+            )?;
+            Ok(())
+        })?;
         self.conn.execute(
             "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
             params![SCHEMA_VERSION.to_string()],
@@ -4358,12 +4391,7 @@ impl Store {
     }
 
     fn ensure_column(&self, table: &str, column: &str, alter_sql: &str) -> Result<()> {
-        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
-        let columns = rows(stmt.query_map([], |row| row.get::<_, String>(1))?)?;
-        if !columns.iter().any(|existing| existing == column) {
-            self.conn.execute(alter_sql, [])?;
-        }
-        Ok(())
+        ensure_column_on(&self.conn, table, column, alter_sql)
     }
 
     fn ensure_x_canonical_schema(&self) -> Result<()> {
@@ -19075,6 +19103,7 @@ impl Store {
         self.rebuild_radar_fts(Some(&run_id))?;
         let _dedup_groups = self.dedupe_radar_run(&run_id)?;
         let scores_inserted = self.score_radar_run(&run_id)?;
+        let source_quality_windows = self.record_radar_source_quality_window(&run_id)?;
         let selected_items = self.count_radar_selected_scores(&run_id)?;
         let raw_count = source_cards.len() as i64;
         let now = now();
@@ -19102,6 +19131,7 @@ impl Store {
         run_metadata["live_fetch_failed"] = json!(live_failed);
         run_metadata["live_fetch_pre_job_failed"] = json!(live_pre_job_failed);
         run_metadata["adapter_job_count"] = json!(adapter_jobs.len());
+        run_metadata["source_quality_windows"] = json!(source_quality_windows);
         self.conn.execute(
             r#"
             UPDATE radar_runs
@@ -19340,6 +19370,7 @@ impl Store {
             items: self.list_radar_items(run_id)?,
             scores: self.list_radar_scores(run_id)?,
             dedup_groups: self.list_radar_dedup_groups(run_id)?,
+            source_quality: self.list_radar_source_quality(run_id)?,
             run,
         })
     }
@@ -19577,6 +19608,34 @@ impl Store {
         rows(stmt.query_map(params![run_id], radar_dedup_group_from_row)?)
     }
 
+    pub fn list_radar_source_quality(&self, run_id: &str) -> Result<Vec<RadarSourceQuality>> {
+        validate_id(run_id)?;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, run_id, source_kind, locator, window_start, window_end, raw_count,
+                   accepted_count, average_score, score_p50, score_p90, signal_to_noise,
+                   duplicate_rate, delivery_contribution_count, failure_count, status, created_at
+            FROM radar_source_quality
+            WHERE run_id = ?1
+            ORDER BY created_at DESC, source_kind, locator
+            "#,
+        )?;
+        rows(stmt.query_map(params![run_id], radar_source_quality_from_row)?)
+    }
+
+    pub fn list_all_radar_source_quality(&self) -> Result<Vec<RadarSourceQuality>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, run_id, source_kind, locator, window_start, window_end, raw_count,
+                   accepted_count, average_score, score_p50, score_p90, signal_to_noise,
+                   duplicate_rate, delivery_contribution_count, failure_count, status, created_at
+            FROM radar_source_quality
+            ORDER BY created_at DESC, source_kind, locator
+            "#,
+        )?;
+        rows(stmt.query_map([], radar_source_quality_from_row)?)
+    }
+
     pub fn rebuild_radar_fts(&self, run_id: Option<&str>) -> Result<usize> {
         if let Some(run_id) = run_id {
             validate_id(run_id)?;
@@ -19651,6 +19710,11 @@ impl Store {
             params![run_id],
             |row| row.get(0),
         )?;
+        let source_quality_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM radar_source_quality WHERE run_id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )?;
         let duplicate_score_count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM radar_scores WHERE run_id = ?1 AND status LIKE 'duplicate_%'",
             params![run_id],
@@ -19666,6 +19730,8 @@ impl Store {
             params![run_id],
             |row| row.get(0),
         )?;
+        let radar_items = self.list_radar_items(run_id)?;
+        let radar_scores = self.list_radar_scores(run_id)?;
         let mut findings = Vec::new();
         if item_count != fts_count {
             findings.push(RadarAuditFinding {
@@ -19700,6 +19766,89 @@ impl Store {
                 evidence: format!("duplicate_scores={duplicate_score_count} dedup_groups=0"),
             });
         }
+        if item_count > 0 && source_quality_count == 0 {
+            findings.push(RadarAuditFinding {
+                severity: "high".to_string(),
+                code: "radar_source_quality_missing".to_string(),
+                message: "Radar run has items and scores but no source-quality window.".to_string(),
+                evidence: format!(
+                    "window_start={} window_end={} items={item_count} scores={scored_count}",
+                    run.window_start, run.window_end
+                ),
+            });
+        }
+        let expected_source_quality =
+            expected_radar_source_quality_counts(&radar_items, &radar_scores);
+        let source_quality_rows = self.list_radar_source_quality(run_id)?;
+        if !expected_source_quality.is_empty()
+            && expected_source_quality.len() != source_quality_rows.len()
+        {
+            findings.push(RadarAuditFinding {
+                severity: "high".to_string(),
+                code: "radar_source_quality_drift".to_string(),
+                message: "Radar source-quality row count does not match scored source buckets."
+                    .to_string(),
+                evidence: format!(
+                    "expected_buckets={} source_quality_rows={}",
+                    expected_source_quality.len(),
+                    source_quality_rows.len()
+                ),
+            });
+        }
+        let source_quality_by_key = source_quality_rows
+            .iter()
+            .map(|row| ((row.source_kind.clone(), row.locator.clone()), row))
+            .collect::<BTreeMap<_, _>>();
+        for (key, expected) in &expected_source_quality {
+            match source_quality_by_key.get(key) {
+                Some(row) => {
+                    let signal_to_noise = row.signal_to_noise.unwrap_or(-1.0);
+                    let duplicate_rate = row.duplicate_rate.unwrap_or(-1.0);
+                    let expected_signal_to_noise =
+                        expected.accepted_count as f64 / expected.raw_count as f64;
+                    let expected_duplicate_rate =
+                        expected.duplicate_count as f64 / expected.raw_count as f64;
+                    if row.raw_count != expected.raw_count
+                        || row.accepted_count != expected.accepted_count
+                        || row.raw_count < row.accepted_count
+                        || !(0.0..=1.0).contains(&signal_to_noise)
+                        || !(0.0..=1.0).contains(&duplicate_rate)
+                        || (signal_to_noise - expected_signal_to_noise).abs() > 0.000001
+                        || (duplicate_rate - expected_duplicate_rate).abs() > 0.000001
+                    {
+                        findings.push(RadarAuditFinding {
+                            severity: "high".to_string(),
+                            code: "radar_source_quality_drift".to_string(),
+                            message:
+                                "Radar source-quality metrics do not match scored radar items."
+                                    .to_string(),
+                            evidence: format!(
+                                "source_kind={} locator={} expected_raw={} actual_raw={} expected_accepted={} actual_accepted={} expected_signal_to_noise={} signal_to_noise={} expected_duplicate_rate={} duplicate_rate={}",
+                                key.0,
+                                key.1,
+                                expected.raw_count,
+                                row.raw_count,
+                                expected.accepted_count,
+                                row.accepted_count,
+                                expected_signal_to_noise,
+                                signal_to_noise,
+                                expected_duplicate_rate,
+                                duplicate_rate
+                            ),
+                        });
+                    }
+                }
+                None => findings.push(RadarAuditFinding {
+                    severity: "high".to_string(),
+                    code: "radar_source_quality_drift".to_string(),
+                    message: "Radar source-quality is missing a scored source bucket.".to_string(),
+                    evidence: format!(
+                        "source_kind={} locator={} expected_raw={}",
+                        key.0, key.1, expected.raw_count
+                    ),
+                }),
+            }
+        }
         if run
             .metadata
             .get("live_fetch_failed")
@@ -19721,10 +19870,9 @@ impl Store {
                 }))?,
             });
         }
-        let item_ids = self
-            .list_radar_items(run_id)?
-            .into_iter()
-            .map(|item| item.id)
+        let item_ids = radar_items
+            .iter()
+            .map(|item| item.id.clone())
             .collect::<BTreeSet<_>>();
         for group in self.list_radar_dedup_groups(run_id)? {
             if group.member_item_ids.len() < 2 {
@@ -19786,6 +19934,7 @@ impl Store {
             fts_count,
             scored_count,
             dedup_group_count,
+            source_quality_count,
             findings,
         })
     }
@@ -19966,9 +20115,11 @@ impl Store {
             .read_radar_profile(&run.profile_id)?
             .with_context(|| format!("radar profile not found: {}", run.profile_id))?;
         let items = self.list_radar_items(run_id)?;
+        let source_health = self.list_source_health()?;
         let mut scored = Vec::new();
         for item in items {
-            let (score, reason, tags) = score_radar_item_heuristic(&item);
+            let health = radar_source_health_for_item(&source_health, &item);
+            let (score, reason, tags) = score_radar_item_heuristic_with_health(&item, health);
             scored.push((item, score, reason, tags));
         }
         let duplicate_status_by_item = self.radar_duplicate_status_by_item(run_id)?;
@@ -20034,6 +20185,121 @@ impl Store {
             inserted += 1;
         }
         Ok(inserted)
+    }
+
+    fn record_radar_source_quality_window(&self, run_id: &str) -> Result<usize> {
+        validate_id(run_id)?;
+        let run = self
+            .read_radar_run(run_id)?
+            .with_context(|| format!("radar run not found: {run_id}"))?;
+        self.conn.execute(
+            "DELETE FROM radar_source_quality WHERE run_id = ?1",
+            params![run_id],
+        )?;
+        let scores = self
+            .list_radar_scores(run_id)?
+            .into_iter()
+            .map(|score| (score.item_id.clone(), score))
+            .collect::<BTreeMap<_, _>>();
+        let source_health = self.list_source_health()?;
+        let mut buckets: BTreeMap<(String, String), Vec<(RadarItem, RadarScore)>> = BTreeMap::new();
+        for item in self.list_radar_items(run_id)? {
+            let Some(score) = scores.get(&item.id).cloned() else {
+                continue;
+            };
+            let key = radar_source_quality_key_for_item(&item);
+            buckets.entry(key).or_default().push((item, score));
+        }
+
+        let timestamp = now();
+        let mut written = 0usize;
+        for ((source_kind, locator), entries) in buckets {
+            if entries.is_empty() {
+                continue;
+            }
+            let raw_count = entries.len() as i64;
+            let accepted_count = entries
+                .iter()
+                .filter(|(_, score)| score.status == "selected")
+                .count() as i64;
+            let duplicate_count = entries
+                .iter()
+                .filter(|(_, score)| score.status.starts_with("duplicate_"))
+                .count() as i64;
+            let mut values = entries
+                .iter()
+                .map(|(_, score)| score.score)
+                .collect::<Vec<_>>();
+            values.sort_by(|left, right| {
+                left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let average_score = values.iter().sum::<f64>() / values.len() as f64;
+            let score_p50 = percentile_sorted(&values, 0.50);
+            let score_p90 = percentile_sorted(&values, 0.90);
+            let signal_to_noise = accepted_count as f64 / raw_count as f64;
+            let duplicate_rate = duplicate_count as f64 / raw_count as f64;
+            let failure_count = radar_source_health_for_quality_key(
+                &source_health,
+                &source_kind,
+                &locator,
+                entries
+                    .first()
+                    .map(|(item, _)| item.provider.as_str())
+                    .unwrap_or(""),
+            )
+            .filter(|health| health.status != "healthy")
+            .map(|_| 1)
+            .unwrap_or(0);
+            let status = if failure_count > 0 && accepted_count == 0 {
+                "failed"
+            } else if failure_count > 0 {
+                "partial"
+            } else if accepted_count == 0 {
+                "low_signal"
+            } else {
+                "healthy"
+            };
+            self.conn.execute(
+                r#"
+                INSERT INTO radar_source_quality
+                  (id, run_id, source_kind, locator, window_start, window_end, raw_count,
+                   accepted_count, average_score, score_p50, score_p90, signal_to_noise,
+                   duplicate_rate, delivery_contribution_count, failure_count, status, created_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, ?14, ?15, ?16)
+                ON CONFLICT(run_id, source_kind, locator, window_start, window_end) DO UPDATE SET
+                  raw_count = excluded.raw_count,
+                  accepted_count = excluded.accepted_count,
+                  average_score = excluded.average_score,
+                  score_p50 = excluded.score_p50,
+                  score_p90 = excluded.score_p90,
+                  signal_to_noise = excluded.signal_to_noise,
+                  duplicate_rate = excluded.duplicate_rate,
+                  failure_count = excluded.failure_count,
+                  status = excluded.status,
+                  created_at = excluded.created_at
+                "#,
+                params![
+                    Uuid::new_v4().to_string(),
+                    run_id,
+                    source_kind,
+                    locator,
+                    run.window_start,
+                    run.window_end,
+                    raw_count,
+                    accepted_count,
+                    average_score,
+                    score_p50,
+                    score_p90,
+                    signal_to_noise,
+                    duplicate_rate,
+                    failure_count,
+                    status,
+                    timestamp
+                ],
+            )?;
+            written += 1;
+        }
+        Ok(written)
     }
 
     fn count_radar_selected_scores(&self, run_id: &str) -> Result<usize> {
@@ -27722,6 +27988,15 @@ fn ensure_x_canonical_schema_on(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn ensure_column_on(conn: &Connection, table: &str, column: &str, alter_sql: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = rows(stmt.query_map([], |row| row.get::<_, String>(1))?)?;
+    if !columns.iter().any(|existing| existing == column) {
+        conn.execute(alter_sql, [])?;
+    }
+    Ok(())
+}
+
 fn ensure_radar_schema_on(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
@@ -27884,6 +28159,7 @@ fn ensure_radar_schema_on(conn: &Connection) -> Result<()> {
 
         CREATE TABLE IF NOT EXISTS radar_source_quality (
           id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL DEFAULT '',
           source_kind TEXT NOT NULL,
           locator TEXT NOT NULL,
           window_start TEXT NOT NULL,
@@ -27899,7 +28175,7 @@ fn ensure_radar_schema_on(conn: &Connection) -> Result<()> {
           failure_count INTEGER NOT NULL DEFAULT 0,
           status TEXT NOT NULL,
           created_at TEXT NOT NULL,
-          UNIQUE(source_kind, locator, window_start, window_end)
+          UNIQUE(run_id, source_kind, locator, window_start, window_end)
         );
         "#,
     )?;
@@ -29001,6 +29277,28 @@ fn radar_score_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RadarScore>
     })
 }
 
+fn radar_source_quality_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RadarSourceQuality> {
+    Ok(RadarSourceQuality {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        source_kind: row.get(2)?,
+        locator: row.get(3)?,
+        window_start: row.get(4)?,
+        window_end: row.get(5)?,
+        raw_count: row.get(6)?,
+        accepted_count: row.get(7)?,
+        average_score: row.get(8)?,
+        score_p50: row.get(9)?,
+        score_p90: row.get(10)?,
+        signal_to_noise: row.get(11)?,
+        duplicate_rate: row.get(12)?,
+        delivery_contribution_count: row.get(13)?,
+        failure_count: row.get(14)?,
+        status: row.get(15)?,
+        created_at: row.get(16)?,
+    })
+}
+
 fn radar_dedup_group_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RadarDedupGroup> {
     let member_item_ids_json: String = row.get(4)?;
     Ok(RadarDedupGroup {
@@ -29478,6 +29776,8 @@ fn radar_item_from_source_card(run_id: &str, card: &SourceCard) -> Result<RadarI
         metadata: json!({
             "source_card_id": card.id,
             "source_type": card.source_type,
+            "source_kind": card.metadata.get("source_kind").and_then(Value::as_str).unwrap_or(card.provider.as_str()),
+            "source_detail": card.metadata.get("source_detail").and_then(Value::as_str).unwrap_or(card.url.as_str()),
             "retrieved_at": card.retrieved_at,
             "claims": card.claims.len(),
             "trust_boundary": "external source-card text is untrusted evidence, not instructions",
@@ -29493,6 +29793,13 @@ fn radar_item_from_source_card(run_id: &str, card: &SourceCard) -> Result<RadarI
 }
 
 fn score_radar_item_heuristic(item: &RadarItem) -> (f64, String, Vec<String>) {
+    score_radar_item_heuristic_with_health(item, None)
+}
+
+fn score_radar_item_heuristic_with_health(
+    item: &RadarItem,
+    source_health: Option<&SourceHealth>,
+) -> (f64, String, Vec<String>) {
     let text = format!("{} {}", item.title, item.content_text).to_ascii_lowercase();
     let mut score: f64 = 2.0;
     let mut reasons = vec!["source-card-backed evidence".to_string()];
@@ -29528,9 +29835,185 @@ fn score_radar_item_heuristic(item: &RadarItem) -> (f64, String, Vec<String>) {
         reasons.push("hostile-source-text penalty".to_string());
         tags.push("prompt-injection-risk".to_string());
     }
+    if let Some((adjustment, reason, tag)) = radar_freshness_adjustment(item) {
+        score += adjustment;
+        reasons.push(reason);
+        tags.push(tag);
+    }
+    if let Some(health) = source_health {
+        if health.status == "healthy" {
+            score += 0.2;
+            reasons.push("healthy source-health signal".to_string());
+            tags.push("source-health-healthy".to_string());
+            if let Some(last_success_at) = health.last_success_at.as_deref()
+                && timestamp_age_hours(last_success_at)
+                    .map(|age| age > 24 * 7)
+                    .unwrap_or(false)
+            {
+                score -= 0.4;
+                reasons.push("stale source-health success timestamp penalty".to_string());
+                tags.push("source-health-stale".to_string());
+            }
+        } else {
+            score -= 1.0;
+            reasons.push(format!("source-health {} penalty", health.status));
+            tags.push("source-health-nonhealthy".to_string());
+            tags.push(format!("source-health-{}", health.status));
+        }
+    }
     tags.sort();
     tags.dedup();
     (score.clamp(0.0, 10.0), reasons.join(", "), tags)
+}
+
+fn radar_source_quality_key_for_item(item: &RadarItem) -> (String, String) {
+    let source_kind = item
+        .metadata
+        .get("source_kind")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            if item.provider.trim().is_empty() {
+                item.source_kind.as_str()
+            } else {
+                item.provider.as_str()
+            }
+        })
+        .to_string();
+    let locator = item
+        .metadata
+        .get("source_detail")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(item.source_locator.as_str())
+        .to_string();
+    (source_kind, locator)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExpectedRadarSourceQuality {
+    raw_count: i64,
+    accepted_count: i64,
+    duplicate_count: i64,
+}
+
+fn expected_radar_source_quality_counts(
+    items: &[RadarItem],
+    scores: &[RadarScore],
+) -> BTreeMap<(String, String), ExpectedRadarSourceQuality> {
+    let scores_by_item = scores
+        .iter()
+        .map(|score| (score.item_id.as_str(), score))
+        .collect::<BTreeMap<_, _>>();
+    let mut expected = BTreeMap::new();
+    for item in items {
+        let Some(score) = scores_by_item.get(item.id.as_str()) else {
+            continue;
+        };
+        let entry = expected
+            .entry(radar_source_quality_key_for_item(item))
+            .or_insert(ExpectedRadarSourceQuality {
+                raw_count: 0,
+                accepted_count: 0,
+                duplicate_count: 0,
+            });
+        entry.raw_count += 1;
+        if score.status == "selected" {
+            entry.accepted_count += 1;
+        }
+        if score.status.starts_with("duplicate_") {
+            entry.duplicate_count += 1;
+        }
+    }
+    expected
+}
+
+fn radar_source_health_for_item<'a>(
+    source_health: &'a [SourceHealth],
+    item: &RadarItem,
+) -> Option<&'a SourceHealth> {
+    let (source_kind, locator) = radar_source_quality_key_for_item(item);
+    radar_source_health_for_quality_key(source_health, &source_kind, &locator, &item.provider)
+}
+
+fn radar_source_health_for_quality_key<'a>(
+    source_health: &'a [SourceHealth],
+    source_kind: &str,
+    locator: &str,
+    provider: &str,
+) -> Option<&'a SourceHealth> {
+    let locators = radar_source_health_locator_candidates(source_kind, locator);
+    source_health
+        .iter()
+        .find(|health| {
+            locators
+                .iter()
+                .any(|candidate| health.source_kind == source_kind && health.locator == *candidate)
+        })
+        .or_else(|| {
+            source_health.iter().find(|health| {
+                locators.iter().any(|candidate| {
+                    !provider.is_empty()
+                        && health.provider == provider
+                        && health.locator == *candidate
+                })
+            })
+        })
+}
+
+fn radar_source_health_locator_candidates(source_kind: &str, locator: &str) -> Vec<String> {
+    let mut locators = vec![locator.to_string()];
+    if matches!(source_kind, "github_release" | "github_commit") {
+        locators.push(format!("{locator}:releases"));
+        locators.push(format!("{locator}:commits"));
+    }
+    locators
+}
+
+fn radar_freshness_adjustment(item: &RadarItem) -> Option<(f64, String, String)> {
+    let timestamp = item
+        .published_at
+        .as_deref()
+        .or_else(|| item.metadata.get("retrieved_at").and_then(Value::as_str))
+        .or(Some(item.fetched_at.as_str()))?;
+    let age_hours = timestamp_age_hours(timestamp)?;
+    if age_hours <= 48 {
+        Some((
+            0.4,
+            "fresh source timestamp signal".to_string(),
+            "fresh-source".to_string(),
+        ))
+    } else if age_hours > 24 * 90 {
+        Some((
+            -1.0,
+            "very stale source timestamp penalty".to_string(),
+            "very-stale-source".to_string(),
+        ))
+    } else if age_hours > 24 * 30 {
+        Some((
+            -0.5,
+            "stale source timestamp penalty".to_string(),
+            "stale-source".to_string(),
+        ))
+    } else {
+        None
+    }
+}
+
+fn timestamp_age_hours(timestamp: &str) -> Option<i64> {
+    let parsed = DateTime::parse_from_rfc3339(timestamp)
+        .ok()?
+        .with_timezone(&Utc);
+    Some((Utc::now() - parsed).num_hours())
+}
+
+fn percentile_sorted(values: &[f64], percentile: f64) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let percentile = percentile.clamp(0.0, 1.0);
+    let index = ((values.len() - 1) as f64 * percentile).round() as usize;
+    values.get(index).copied()
 }
 
 fn worker_heartbeat_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerHeartbeat> {
@@ -40738,6 +41221,59 @@ mod tests {
     }
 
     #[test]
+    fn severe_schema_migration_adds_radar_source_quality_after_v10() {
+        // CLAIM: schema version 11 upgrades existing v10 homes with radar
+        // source-quality windows instead of only working for fresh databases.
+        // ORACLE: a hand-built schema_version=10 database with migration 10
+        // recorded gains the table and records migration 11 after Store::open.
+        // SEVERITY: Severe because source-quality audit gates must not brick
+        // upgraded local homes that already recorded earlier radar migrations.
+        let paths = test_paths("schema-fixture-radar-source-quality-v10");
+        paths.ensure().unwrap();
+        let conn = Connection::open(&paths.db).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta (key, value) VALUES ('schema_version', '10');
+            CREATE TABLE schema_migrations (
+              version INTEGER PRIMARY KEY,
+              name TEXT NOT NULL,
+              destructive INTEGER NOT NULL DEFAULT 0,
+              backup_id TEXT,
+              applied_at TEXT NOT NULL
+            );
+            INSERT INTO schema_migrations
+              (version, name, destructive, backup_id, applied_at)
+            VALUES
+              (10, 'x_profile_identity_events', 0, NULL, '2026-06-24T00:00:00Z');
+            "#,
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = Store::open(paths).unwrap();
+        assert_eq!(store.stored_schema_version().unwrap(), SCHEMA_VERSION);
+        let table_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'radar_source_quality'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 1);
+        let migration_name: String = store
+            .conn
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 11",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(migration_name, "radar_source_quality_windows");
+    }
+
+    #[test]
     fn severe_import_run_ledger_redacts_errors_and_surfaces_in_ops() {
         // CLAIM: import attempts leave durable aggregate audit records without
         // storing raw transcript content or secret-bearing error strings.
@@ -42583,6 +43119,192 @@ reason = "X OAuth disabled during policy test"
         assert_eq!(audit.item_count, 1);
         assert_eq!(audit.fts_count, 1);
         assert_eq!(audit.scored_count, 1);
+        assert_eq!(audit.source_quality_count, 1);
+        let quality = store.list_radar_source_quality(&report.run.id).unwrap();
+        assert_eq!(quality.len(), 1);
+        assert_eq!(quality[0].source_kind, "fixture");
+        assert_eq!(quality[0].accepted_count, 1);
+        assert_eq!(quality[0].status, "healthy");
+    }
+
+    #[test]
+    fn severe_radar_source_quality_windows_and_health_penalties_are_real() {
+        // CLAIM: radar scoring records source-quality windows and visibly accounts
+        // for source freshness/source-health, instead of ranking failed or stale
+        // sources as if they were healthy.
+        // ORACLE: score tags/reasons split an otherwise similar healthy source from
+        // a stale failed source, quality rows are durable, and audit fails if the
+        // source-quality window is removed after scoring.
+        // SEVERITY: Severe because source-quality tables without ranking/audit
+        // effects are a plausible Horizon-style telemetry mirage.
+        let store = test_store("radar-source-quality-health");
+        let healthy_feed = "https://example.com/healthy-feed.xml";
+        let failed_feed = "https://example.com/failed-feed.xml";
+        let healthy_key = "rss:https://example.com/healthy-feed.xml";
+        let failed_key = "rss:https://example.com/failed-feed.xml";
+        let healthy_cursor_value = now();
+        let healthy_next_run = now_plus_seconds(3600);
+        store
+            .record_source_success(SourceHealthUpdate {
+                key: healthy_key,
+                provider: "rss",
+                source_kind: "rss",
+                locator: healthy_feed,
+                last_item_id: Some("healthy-release"),
+                last_item_date: Some(&healthy_cursor_value),
+                cursor_key: Some(healthy_key),
+                cursor_value: Some(&healthy_cursor_value),
+                next_run_at: Some(&healthy_next_run),
+            })
+            .unwrap();
+        store
+            .record_source_failure(
+                failed_key,
+                "rss",
+                "rss",
+                failed_feed,
+                "HTTP 429 rate limited while fetching stale feed",
+            )
+            .unwrap();
+        for input in [
+            SourceCardInput {
+                title: "Agent MCP release from healthy feed".to_string(),
+                url: "https://example.com/healthy-agent-mcp-release".to_string(),
+                source_type: "rss".to_string(),
+                provider: "rss".to_string(),
+                summary: "Agent MCP release signal with worker reliability.".to_string(),
+                claims: vec![],
+                retrieved_at: Some(now()),
+                metadata: json!({
+                    "source_kind": "rss",
+                    "source_detail": healthy_feed,
+                    "id": "healthy-release"
+                }),
+            },
+            SourceCardInput {
+                title: "Agent MCP release from failed stale feed".to_string(),
+                url: "https://example.com/failed-agent-mcp-release".to_string(),
+                source_type: "rss".to_string(),
+                provider: "rss".to_string(),
+                summary: "Agent MCP release signal with worker reliability.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2020-01-01T00:00:00Z".to_string()),
+                metadata: json!({
+                    "source_kind": "rss",
+                    "source_detail": failed_feed,
+                    "id": "failed-release"
+                }),
+            },
+        ] {
+            store.add_source_card(input).unwrap();
+        }
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "quality-window-radar".to_string(),
+                description: "Quality window radar".to_string(),
+                window_hours: 24,
+                min_score: 2.5,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "Agent MCP release" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let report = store.run_radar_profile(&profile.id, None).unwrap();
+        assert_eq!(report.items_inserted, 2);
+        assert_eq!(report.scores_inserted, 2);
+        assert_eq!(
+            report
+                .run
+                .metadata
+                .get("source_quality_windows")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        let stage = store.read_radar_stage(&report.run.id).unwrap();
+        let score_by_item = stage
+            .scores
+            .iter()
+            .map(|score| (score.item_id.clone(), score))
+            .collect::<BTreeMap<_, _>>();
+        let healthy_item = stage
+            .items
+            .iter()
+            .find(|item| {
+                item.metadata.get("source_detail").and_then(Value::as_str) == Some(healthy_feed)
+            })
+            .expect("healthy radar item");
+        let failed_item = stage
+            .items
+            .iter()
+            .find(|item| {
+                item.metadata.get("source_detail").and_then(Value::as_str) == Some(failed_feed)
+            })
+            .expect("failed radar item");
+        let healthy_score = score_by_item.get(&healthy_item.id).unwrap();
+        let failed_score = score_by_item.get(&failed_item.id).unwrap();
+        assert!(
+            healthy_score.score > failed_score.score + 1.0,
+            "healthy_score={} failed_score={} failed_reason={}",
+            healthy_score.score,
+            failed_score.score,
+            failed_score.reason
+        );
+        assert!(healthy_score.tags.contains(&"fresh-source".to_string()));
+        assert!(
+            healthy_score
+                .tags
+                .contains(&"source-health-healthy".to_string())
+        );
+        assert!(failed_score.tags.contains(&"very-stale-source".to_string()));
+        assert!(
+            failed_score
+                .tags
+                .contains(&"source-health-nonhealthy".to_string())
+        );
+        assert!(failed_score.reason.contains("source-health"));
+
+        assert_eq!(stage.source_quality.len(), 2, "{stage:?}");
+        let quality = store.list_radar_source_quality(&report.run.id).unwrap();
+        assert_eq!(quality.len(), 2, "{quality:?}");
+        let healthy_quality = quality
+            .iter()
+            .find(|row| row.locator == healthy_feed)
+            .expect("healthy source-quality row");
+        assert_eq!(healthy_quality.raw_count, 1);
+        assert_eq!(healthy_quality.failure_count, 0);
+        assert_eq!(healthy_quality.status, "healthy");
+        let failed_quality = quality
+            .iter()
+            .find(|row| row.locator == failed_feed)
+            .expect("failed source-quality row");
+        assert_eq!(failed_quality.raw_count, 1);
+        assert_eq!(failed_quality.failure_count, 1);
+        assert_eq!(failed_quality.status, "partial");
+        assert!(
+            failed_quality.average_score.unwrap() < healthy_quality.average_score.unwrap(),
+            "{quality:?}"
+        );
+
+        let audit = store.audit_radar_run(&report.run.id).unwrap();
+        assert!(audit.ok, "{audit:?}");
+        assert_eq!(audit.source_quality_count, 2);
+
+        store
+            .conn
+            .execute(
+                "DELETE FROM radar_source_quality WHERE run_id = ?1",
+                params![report.run.id],
+            )
+            .unwrap();
+        let broken_audit = store.audit_radar_run(&report.run.id).unwrap();
+        assert!(!broken_audit.ok);
+        assert!(broken_audit.findings.iter().any(|finding| {
+            finding.code == "radar_source_quality_missing" && finding.severity == "high"
+        }));
     }
 
     #[test]

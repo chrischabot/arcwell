@@ -353,9 +353,12 @@ PR, implementation note, or final report:
       cards/wiki pages/radar items/FTS rows/scores, recorded four healthy
       source-health rows and four cursors, selected 30 items, passed
       `radar audit`, and wrote a deterministic non-delivery summary.
-- [ ] Add radar semantic dedupe, score freshness, source-quality windows,
-      category/source balancing, model-backed synthesis, delivery attempts, ops
-      UI visibility, and status promotion only after real-data gates pass.
+- [x] Add local radar score freshness/source-health scoring adjustments and
+      source-quality window records with audit coverage and direct severe-test
+      assertions over source-card projection runs.
+- [ ] Add radar semantic dedupe, category/source balancing, model-backed
+      synthesis, delivery attempts, ops UI visibility, and status promotion only
+      after real-data gates pass.
 - [ ] Preserve tracked email defaults as `agent@example.com` and
       `user@example.com`; keep real local agent/author addresses only in ignored
       env or secret config.

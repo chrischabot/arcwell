@@ -160,6 +160,7 @@ typing part of the name. Use the displayed command name from the picker.
 - `/radar-summarize` uses `radar_summarize`.
 - `/radar-summary` uses `radar_summary_read`.
 - `/radar-audit` uses `radar_audit_run`.
+- `/radar-source-quality` uses `radar_source_quality`.
 - `/radar-repair-fts` uses `radar_rebuild_fts`.
 
 ### Research
