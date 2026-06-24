@@ -355,6 +355,14 @@ PR, implementation note, or final report:
       HTTP 403 even when curl can intermittently read RSS.
 - [ ] Extend radar live execution to authenticated X watch/recent-search data
       with copied/disposable-home source-health/cursor proof before promotion.
+      `scripts/radar-x-production-proof` now provides a guarded disposable-home
+      harness with OAuth refresh, source-health/cursor, audit, summary, ops,
+      artifact redaction checks, and a blocked proof packet when live auth
+      fails. Latest local run
+      `.arcwell-dev/proofs/radar-x-production-proof-20260624T113752Z-35025`
+      is not a pass: OAuth refresh failed, app-bearer fallback returned 401,
+      and the proof packet kept existing local X projection separate from
+      current authenticated live fetch proof.
 - [x] Add radar exact URL/source-native dedupe groups with preserved source
       evidence, duplicate score statuses, audit drift checks, schema-migration
       coverage, severe local tests, and copied-home production-data proof over
@@ -663,15 +671,18 @@ PR, implementation note, or final report:
       Severe fixtures prove unsupported report prose stays `needs_host_search`
       without retrieval proof, while provider-recorded proof plus rerun can
       settle and accept the final judgment.
-- [ ] Severe-test active fact-checking with seeded false report sentences,
+- [x] Severe-test active fact-checking with seeded false report sentences,
       uncited true sentences, vague opinions, unknown high-impact claims,
       verifier prompt injection, self-validating source text, cross-run source
       cards, and generated-summary evidence misuse. Current coverage includes
       supported/unsupported/vague sentence extraction plus close-loop blocked
-      and provider-proof closure. It now also proves matched report sentences
-      are not marked `right` when their only support is generated/model-answer
-      evidence with prompt-injection text; seeded false/cross-run/verifier
-      prompt-injection fixtures still need expansion.
+      and provider-proof closure; generated/model-answer evidence with
+      prompt-injection text is not marked `right`; and
+      `severe_research_active_fact_check_rejects_false_cross_run_and_prompt_injection_inputs`
+      now proves refuted false prose becomes `wrong`, cross-run evidence and
+      self-validating prose become high-impact `unknown`, prompt-injection
+      verifier instructions become non-checkable data without retrieval tasks,
+      and vague opinions remain non-checkable.
 - [x] Add convergence-aware report rendering: final position, what changed,
       survived/weakened/refuted statements, unresolved disproofs, source
       coverage, saturation, active fact-check summary, convergence stop reason,

@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in node rsync; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for this proof." >&2
+    exit 2
+  fi
+done
+
+RUN_STAMP="${ARCWELL_RADAR_X_PROOF_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_RADAR_X_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/radar-x-production-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+SOURCE_HOME="${ARCWELL_RADAR_X_SOURCE_HOME:-${ARCWELL_HOME:-$HOME/.arcwell}}"
+export ARCWELL_HOME="${ARCWELL_RADAR_X_PROOF_HOME:-$PROOF_ROOT/home}"
+HANDLE="${ARCWELL_RADAR_X_HANDLE:-openai}"
+PROFILE_NAME="${ARCWELL_RADAR_X_PROFILE_NAME:-radar-x-live-proof-$RUN_STAMP}"
+MIN_ITEMS="${ARCWELL_RADAR_X_MIN_ITEMS:-1}"
+OAUTH_CLIENT_MODE="${ARCWELL_RADAR_X_OAUTH_CLIENT_MODE:-confidential}"
+
+cleanup_sensitive_home() {
+  case "${ARCWELL_HOME:-}" in
+    "$PROOF_ROOT"/home)
+      rm -rf "$ARCWELL_HOME"
+      ;;
+  esac
+}
+
+trap cleanup_sensitive_home EXIT
+
+log() {
+  printf '[radar-x-proof] %s\n' "$*"
+}
+
+if [ ! -d "$SOURCE_HOME" ]; then
+  echo "BLOCKED: source Arcwell home not found: $SOURCE_HOME" >&2
+  exit 2
+fi
+
+mkdir -p "$ARTIFACT_DIR"
+log "proof root: $PROOF_ROOT"
+log "source home: $SOURCE_HOME"
+log "copying source home into disposable proof home"
+rsync -a --exclude 'backups/' --exclude 'proofs/' "$SOURCE_HOME"/ "$ARCWELL_HOME"/ >/dev/null
+
+SECRET_HEALTH="$ARTIFACT_DIR/secrets-health-before.json"
+"$ARCWELL_BIN" secrets health >"$SECRET_HEALTH"
+node - "$SECRET_HEALTH" <<'NODE'
+const fs = require("fs");
+const health = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+function has(name) {
+  return health.some((item) => item.name === name && item.present === true);
+}
+for (const name of ["X_REFRESH_TOKEN", "X_CLIENT_ID"]) {
+  if (!has(name)) {
+    console.error(`BLOCKED: ${name} is required in the copied proof home`);
+    process.exit(2);
+  }
+}
+NODE
+
+CLIENT_ID="$("$ARCWELL_BIN" secrets get-value X_CLIENT_ID)"
+CLIENT_SECRET_ARG=()
+case "$OAUTH_CLIENT_MODE" in
+  public)
+    "$ARCWELL_BIN" secrets delete-value X_CLIENT_SECRET >"$ARTIFACT_DIR/delete-x-client-secret.json"
+    ;;
+  confidential)
+    CLIENT_SECRET="$("$ARCWELL_BIN" secrets get-value X_CLIENT_SECRET)"
+    CLIENT_SECRET_ARG=(--client-secret "$CLIENT_SECRET")
+    printf '{"name":"X_CLIENT_SECRET","ok":true,"mode":"confidential"}\n' >"$ARTIFACT_DIR/delete-x-client-secret.json"
+    ;;
+  *)
+    echo "BLOCKED: ARCWELL_RADAR_X_OAUTH_CLIENT_MODE must be public or confidential" >&2
+    exit 2
+    ;;
+esac
+
+log "refreshing X OAuth token inside disposable proof home using $OAUTH_CLIENT_MODE client mode"
+AUTH_MODE="oauth_refresh"
+if ! env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" x oauth-refresh \
+  --client-id "$CLIENT_ID" \
+  "${CLIENT_SECRET_ARG[@]}" \
+  >"$ARTIFACT_DIR/oauth-refresh.json" 2>"$ARTIFACT_DIR/oauth-refresh.err"; then
+  if "$ARCWELL_BIN" secrets health | node -e 'const fs=require("fs"); const h=JSON.parse(fs.readFileSync(0,"utf8")); process.exit(h.some(x=>x.name==="TWITTER_BEARER_TOKEN" && x.present===true && x.status==="present") ? 0 : 1);'; then
+    log "OAuth refresh blocked; falling back to stored app bearer for recent-search-only proof"
+    AUTH_MODE="app_bearer_fallback"
+    APP_BEARER="$("$ARCWELL_BIN" secrets get-value TWITTER_BEARER_TOKEN)"
+    "$ARCWELL_BIN" secrets set-value X_BEARER_TOKEN "$APP_BEARER" --scope x --provider x >"$ARTIFACT_DIR/app-bearer-installed.json"
+    node - "$ARTIFACT_DIR/oauth-refresh.err" >"$ARTIFACT_DIR/oauth-refresh-blocked.json" <<'NODE'
+const fs = require("fs");
+const error = fs.readFileSync(process.argv[2], "utf8")
+  .replace(/[A-Za-z0-9_.=-]{24,}/g, "[REDACTED]");
+console.log(JSON.stringify({
+  status: "blocked",
+  fallback: "app_bearer_recent_search",
+  error
+}, null, 2));
+NODE
+  else
+    cat "$ARTIFACT_DIR/oauth-refresh.err" >&2
+    exit 2
+  fi
+fi
+
+"$ARCWELL_BIN" secrets health >"$ARTIFACT_DIR/secrets-health-after.json"
+
+log "creating radar X profile for @$HANDLE"
+env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" radar profile create "$PROFILE_NAME" \
+  --description "Production-data radar X live proof over authenticated recent-search for @$HANDLE." \
+  --window-hours 168 \
+  --min-score 1 \
+  --max-items 20 \
+  --selector-json "{\"kind\":\"x_handle\",\"locator\":\"$HANDLE\",\"limit\":10}" \
+  >"$ARTIFACT_DIR/profile.json"
+
+log "running radar profile with fetch_live=true"
+env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" radar run "$PROFILE_NAME" --fetch-live \
+  >"$ARTIFACT_DIR/run.json"
+
+RUN_ID="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(j.run.id)' "$ARTIFACT_DIR/run.json")"
+env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" radar stage "$RUN_ID" >"$ARTIFACT_DIR/stage.json"
+env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" radar audit "$RUN_ID" >"$ARTIFACT_DIR/audit.json"
+env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" radar summarize "$RUN_ID" >"$ARTIFACT_DIR/summary-write.json"
+env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" radar summary "$RUN_ID" >"$ARTIFACT_DIR/summary-read.json"
+env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" cursors list >"$ARTIFACT_DIR/cursors.json"
+env -u X_BEARER_TOKEN -u TWITTER_BEARER_TOKEN "$ARCWELL_BIN" ops >"$ARTIFACT_DIR/ops.json"
+
+log "validating radar X proof artifacts"
+node - "$ARTIFACT_DIR" "$PROOF_ROOT" "$RUN_ID" "$HANDLE" "$MIN_ITEMS" "$AUTH_MODE" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const [artifactDir, proofRoot, runId, handle, minItemsRaw, authMode] = process.argv.slice(2);
+const minItems = Number(minItemsRaw);
+const read = (name) => JSON.parse(fs.readFileSync(path.join(artifactDir, name), "utf8"));
+const text = (name) => fs.existsSync(path.join(artifactDir, name)) ? fs.readFileSync(path.join(artifactDir, name), "utf8") : "";
+const profile = read("profile.json");
+const run = read("run.json");
+const stage = read("stage.json");
+const audit = read("audit.json");
+const summaryWrite = read("summary-write.json");
+const summaryRead = read("summary-read.json");
+const cursors = read("cursors.json");
+const ops = read("ops.json");
+const secretsAfter = read("secrets-health-after.json");
+
+function assert(condition, message, detail) {
+  if (!condition) {
+    console.error(`FAIL: ${message}`);
+    if (detail !== undefined) console.error(JSON.stringify(detail, null, 2));
+    process.exit(1);
+  }
+}
+
+const serializedArtifacts = [
+  "oauth-refresh.json",
+  "oauth-refresh.err",
+  "oauth-refresh-blocked.json",
+  "app-bearer-installed.json",
+  "profile.json",
+  "run.json",
+  "stage.json",
+  "audit.json",
+  "summary-write.json",
+  "summary-read.json",
+  "cursors.json",
+  "ops.json",
+  "secrets-health-before.json",
+  "secrets-health-after.json",
+  "delete-x-client-secret.json",
+].map(text).join("\n");
+assert(!/(^|[^A-Za-z0-9])(bearer\s+|xoxp|xoxb|sk-|ghp_)[A-Za-z0-9_.=-]{20,}/i.test(serializedArtifacts), "artifacts should not contain token-like secrets");
+
+assert(profile.status === "local_proof_ready", "profile should be supported", profile);
+assert(run.run?.id === runId, "run output should expose run id", run.run);
+assert(run.run?.metadata?.fetch_live === true || stage.run?.metadata?.fetch_live === true, "run metadata should preserve fetch_live=true", run);
+assert(Array.isArray(run.adapter_jobs) && run.adapter_jobs.length >= 1, "radar run should record X adapter job", run.adapter_jobs);
+const xJob = run.adapter_jobs.find((job) => job.kind === "x_recent_search");
+assert(xJob, "radar X proof should use x_recent_search adapter job", run.adapter_jobs);
+if (xJob.status !== "completed") {
+  const proofPacket = {
+    proof_name: "radar-x-production-proof",
+    proof_level: "Blocked Live Adapter Attempt",
+    proof_root: proofRoot,
+    auth_mode: authMode,
+    run_id: runId,
+    profile_id: profile.id,
+    handle,
+    oauth_client_mode: process.env.ARCWELL_RADAR_X_OAUTH_CLIENT_MODE || "confidential",
+    run_status: run.run?.status,
+    adapter_job_id: xJob.id,
+    adapter_job_status: xJob.status,
+    adapter_job_error: String(xJob.error || "").replace(/[A-Za-z0-9_.=-]{24,}/g, "[REDACTED]"),
+    projected_existing_item_count: stage.items.length,
+    projected_existing_score_count: stage.scores.length,
+    gates: {
+      oauth_refresh_in_disposable_home: false,
+      app_bearer_fallback: authMode === "app_bearer_fallback",
+      x_adapter_job_completed: false,
+      live_fetch_failed: true,
+      source_card_projection_after_failed_live_fetch: stage.items.length > 0,
+      artifacts_token_redacted: true,
+      disposable_home_scrubbed_by_exit_trap: true,
+    },
+    blocker: "X token refresh and/or app bearer authentication failed before authenticated recent-search source cards could be proven current.",
+    remaining_risk: [
+      "Authenticated X recent-search through radar fetch_live is not production-data proven.",
+      "Existing X source-card projection can still score local data, but that is not evidence of current live fetch.",
+      "Reauthorize or rotate the X OAuth/app bearer credentials, then rerun this proof script.",
+    ],
+  };
+  fs.writeFileSync(path.join(artifactDir, "proof-packet.json"), `${JSON.stringify(proofPacket, null, 2)}\n`);
+  console.error(JSON.stringify(proofPacket, null, 2));
+  process.exit(2);
+}
+assert(stage.run?.id === runId && stage.run?.status === "scored", "stage should read scored run", stage.run);
+assert(stage.items.length >= minItems, "radar X proof should write live X-backed items", { count: stage.items.length, minItems });
+assert(stage.scores.length >= stage.items.length, "radar X proof should score all items", { scores: stage.scores.length, items: stage.items.length });
+for (const item of stage.items) {
+  assert(item.source_card_id, "X radar item should preserve source-card provenance", item);
+  assert(item.wiki_page_id, "X radar item should preserve wiki provenance", item);
+  assert(["x_recent_search", "recent_search"].includes(item.metadata?.source_kind) || item.provider === "x", "X radar item should retain X source-kind metadata", item);
+}
+assert(audit.ok === true && audit.findings.length === 0, "radar audit should pass", audit);
+assert(summaryWrite.audit_status === "audit_ok", "summary write should require audit_ok", summaryWrite);
+assert(summaryRead.id === summaryWrite.id, "summary read should return written summary", { summaryWrite, summaryRead });
+assert(summaryRead.metadata?.not_delivery === true, "summary must remain non-delivery", summaryRead.metadata);
+const cursorKey = `x:recent-search:from:${handle}`;
+assert(cursors.some((cursor) => cursor.key === cursorKey), "X recent-search cursor should advance", cursors);
+const sourceHealth = (ops.source_health || []).find((row) => row.key === cursorKey);
+assert(sourceHealth && sourceHealth.status === "healthy", "ops should expose healthy X source-health", ops.source_health);
+const opsRun = (ops.radar_runs || []).find((item) => item.id === runId);
+assert(opsRun?.metadata?.score_distribution?.score_count >= stage.items.length, "ops should expose X radar score distribution", opsRun);
+assert(secretsAfter.some((item) => item.name === "X_BEARER_TOKEN" && item.present === true && item.status === "present"), "refreshed proof home should have present X bearer metadata", secretsAfter);
+
+const proofPacket = {
+  proof_name: "radar-x-production-proof",
+  proof_level: "Production Data Proof for authenticated X recent-search through radar fetch_live",
+  proof_root: proofRoot,
+  auth_mode: authMode,
+  run_id: runId,
+  profile_id: profile.id,
+  handle,
+  oauth_client_mode: process.env.ARCWELL_RADAR_X_OAUTH_CLIENT_MODE || "confidential",
+  item_count: stage.items.length,
+  score_count: stage.scores.length,
+  selected_count: stage.scores.filter((score) => score.status === "selected").length,
+  adapter_job_id: xJob.id,
+  cursor_key: cursorKey,
+  source_health_status: sourceHealth.status,
+  summary_id: summaryRead.id,
+  gates: {
+    oauth_refresh_in_disposable_home: authMode === "oauth_refresh",
+    app_bearer_fallback: authMode === "app_bearer_fallback",
+    x_adapter_job_completed: true,
+    cursor_advanced: true,
+    source_health_healthy: true,
+    source_card_provenance: true,
+    audit_ok: true,
+    summary_non_delivery: true,
+    artifacts_token_redacted: true,
+  },
+  remaining_risk: [
+    authMode === "oauth_refresh"
+      ? "This proves radar fetch_live over refreshed OAuth-backed X recent-search for one handle, not bookmark/follow breadth."
+      : "This proves radar fetch_live over app-bearer authenticated X recent-search for one handle; OAuth user-context refresh remained blocked and bookmark/follow breadth is not proven.",
+    "This does not prove live X thread expansion, model-backed X research, delivery, or recurring scheduled operation.",
+    "Provider tier and quota breadth remain plan-dependent.",
+  ],
+};
+fs.writeFileSync(path.join(artifactDir, "proof-packet.json"), `${JSON.stringify(proofPacket, null, 2)}\n`);
+console.log(JSON.stringify(proofPacket, null, 2));
+NODE
+
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"

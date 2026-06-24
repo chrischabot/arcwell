@@ -1043,6 +1043,10 @@ A model-backed report may be marked complete only when:
   statements as `right`, labels unsupported high-impact sentences `unknown`,
   labels vague judgments `not_checkable`, and creates citation-gap host-search
   tasks so wrong/unknown report claims feed the next retrieval/convergence pass.
+  Severe coverage now includes refuted report prose, cross-run evidence
+  laundering, self-validating prose, generated/model-answer evidence,
+  prompt-injection text aimed at the verifier, vague opinions, and the
+  convergence report's own caveat/refuted appendices.
 - Done: `research_convergence_close_loop` now composes convergence report
   compilation, active fact-checking, optional policy/cost-gated provider
   fallback for pending citation-gap searches, convergence rerun, final report
