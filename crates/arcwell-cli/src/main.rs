@@ -14005,6 +14005,118 @@ reason = "MCP secret writes are denied for this token"
     }
 
     #[test]
+    fn severe_mcp_digest_candidate_review_gate_round_trips() {
+        // CLAIM: digest candidate review and delivery preflight are usable from
+        // the agent-facing MCP surface, not only from internal Rust APIs.
+        // ORACLE: MCP creates a sourced candidate, rejects unreviewed delivery,
+        // records review state, and still requires a narrow policy allowance
+        // after approval.
+        // SEVERITY: Severe because a hidden core-only gate would let slash/MCP
+        // workflows keep treating digest delivery as an implied action.
+        let paths = test_paths("mcp-digest-review-gate");
+        let card = call_mcp_tool(
+            &paths,
+            "source_card_add",
+            json!({
+                "title": "MCP Digest Source",
+                "url": "https://example.com/mcp-digest-source",
+                "summary": "MCP digest source summary",
+                "claims": [
+                    { "claim": "MCP digest source claim", "kind": "fact", "confidence": 0.8 }
+                ]
+            }),
+        )
+        .unwrap();
+        let card_id = card.get("id").and_then(Value::as_str).unwrap();
+        let candidate = call_mcp_tool(
+            &paths,
+            "digest_candidate_create",
+            json!({
+                "topic": "MCP digest review gate",
+                "source_card_ids": [card_id]
+            }),
+        )
+        .unwrap();
+        let candidate_id = candidate.get("id").and_then(Value::as_str).unwrap();
+        assert_eq!(
+            candidate.get("review_status").and_then(Value::as_str),
+            Some("unreviewed")
+        );
+
+        let blocked = call_mcp_tool(
+            &paths,
+            "digest_candidate_delivery_check",
+            json!({
+                "id": candidate_id,
+                "channel": "telegram",
+                "subject": "telegram:chat:mcp",
+                "target": "telegram:chat:mcp"
+            }),
+        )
+        .unwrap();
+        assert_eq!(blocked.get("allowed").and_then(Value::as_bool), Some(false));
+        assert!(
+            blocked
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("requires approved review")
+        );
+
+        fs::write(
+            paths.home.join("arcwell-policy.toml"),
+            r#"
+[[rules]]
+id = "allow-mcp-digest-delivery"
+effect = "allow"
+action = "digest_candidate.deliver"
+package = "arcwell-x"
+source = "x_digest_delivery"
+channel = "telegram"
+subject = "telegram:chat:mcp"
+target = "telegram:chat:mcp"
+reason = "allow reviewed MCP digest delivery check"
+priority = 10
+"#,
+        )
+        .unwrap();
+
+        let approved = call_mcp_tool(
+            &paths,
+            "digest_candidate_approve",
+            json!({
+                "id": candidate_id,
+                "reviewed_by": "mcp-test",
+                "note": "looks actionable"
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            approved.get("review_status").and_then(Value::as_str),
+            Some("approved")
+        );
+        let allowed = call_mcp_tool(
+            &paths,
+            "digest_candidate_delivery_check",
+            json!({
+                "id": candidate_id,
+                "channel": "telegram",
+                "subject": "telegram:chat:mcp",
+                "target": "telegram:chat:mcp"
+            }),
+        )
+        .unwrap();
+        assert_eq!(allowed.get("allowed").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            allowed
+                .get("policy_decision")
+                .and_then(|value| value.get("matched_rule_id"))
+                .and_then(Value::as_str),
+            Some("allow-mcp-digest-delivery")
+        );
+    }
+
+    #[test]
     fn severe_mcp_radar_surface_round_trips_without_cli_fallback() {
         // CLAIM: radar is an agent-usable MCP surface, not only a core/CLI implementation.
         // ORACLE: MCP tools create a profile, run it over a real source card, expose
