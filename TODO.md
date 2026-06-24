@@ -440,15 +440,18 @@ PR, implementation note, or final report:
 - [ ] Run an accepted live host-search technical proof on image compression
       algorithms with papers, codec docs, benchmarks, dissenting analyses,
       numeric/table anchors or caveats, and model-backed report acceptance.
-      Latest bounded orchestration proof home
-      `.arcwell-dev/proofs/deep-research-production-proof-20260623T181935Z`
-      ran 2 live Brave queries, linked 12 source cards, promoted 4 full-source
-      cards, executed 20 exact challenge host-search tasks, ran 4 worker
-      convergence jobs, and recorded live OpenAI model-backed editorial on a
-      `max_iterations` incomplete terminal state. It correctly remains blocking
-      with `closure_status: stopped_incomplete`, unaccepted model-backed
-      judgment, one unknown high-impact fact check, and rejected final report
-      judgment. Earlier saturated proof home
+      Latest saturated proof home
+      `.arcwell-dev/proofs/deep-research-production-proof-20260624T170158Z`
+      ran 12 live Brave queries, deduped 81 candidates, linked 121 source cards,
+      promoted 40 full-source cards, recorded 108 host-search proofs, executed
+      90 exact challenge host-search tasks with selected results, ran 4 worker
+      convergence jobs, and recorded live OpenAI model-backed editorial. It
+      correctly remains blocking with `closure_status: stopped_incomplete`,
+      unaccepted model-backed judgment, 2 unknown high-impact fact checks, and a
+      rejected final report judgment. A follow-up close-loop on the same proof
+      after the stale-editorial gate fix re-ran OpenAI over the cleaned state
+      with 0 pending search tasks, 101 valid citations, and 20 unsupported
+      claims. Earlier saturated proof home
       `.arcwell-dev/proofs/deep-research-production-proof-20260623T155121Z`
       produced 12 live Brave queries, 131 deduped candidates, 80 linked source
       cards, 80 structured claims, 18 host-search records, `closure_status:
@@ -460,9 +463,11 @@ PR, implementation note, or final report:
       confusion, active fact-check recursion over generated convergence report
       sections, a too-low convergence source cap, model-backed judgment
       overwrite, bodyless structured provider responses, pending-search prompt
-      scoring, evaluator routing over synthesized score artifacts, and
-      provider-search URL-ingest jobs that wrote wiki pages without promoting
-      them into run-linked source-card/claim evidence.
+      scoring, evaluator routing over synthesized score artifacts, proof-script
+      omission of close-loop editorial flags, stale rejected-editorial rerun
+      gating, title/page-dump narrative promotion, and provider-search
+      URL-ingest jobs that wrote wiki pages without promoting them into
+      run-linked source-card/claim evidence.
 - [ ] Run live market/ecosystem proof on London AI startups with official,
       company, funding, job, news, and social source families, hype downgrades,
       currentness labels, contradiction handling, and report judgment average

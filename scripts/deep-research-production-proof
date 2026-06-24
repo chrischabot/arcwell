@@ -1078,6 +1078,18 @@ function main() {
       "--cost-cap-usd",
       String(args.editorialCostCapUsd),
     ];
+    if (!args.noEditorial) {
+      closeArgs.push(
+        "--max-provider-calls",
+        "2",
+        "--editorial-provider",
+        args.editorialProvider,
+        "--editorial-model-name",
+        args.editorialModelName,
+        "--editorial-timeout-seconds",
+        "45",
+      );
+    }
     let closeLoop = runJson(bin, env, logFile, closeArgs);
     const postCloseChallengeStats = runChallengeSearchRounds({
       bin,
@@ -1140,7 +1152,7 @@ function main() {
         )
       : false;
     const rejectedJudgment = Array.isArray(judgments)
-      ? judgments.find((judgment) => judgment.overall_decision === "reject")
+      ? [...judgments].reverse().find((judgment) => judgment.overall_decision === "reject")
       : null;
     const blockers = [
       ...((audit.findings || [])

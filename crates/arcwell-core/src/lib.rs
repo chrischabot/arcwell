@@ -1728,6 +1728,7 @@ pub struct ResearchConvergenceCloseLoopResult {
     pub convergence_rerun: Option<ResearchConvergenceStep>,
     pub final_status: ResearchConvergenceStatus,
     pub final_report: Option<ResearchConvergenceReport>,
+    pub editorial: Option<ResearchConvergenceEditorialLoop>,
     pub remaining_host_search_tasks: Vec<ResearchConvergenceHostSearchTask>,
     pub closure_status: String,
     pub blockers: Vec<String>,
@@ -9367,7 +9368,7 @@ impl Store {
                 .clone()
                 .context("terminal convergence is missing its latest snapshot")?;
             let editorial = if config.editorial_provider.is_some()
-                && !self.convergence_editorial_judgment_recorded(&input.run_id)?
+                && !self.convergence_accepted_editorial_judgment_recorded(&input.run_id)?
             {
                 Some(self.run_research_convergence_editorial_loop(&input.run_id, &config)?)
             } else {
@@ -9419,7 +9420,7 @@ impl Store {
                     .as_deref()
                     .is_some_and(|reason| reason != "continue")
                 || exhausted_iteration_budget)
-            && !self.convergence_editorial_judgment_recorded(&last.status.run_id)?
+            && !self.convergence_accepted_editorial_judgment_recorded(&last.status.run_id)?
         {
             let editorial =
                 self.run_research_convergence_editorial_loop(&last.status.run_id, &config)?;
@@ -9871,7 +9872,7 @@ impl Store {
         })
     }
 
-    fn convergence_editorial_judgment_recorded(&self, run_id: &str) -> Result<bool> {
+    fn convergence_accepted_editorial_judgment_recorded(&self, run_id: &str) -> Result<bool> {
         Ok(self
             .list_research_report_judgments(run_id)?
             .into_iter()
@@ -9879,7 +9880,9 @@ impl Store {
                 judgment
                     .scores
                     .get("model_backed_convergence_editorial")
-                    .is_some()
+                    .and_then(|score| score.get("accepted"))
+                    .and_then(Value::as_bool)
+                    == Some(true)
             }))
     }
 
@@ -10712,6 +10715,7 @@ impl Store {
         }
 
         let convergence_input = research_close_loop_convergence_input(&input);
+        let convergence_config = normalize_research_convergence_config(&convergence_input)?;
         let mut initial_status = self.research_convergence_status(&input.run_id)?;
         if initial_status.latest_iteration.is_none()
             || (!initial_status.settled
@@ -10818,6 +10822,22 @@ impl Store {
         } else {
             None
         };
+        let editorial_from_rerun = convergence_rerun
+            .as_ref()
+            .and_then(|step| step.editorial.clone());
+        let editorial = if editorial_from_rerun.is_some() {
+            editorial_from_rerun
+        } else if convergence_config.editorial_provider.is_some()
+            && !self.convergence_accepted_editorial_judgment_recorded(&input.run_id)?
+        {
+            Some(self.run_research_convergence_editorial_loop(&input.run_id, &convergence_config)?)
+        } else {
+            None
+        };
+        let final_report = editorial
+            .as_ref()
+            .map(|editorial| editorial.report.clone())
+            .or(final_report);
         let remaining_host_search_tasks = self
             .list_research_convergence_host_search_tasks(&input.run_id)?
             .into_iter()
@@ -10846,6 +10866,7 @@ impl Store {
             convergence_rerun,
             final_status,
             final_report,
+            editorial,
             remaining_host_search_tasks,
             closure_status,
             blockers,
@@ -27301,7 +27322,7 @@ impl Store {
             let report = if input.no_write.unwrap_or(false) {
                 None
             } else if config.editorial_provider.is_some()
-                && !self.convergence_editorial_judgment_recorded(&input.run_id)?
+                && !self.convergence_accepted_editorial_judgment_recorded(&input.run_id)?
             {
                 Some(
                     self.run_research_convergence_editorial_loop(&input.run_id, &config)?
@@ -45971,11 +45992,95 @@ fn is_corpus_bookkeeping_claim(record: &ResearchClaimRecord) -> bool {
     if marker_hits >= 1 && record.claim.confidence < 0.65 {
         return true;
     }
+    if looks_like_source_title_claim(&text) {
+        return true;
+    }
+    if looks_like_scraped_page_dump_claim(&text) {
+        return true;
+    }
+    if has_unverified_extraction_caveat(record) && text.chars().count() > 550 {
+        return true;
+    }
     record.claim.caveats.iter().any(|caveat| {
         let caveat = caveat.to_ascii_lowercase();
         caveat.contains("metadata/snippet-level")
             || caveat.contains("metadata-level extraction")
             || caveat.contains("source-discovered source")
+    })
+}
+
+fn looks_like_source_title_claim(text: &str) -> bool {
+    let word_count = text.split_whitespace().count();
+    if !(3..=16).contains(&word_count) {
+        return false;
+    }
+    let has_title_separator =
+        text.contains(" | ") || text.contains(" - ") || text.contains(" \u{2014} ");
+    let has_catalog_marker = [
+        "top ",
+        "guide",
+        "list",
+        "database",
+        "companies",
+        "startups",
+        "funding",
+        "valuation",
+        "investors",
+        "firms",
+        "ecosystem",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker));
+    let has_predicate = [
+        " raised ",
+        " reached ",
+        " fell ",
+        " grew ",
+        " declined ",
+        " accounts for ",
+        " accounted for ",
+        " is ",
+        " are ",
+        " has ",
+        " have ",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker));
+    (has_title_separator || text.starts_with("top ")) && has_catalog_marker && !has_predicate
+}
+
+fn looks_like_scraped_page_dump_claim(text: &str) -> bool {
+    if text.chars().count() < 450 {
+        return false;
+    }
+    let markers = [
+        "table of contents",
+        " toggle ",
+        "image:",
+        "last updated",
+        "updated weekly",
+        "all startup lists",
+        "read more",
+        "published ",
+        "part of the",
+        "menu",
+        "newsletter",
+    ];
+    let marker_hits = markers
+        .iter()
+        .filter(|marker| text.contains(**marker))
+        .count();
+    marker_hits >= 2
+}
+
+fn has_unverified_extraction_caveat(record: &ResearchClaimRecord) -> bool {
+    record.claim.caveats.iter().any(|caveat| {
+        let caveat = caveat.to_ascii_lowercase();
+        caveat.contains("provider search snippet")
+            || caveat.contains("snippet/source-card evidence")
+            || caveat.contains("bounded url-ingest extraction")
+            || caveat.contains("verify quoted/numeric claims")
+            || caveat.contains("verify against full source text")
     })
 }
 
@@ -47001,6 +47106,71 @@ mod tests {
             )
             .unwrap();
         card.id
+    }
+
+    #[test]
+    fn severe_narrative_claim_filter_excludes_titles_and_page_dumps() {
+        // CLAIM: the analyst narrative layer promotes analytical findings, not
+        // source titles or scraped page dumps that merely contain interesting
+        // numbers.
+        // ORACLE: source-title and page-dump claims are filtered while a direct
+        // measurement claim remains eligible for statement compilation.
+        // SEVERITY: Severe because promoting raw corpus inventory as current
+        // position was the failure mode in the saturated live proof.
+        fn record(text: &str, confidence: f64, caveats: Vec<&str>) -> ResearchClaimRecord {
+            ResearchClaimRecord {
+                claim: ResearchClaim {
+                    id: format!("rclaim-{}", sha256(text.as_bytes())[..16].to_string()),
+                    run_id: "rrun-narrative-filter".to_string(),
+                    text: text.to_string(),
+                    kind: "measurement".to_string(),
+                    subject: None,
+                    predicate: None,
+                    object_value: None,
+                    temporal_scope: None,
+                    confidence,
+                    caveats: caveats.into_iter().map(ToOwned::to_owned).collect(),
+                    extraction_provider: "test".to_string(),
+                    extraction_model: "fixture".to_string(),
+                    extracted_at: now(),
+                    metadata: json!({}),
+                },
+                sources: Vec::new(),
+                document_anchors: Vec::new(),
+            }
+        }
+
+        let title = record(
+            "Top AI Startups in the UK 2026 (Funding & Valuation)",
+            0.55,
+            vec![
+                "Imported by the production proof harness from provider search snippet/source-card evidence; verify against full source text before publication.",
+            ],
+        );
+        let page_dump = record(
+            "LDN/ai 74 companies and 127 connections map people insights events news bits. Table of Contents Toggle What is the state of London artificial intelligence in 2026? Published 16 March 2026 and updated weekly. London is Europe's largest artificial intelligence hub. More than $8 billion in venture capital flowed into London-based AI companies between 2021 and 2024. Image: Unsplash. Last updated April 2026. Read more and subscribe to the newsletter for the full database of companies, investors, and people.",
+            0.72,
+            vec![
+                "Bounded URL-ingest extraction; verify quoted/numeric claims against the original page before external publication.",
+            ],
+        );
+        let analytical = record(
+            "UK AI startups raised over GBP 6 billion in 2025, accounting for more than one third of UK venture capital.",
+            0.72,
+            vec![
+                "Bounded URL-ingest extraction; verify quoted/numeric claims against the original page before external publication.",
+            ],
+        );
+        let records = vec![title, page_dump, analytical];
+
+        let narrative = narrative_research_claims(&records);
+        assert_eq!(narrative.len(), 1);
+        assert!(
+            narrative[0]
+                .claim
+                .text
+                .contains("raised over GBP 6 billion")
+        );
     }
 
     fn seed_saturated_convergence_fixture(store: &Store, run_id: &str) {
@@ -66964,6 +67134,126 @@ The platform has achieved zero escapes in production since 2024.
                 .judgment
                 .overall_decision,
             "accept_with_caveats"
+        );
+    }
+
+    #[test]
+    fn severe_research_convergence_close_loop_runs_model_backed_editorial_gate() {
+        // CLAIM: close-loop honors editorial_provider itself, so the public
+        // end-to-end operation cannot claim live editorial review while only
+        // compiling a deterministic report.
+        // ORACLE: close-loop returns a model-backed editorial result, persists
+        // verifier/evaluator runs, and stores a report judgment with the
+        // model-backed convergence score.
+        // SEVERITY: Severe because production proof scripts exercise
+        // convergence-close-loop, not the lower-level convergence-to-stop API.
+        let store = test_store("research-convergence-close-loop-editorial");
+        let workflow = store
+            .create_deep_research_run("close loop editorial")
+            .unwrap();
+        seed_research_convergence_claim(
+            &store,
+            &workflow.run.id,
+            "The system uses deterministic verification before execution.",
+        );
+        let mut input = research_convergence_test_input(&workflow.run.id);
+        input.max_iterations = Some(3);
+        input.no_progress_iteration_limit = Some(1);
+        assert!(
+            store
+                .run_research_convergence_to_stop(input)
+                .unwrap()
+                .status
+                .settled
+        );
+
+        let draft = store
+            .record_research_artifact(ResearchArtifactInput {
+                run_id: workflow.run.id.clone(),
+                role_run_id: None,
+                artifact_type: "generated_synthesis".to_string(),
+                title: "Draft requiring editorial gate".to_string(),
+                body: "The system uses deterministic verification before execution.".to_string(),
+                metadata: json!({ "fixture": "close_loop_editorial" }),
+            })
+            .unwrap();
+
+        let closed = store
+            .run_research_convergence_close_loop(ResearchConvergenceCloseLoopInput {
+                run_id: workflow.run.id.clone(),
+                artifact_id: Some(draft.id.clone()),
+                max_sentences: Some(10),
+                create_challenges: Some(true),
+                compile_report_before_check: Some(false),
+                rerun_after_check: Some(true),
+                compile_final_report: Some(true),
+                provider: None,
+                provider_max_tasks: None,
+                provider_max_results: None,
+                provider_max_provider_calls: None,
+                enqueue_selected_url_ingest: None,
+                max_ingest_jobs: None,
+                provider_cost_cap_usd: None,
+                provider_endpoint: None,
+                provider_api_key: None,
+                provider_model: None,
+                provider_timeout_seconds: None,
+                max_iterations: Some(4),
+                max_seconds: None,
+                max_sources: None,
+                max_provider_calls: Some(2),
+                cost_cap_usd: None,
+                source_novelty_threshold: None,
+                confidence_delta_threshold: None,
+                no_progress_iteration_limit: Some(1),
+                require_active_fact_check: None,
+                allow_long_run: None,
+                no_write: None,
+                editorial_provider: Some("mock".to_string()),
+                editorial_model_name: None,
+                editorial_endpoint: None,
+                editorial_timeout_seconds: None,
+            })
+            .unwrap();
+
+        assert_eq!(closed.closure_status, "closed");
+        assert!(closed.final_status.settled);
+        let editorial = closed
+            .editorial
+            .as_ref()
+            .expect("close-loop must return the editorial gate result");
+        assert_eq!(editorial.status, "accepted");
+        assert_eq!(
+            editorial
+                .citation_verifier
+                .as_ref()
+                .unwrap()
+                .editorial_run
+                .stage,
+            "citation_verifier"
+        );
+        assert_eq!(
+            editorial
+                .adversarial_evaluator
+                .as_ref()
+                .unwrap()
+                .editorial_run
+                .stage,
+            "adversarial_evaluator"
+        );
+        assert!(closed.blockers.is_empty(), "{:?}", closed.blockers);
+        assert_eq!(
+            store
+                .list_research_editorial_runs(&workflow.run.id)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            closed.final_report.as_ref().unwrap().judgment.scores
+                ["model_backed_convergence_editorial"]["accepted"]
+                .as_bool(),
+            Some(true)
         );
     }
 
