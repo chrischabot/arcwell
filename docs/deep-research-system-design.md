@@ -963,13 +963,14 @@ A model-backed report may be marked complete only when:
 4. Partially done: citation-verifier records and audit score gates exist.
    Sentence-level claim/source-card/span/table validation is still pending.
 5. Partially done: adversarial-evaluator records, mock invocation, severe
-   malformed-provider tests, OpenAI Responses API envelope parsing, and one live
-   provider fail-closed invocation exist. Live model eval over a saturated
-   corpus is still pending.
+   malformed-provider tests, OpenAI Responses API envelope parsing, one live
+   provider fail-closed invocation, and one accepted bounded live OpenAI
+   drafter/verifier/evaluator proof over copied production source cards exist.
+   Live model eval over a saturated fresh corpus is still pending.
 6. Partially done: `research_audit_run` gates completed drafts on verifier and
    evaluator acceptance. Final report status wiring is still pending.
-7. Remaining: run live editorial/eval quality smokes over a real saturated
-   corpus after deterministic fixtures pass.
+7. Remaining: extend the accepted bounded live editorial/eval proof to a real
+   saturated corpus after deterministic fixtures pass.
 
 ## Production Rollout Milestones
 
@@ -1042,6 +1043,15 @@ A model-backed report may be marked complete only when:
 - Done: live OpenAI editorial invocation reached the provider, parsed the nested
   Responses API output envelope, recorded a cost decision, and rejected an
   insufficient evidence pack instead of drafting unsupported prose.
+- Done: `scripts/research-synthesis-completion-proof` ran a bounded live
+  OpenAI drafter -> citation-verifier -> adversarial-evaluator chain over
+  copied production Arcwell source cards. Latest proof:
+  `.arcwell-dev/proofs/research-synthesis-completion-proof-20260624T153639Z`.
+  It copied six production source cards, ingested 12 structured claims, wrote
+  inspectable generated-synthesis/verifier/evaluator artifacts, passed
+  run-scoped audit with no error findings, and enforced
+  `unsupported_count=0`, `unsupported_rate=0`, and zero adversarial blocking
+  issues.
 - Done: `research_active_fact_check` extracts factual sentences from
   report/generated-synthesis artifacts, matches source-backed convergence
   statements as `right`, labels unsupported high-impact sentences `unknown`,
@@ -1072,12 +1082,12 @@ A model-backed report may be marked complete only when:
   terminal state. Latest bounded proof:
   `.arcwell-dev/proofs/deep-research-production-proof-20260623T181935Z`.
 - Remaining: accepted live provider editorial/eval quality over a saturated
-  corpus, richer citation-quality scoring, mutation eval expansion, and live
-  smoke under explicit provider/cost config. The deterministic convergence
+  fresh corpus, richer citation-quality scoring, mutation eval expansion, and
+  live smoke under explicit provider/cost config. The deterministic convergence
   report now includes bottom-line readiness, iteration deltas, source/search
-  saturation, host-search proof coverage, and residual risks; a fail-closed
-  live proof is still not a substitute for an accepted live saturated
-  report-quality proof.
+  saturation, host-search proof coverage, and residual risks; a bounded
+  accepted live synthesis proof is still not a substitute for an accepted live
+  saturated report-quality proof.
 
 ### Milestone 12: Saturated Production Proof
 

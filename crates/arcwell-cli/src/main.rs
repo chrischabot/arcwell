@@ -3067,6 +3067,14 @@ enum SourceCardSubcommand {
         #[arg(long, default_value = "[]")]
         claims_json: String,
     },
+    IngestRedditBrowserListing {
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        listing_json: PathBuf,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
     Search {
         query: String,
     },
@@ -3343,6 +3351,17 @@ fn source_card(store: Store, args: SourceCardCommand) -> Result<()> {
                 retrieved_at: None,
                 metadata: json!({ "created_by": "arcwell-cli" }),
             })?)
+        }
+        SourceCardSubcommand::IngestRedditBrowserListing {
+            locator,
+            listing_json,
+            limit,
+        } => {
+            let body = fs::read_to_string(&listing_json)
+                .with_context(|| format!("reading {}", listing_json.display()))?;
+            let listing: Value = serde_json::from_str(&body)
+                .with_context(|| format!("parsing {}", listing_json.display()))?;
+            print_json(&store.ingest_reddit_browser_listing(&locator, &listing, limit)?)
         }
         SourceCardSubcommand::Search { query } => print_json(&store.search_source_cards(&query)?),
         SourceCardSubcommand::Read { id } => print_json(&store.read_source_card(&id)?),

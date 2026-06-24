@@ -1,0 +1,358 @@
+#!/usr/bin/env node
+"use strict";
+
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { spawnSync } = require("child_process");
+
+const repoRoot = path.resolve(__dirname, "..");
+let arcwellBin = process.env.ARCWELL_BIN || path.join(repoRoot, "target", "debug", "arcwell");
+if (!fs.existsSync(arcwellBin)) {
+  const which = spawnSync("bash", ["-lc", "command -v arcwell || true"], { encoding: "utf8" });
+  arcwellBin = which.stdout.trim();
+}
+if (!arcwellBin || !fs.existsSync(arcwellBin)) {
+  console.error("BLOCKED: arcwell binary not found. Run: cargo build -p arcwell");
+  process.exit(2);
+}
+
+const stamp = process.env.ARCWELL_RESEARCH_SYNTHESIS_PROOF_RUN_ID
+  || `${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}-${process.pid}`;
+const proofRoot = process.env.ARCWELL_RESEARCH_SYNTHESIS_PROOF_DIR
+  || path.join(repoRoot, ".arcwell-dev", "proofs", `research-synthesis-completion-proof-${stamp}`);
+const artifactDir = path.join(proofRoot, "artifacts");
+const proofHome = path.join(proofRoot, "home");
+const provider = process.env.ARCWELL_RESEARCH_SYNTHESIS_PROVIDER || "openai";
+const model = process.env.ARCWELL_RESEARCH_SYNTHESIS_MODEL || "gpt-4.1-mini";
+const timeoutSeconds = process.env.ARCWELL_RESEARCH_SYNTHESIS_TIMEOUT_SECONDS || "90";
+const sourceIds = (process.env.ARCWELL_RESEARCH_SYNTHESIS_SOURCE_IDS
+  || [
+    "src-b999d0982b60a235",
+    "src-38b124d689d6545b",
+    "src-fc990b4b7b0daad7",
+    "src-a600154710d1ee47",
+    "src-17ed2cf5cdb85c65",
+    "src-505f0650836f8797",
+  ].join(","))
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+fs.mkdirSync(artifactDir, { recursive: true });
+fs.mkdirSync(proofHome, { recursive: true });
+
+function log(message) {
+  console.log(`[research-synthesis-proof] ${message}`);
+}
+
+function fail(message, detail) {
+  console.error(`[research-synthesis-proof] BLOCKED: ${message}`);
+  if (detail !== undefined) {
+    console.error(typeof detail === "string" ? detail : JSON.stringify(detail, null, 2));
+  }
+  process.exit(2);
+}
+
+function run(args, options = {}) {
+  const env = { ...process.env, ...(options.env || {}) };
+  const result = spawnSync(arcwellBin, args, {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    env,
+  });
+  if (options.allowFailure) {
+    return result;
+  }
+  if (result.status !== 0) {
+    fail(`command failed: arcwell ${args.join(" ")}`, {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    });
+  }
+  return result.stdout;
+}
+
+function jsonRun(args, options = {}) {
+  const stdout = run(args, options);
+  try {
+    return JSON.parse(stdout);
+  } catch (error) {
+    fail(`command did not return JSON: arcwell ${args.join(" ")}`, stdout.slice(0, 4000));
+  }
+}
+
+function writeJson(name, value) {
+  fs.writeFileSync(path.join(artifactDir, name), `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function commandEnv() {
+  return {
+    ARCWELL_HOME: proofHome,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+  };
+}
+
+function cardClaims(card) {
+  const claims = Array.isArray(card.claims) ? card.claims : [];
+  if (claims.length > 0) {
+    return claims.slice(0, 8).map((claim) => ({
+      claim: String(claim.claim || "").trim(),
+      kind: String(claim.kind || "fact").trim() || "fact",
+      confidence: Number.isFinite(Number(claim.confidence)) ? Number(claim.confidence) : 0.55,
+    })).filter((claim) => claim.claim);
+  }
+  return [{
+    claim: String(card.summary || "").slice(0, 1000),
+    kind: "fact",
+    confidence: 0.55,
+  }];
+}
+
+function extractionClaims(card) {
+  return {
+    claims: cardClaims(card)
+      .filter((claim) => !/^retrieved\s+\d{4}-\d{2}-\d{2}$/i.test(claim.claim.trim()))
+      .slice(0, 5)
+      .map((claim, index) => ({
+      text: claim.claim,
+      kind: claim.kind === "timeline" ? "fact" : claim.kind,
+      subject: String(card.title || "source").slice(0, 120),
+      predicate: `states_claim_${index + 1}`,
+      object: claim.claim.slice(0, 500),
+      confidence: Math.min(0.95, Math.max(0.4, Number(claim.confidence) || 0.55)),
+      caveats: [
+        `Copied from production source card ${card.id}; preserve original source-card uncertainty.`,
+      ],
+      quote: claim.claim.slice(0, 180),
+    })),
+  };
+}
+
+function assert(condition, message, detail) {
+  if (!condition) {
+    fail(message, detail);
+  }
+}
+
+log(`proof root: ${proofRoot}`);
+log(`reading ${sourceIds.length} production source cards before entering disposable ARCWELL_HOME`);
+const productionCards = sourceIds.map((id) => jsonRun(["source-card", "read", id]));
+writeJson("production-source-cards.json", productionCards.map((card) => ({
+  id: card.id,
+  title: card.title,
+  url: card.url,
+  source_type: card.source_type,
+  provider: card.provider,
+  claims: card.claims,
+  content_sha256: card.content_sha256,
+  retrieved_at: card.retrieved_at,
+  metadata: card.metadata,
+})));
+
+const query = process.env.ARCWELL_RESEARCH_SYNTHESIS_QUERY
+  || "Synthesize how OpenClaw and BirdClaw lessons should shape Arcwell's local-first source ingestion, X/social memory, channel controller, and research digest architecture. Preserve caveats, cite source-card ids, and avoid treating generated synthesis as primary evidence.";
+
+log("creating disposable research run");
+const workflow = jsonRun(["research", "run", query], { env: commandEnv() });
+const runId = workflow.run?.id || workflow.id;
+assert(runId, "research run response did not include a run id", workflow);
+writeJson("workflow.json", workflow);
+
+const addedCards = [];
+for (const card of productionCards) {
+  log(`copying production source card ${card.id}: ${card.title}`);
+  const copied = jsonRun([
+    "source-card", "add",
+    "--title", card.title,
+    "--url", card.url,
+    "--source-type", card.source_type || "web",
+    "--provider", card.provider || "production-copy",
+    "--summary", `${card.summary}\n\nProduction provenance: copied from source card ${card.id}; content_sha256=${card.content_sha256}.`,
+    "--claims-json", JSON.stringify(cardClaims(card)),
+  ], { env: commandEnv() });
+  const copiedCard = copied.source_card || copied;
+  const copiedId = copiedCard.id;
+  addedCards.push({
+    original_id: card.id,
+    copied_id: copiedId,
+    title: card.title,
+    url: card.url,
+    source_type: card.source_type,
+    provider: card.provider,
+  });
+  jsonRun([
+    "research", "link-source-card",
+    runId,
+    copiedId,
+    "--source-family", card.source_type || card.provider || "source-card",
+    "--read-depth", "full-text",
+    "--triage-status", "must-read-primary",
+    "--notes", `Copied from production source card ${card.id}; original content_sha256=${card.content_sha256}.`,
+  ], { env: commandEnv() });
+  jsonRun([
+    "research", "ingest-claims",
+    runId,
+    copiedId,
+    "--provider", "production-source-card-copy",
+    "--model", "source-card-claims",
+    "--output-json", JSON.stringify(extractionClaims(card)),
+  ], { env: commandEnv() });
+}
+writeJson("copied-source-cards.json", addedCards);
+
+log("building deterministic evidence pack and baseline audit");
+const sources = jsonRun(["research", "sources", runId], { env: commandEnv() });
+const claims = jsonRun(["research", "claims", runId], { env: commandEnv() });
+jsonRun(["research", "clusters", runId], { env: commandEnv() });
+const skeptic = jsonRun(["research", "skeptic", runId], { env: commandEnv() });
+const evidencePack = jsonRun(["research", "evidence-pack", runId], { env: commandEnv() });
+const auditBefore = jsonRun(["research", "audit-run", runId], { env: commandEnv() });
+writeJson("sources.json", sources);
+writeJson("claims.json", claims);
+writeJson("skeptic.json", skeptic);
+writeJson("evidence-pack.json", evidencePack);
+writeJson("audit-before-editorial.json", auditBefore);
+
+assert(sources.length >= 4, "proof needs at least four copied production sources", { count: sources.length });
+assert(claims.length >= 4, "proof needs structured claims from production cards", { count: claims.length });
+assert(skeptic.ok === true, "skeptic pass must accept the copied source corpus", skeptic);
+assert(auditBefore.audit?.ok === true, "baseline run audit must have no errors before editorial", auditBefore.audit);
+
+if (provider === "openai" && !process.env.OPENAI_API_KEY) {
+  fail("OPENAI_API_KEY is required for live OpenAI synthesis proof");
+}
+
+log(`invoking live editorial drafter provider=${provider} model=${model}`);
+const draft = jsonRun([
+  "research", "editorial-invoke",
+  runId,
+  "editorial_drafter",
+  "--model-provider", provider,
+  "--model-name", model,
+  "--prompt-version", "synthesis-completion-v1",
+  "--input-artifact-id", evidencePack.id,
+  "--timeout-seconds", timeoutSeconds,
+], { env: commandEnv() });
+writeJson("editorial-draft.json", draft);
+assert(["completed", "accepted"].includes(draft.editorial_run?.status), "editorial drafter did not complete", draft.editorial_run);
+const draftArtifactId = draft.output_artifact?.id;
+assert(draftArtifactId, "editorial drafter did not produce an inspectable generated_synthesis artifact", draft);
+
+log("invoking live citation verifier against generated synthesis");
+const verifier = jsonRun([
+  "research", "editorial-invoke",
+  runId,
+  "citation_verifier",
+  "--model-provider", provider,
+  "--model-name", model,
+  "--prompt-version", "synthesis-citation-verifier-v1",
+  "--input-artifact-id", draftArtifactId,
+  "--timeout-seconds", timeoutSeconds,
+], { env: commandEnv() });
+writeJson("citation-verifier.json", verifier);
+assert(["completed", "accepted"].includes(verifier.editorial_run?.status), "citation verifier did not complete", verifier.editorial_run);
+const unsupportedCount = Number(verifier.editorial_run?.score?.unsupported_count
+  ?? verifier.editorial_run?.score?.unsupported_claims
+  ?? verifier.editorial_run?.score?.unsupported_factual_sentences
+  ?? 0);
+const unsupportedRate = Number(verifier.editorial_run?.score?.unsupported_rate
+  ?? verifier.editorial_run?.score?.unsupported_claim_rate
+  ?? verifier.editorial_run?.score?.unsupported_factual_sentence_rate
+  ?? 0);
+assert(unsupportedCount === 0, "citation verifier found unsupported content", verifier.editorial_run?.score);
+assert(unsupportedRate === 0, "citation verifier found non-zero unsupported rate", verifier.editorial_run?.score);
+const verifierArtifactId = verifier.output_artifact?.id;
+assert(verifierArtifactId, "citation verifier did not produce an inspectable output artifact", verifier);
+
+log("invoking live adversarial evaluator against verifier output");
+const evaluator = jsonRun([
+  "research", "editorial-invoke",
+  runId,
+  "adversarial_evaluator",
+  "--model-provider", provider,
+  "--model-name", model,
+  "--prompt-version", "synthesis-adversarial-evaluator-v1",
+  "--input-artifact-id", verifierArtifactId,
+  "--timeout-seconds", timeoutSeconds,
+], { env: commandEnv() });
+writeJson("adversarial-evaluator.json", evaluator);
+assert(["completed", "accepted"].includes(evaluator.editorial_run?.status), "adversarial evaluator did not complete", evaluator.editorial_run);
+for (const key of ["unsupported_conclusions", "missing_caveats", "narrative_overreach", "overclaim_count", "blocking_issue_count"]) {
+  const value = Number(evaluator.editorial_run?.score?.[key] || 0);
+  assert(value === 0, `adversarial evaluator reported blocking issue: ${key}`, evaluator.editorial_run?.score);
+}
+const quality = evaluator.editorial_run?.score?.score
+  ?? evaluator.editorial_run?.score?.quality_score
+  ?? evaluator.editorial_run?.score?.analyst_usefulness_score;
+if (quality !== undefined) {
+  assert(Number(quality) >= 0.75, "adversarial evaluator quality score below gate", evaluator.editorial_run?.score);
+}
+
+log("running final run-scoped audit");
+const auditAfter = jsonRun(["research", "audit-run", runId], { env: commandEnv() });
+const finalRead = jsonRun(["research", "read", runId], { env: commandEnv() });
+writeJson("audit-after-editorial.json", auditAfter);
+writeJson("final-run-read.json", finalRead);
+assert(auditAfter.audit?.ok === true, "final run audit must have no errors", auditAfter.audit);
+const errorFindings = (auditAfter.audit?.findings || []).filter((finding) => finding.severity === "error");
+assert(errorFindings.length === 0, "final run audit still has error findings", errorFindings);
+const editorialRuns = Array.isArray(finalRead.editorial_runs) ? finalRead.editorial_runs : [];
+assert(editorialRuns.length >= 3, "final run should contain drafter, verifier, and evaluator runs", editorialRuns);
+
+const serialized = JSON.stringify({ draft, verifier, evaluator, auditAfter, finalRead });
+assert(!/sk-[A-Za-z0-9_-]{12,}/.test(serialized), "proof artifacts must not include API keys");
+
+const proofPacket = {
+  proof_name: "research-synthesis-completion-proof",
+  proof_level: provider === "openai"
+    ? "Live OpenAI model-backed synthesis, citation verification, and adversarial evaluation over copied production Arcwell source cards"
+    : "Model-backed synthesis proof over copied production Arcwell source cards",
+  proof_root: proofRoot,
+  arcwell_home: proofHome,
+  run_id: runId,
+  provider,
+  model,
+  source_cards: addedCards,
+  counts: {
+    copied_source_cards: sources.length,
+    extracted_claims: claims.length,
+    editorial_runs: editorialRuns.length,
+    audit_findings: (auditAfter.audit?.findings || []).length,
+    audit_errors: errorFindings.length,
+  },
+  artifacts: {
+    evidence_pack_id: evidencePack.id,
+    generated_synthesis_id: draftArtifactId,
+    citation_verifier_output_id: verifierArtifactId,
+    adversarial_evaluator_output_id: evaluator.output_artifact?.id || null,
+  },
+  editorial_scores: {
+    draft: draft.editorial_run?.score || {},
+    citation_verifier: verifier.editorial_run?.score || {},
+    adversarial_evaluator: evaluator.editorial_run?.score || {},
+  },
+  gates: {
+    source_cards_copied_from_production: sources.length >= 4,
+    structured_claims_present: claims.length >= 4,
+    baseline_audit_ok: auditBefore.audit?.ok === true,
+    final_audit_ok: auditAfter.audit?.ok === true,
+    citation_unsupported_count_zero: unsupportedCount === 0,
+    citation_unsupported_rate_zero: unsupportedRate === 0,
+    adversarial_blocking_issues_zero: true,
+    generated_synthesis_not_primary_evidence: finalRead.sources.every((record) =>
+      record.source_card?.source_type !== "generated_synthesis"
+      && record.source_card?.provider !== "research_editorial_invoke"
+    ),
+  },
+  remaining_risk: [
+    "This proves one bounded production-source-card synthesis chain, not every future deep-research topic or saturated-corpus editorial quality.",
+    "Warnings such as thin corpus remain visible in audit output when the proof intentionally uses a bounded source slice.",
+    "External X/Reddit live connector blockers remain separate from this synthesis-completion proof.",
+  ],
+};
+
+writeJson("proof-packet.json", proofPacket);
+console.log(JSON.stringify(proofPacket, null, 2));
+log(`synthesis completion proof passed: ${path.join(artifactDir, "proof-packet.json")}`);

@@ -308,11 +308,16 @@ PR, implementation note, or final report:
       digest alerts route approved candidates through that ledger with
       quiet-hours deferral; due generic retries reconcile digest rows. Live
       external digest-delivery proof remains open.
-- [ ] Add Reddit production-data proof through OAuth or another sanctioned
-      access path. Latest disposable proof attempt
+- [ ] Add daemon-side Reddit OAuth/scheduled fetch proof. Host-browser Reddit
+      listing ingestion is now production-data proven at
+      `.arcwell-dev/proofs/reddit-browser-production-proof-20260624T161717Z/artifacts/proof-packet.json`:
+      the Codex Chrome extension captured a real main-browser Reddit JSON page,
+      Arcwell persisted only a sanitized listing, wrote 10 source cards/wiki
+      pages/radar items, advanced `reddit:r/rust/hot`, recorded healthy
+      source-health, and passed radar audit. The unattended daemon/RSS proof
       `.arcwell-dev/proofs/radar-reddit-production-proof-20260624T150229Z-29771`
-      created a Reddit radar profile and adapter job but remained blocked by
-      Reddit HTTP 403 before any source-card projection.
+      remains blocked by Reddit HTTP 403 before source-card projection, and
+      recursive comment capture is still unproven for the browser path.
 - [ ] Extend radar live execution to authenticated X watch/recent-search data
       with copied/disposable-home source-health/cursor proof before promotion.
       `scripts/radar-x-production-proof` now provides a guarded disposable-home
@@ -323,15 +328,22 @@ PR, implementation note, or final report:
       is not a pass: OAuth refresh failed, app-bearer fallback returned 401,
       and the proof packet kept existing local X projection separate from
       current authenticated live fetch proof.
-- [ ] Add model-backed synthesis, live production delivery proof, live external
-      scheduled delivery/service proof, production cross-channel delivery proof,
-      production quiet-hours deferral, arbitrary/model-generated taxonomy
-      quality review, model-written synthesis quality proof, operational
-      wall-clock seven-day source-quality decay proof, broader ops controls,
-      and status promotion only after real-data gates pass. Fresh live OpenAI
-      model-score proof passed at
+- [ ] Add live production delivery proof, live external scheduled
+      delivery/service proof, production cross-channel delivery proof,
+      arbitrary/model-generated taxonomy quality review, operational wall-clock
+      seven-day source-quality decay proof, broader ops controls, and status
+      promotion only after real-data gates pass. Fresh live OpenAI model-score
+      proof passed at
       `.arcwell-dev/proofs/radar-model-score-production-proof-20260624T150127Z-28610/artifacts/proof-packet.json`;
-      it is a non-authorizing scoring overlay proof, not model synthesis proof.
+      it is a non-authorizing scoring overlay proof.
+- [x] Add bounded model-written synthesis quality proof over real production
+      Arcwell source-card data. Fresh live OpenAI proof passed at
+      `.arcwell-dev/proofs/research-synthesis-completion-proof-20260624T153639Z-75610/artifacts/proof-packet.json`:
+      six copied production source cards, 12 structured claims, live drafter,
+      citation verifier with zero unsupported count/rate, adversarial evaluator
+      with zero blocking issues, and final run-scoped audit ok. This does not
+      replace a saturated fresh report acceptance proof or digest-specific
+      ranking/synthesis quality.
 
 ## 6. Deep Research Quality And Host-Native Execution
 
