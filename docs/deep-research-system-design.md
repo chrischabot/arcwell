@@ -818,7 +818,7 @@ Implement extractors in stages:
    escaping in rendered reports, numeric/unit normalization where obvious.
 2. XLSX: use a structured workbook parser, preserve sheet names, formulas as
    untrusted source text, cached values when present, hidden-sheet warnings, and
-   merged-cell warnings.
+   merged-cell/date-time metadata warnings.
 3. Text PDFs: bounded external or Rust-backed extraction path with page anchors,
    text hashes, encrypted/password detection, page limits, byte limits, and
    explicit scanned-PDF detection.
@@ -845,9 +845,10 @@ Implement extractors in stages:
    CLI/MCP read surfaces.
 2. Done locally: add CSV/TSV extractor with severe tests for formula injection,
    malformed CSV, multiline cells, unsupported inputs, and numeric parsing.
-3. Done locally: add XLSX extractor with formula-preservation and malformed
-   workbook tests. Hidden sheets, merged cells, date display, and broader sheet
-   selection fixtures still need expansion.
+3. Done locally: add XLSX extractor with formula-preservation, hidden/very-hidden
+   sheet skip warnings, merged-cell metadata/lowered confidence, date-time
+   normalization, and malformed workbook tests. Broader external workbook
+   fixtures still need expansion.
 4. Partially done: add bounded PDF text extraction with malformed-PDF
    fail-closed coverage. Encrypted, huge, scanned, rotated, and multi-page
    fixture coverage still needs to be added.
@@ -991,8 +992,9 @@ A model-backed report may be marked complete only when:
 - Done: document/span/table/cell schema.
 - Done: CSV/TSV extraction.
 - Done: XLSX extraction with sheet/table/cell artifacts, formula preservation as
-  untrusted text, cached-value metadata, and malformed-workbook fail-closed
-  tests.
+  untrusted text, cached-value metadata, hidden/very-hidden sheet skip warnings,
+  merged-cell metadata/lowered confidence, date-time normalization, and
+  malformed-workbook fail-closed tests.
 - Done: bounded PDF text extraction.
 - Done: PDF layout table candidates with explicit heuristic warnings and cell
   anchors. A severe wrapped-header/irregular-column/footnoted-cell fixture now

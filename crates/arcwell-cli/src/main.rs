@@ -6846,6 +6846,10 @@ fn render_ops_summary(snapshot: &OpsSnapshot, score: &OpsHealthScore) -> String 
             "X portable export",
             summarize_x_portable_export(&snapshot.x_stats),
         ),
+        (
+            "X digest queue",
+            summarize_x_digest_queue(&snapshot.x_stats),
+        ),
     ] {
         html.push_str(&format!(
             "<div class=\"metric\"><span>{}</span><b>{}</b></div>",
@@ -7285,6 +7289,18 @@ fn summarize_x_portable_export(stats: &XStatsReport) -> String {
             "no completed export; latest failed".to_string()
         }
         None => "not exported".to_string(),
+    }
+}
+
+fn summarize_x_digest_queue(stats: &XStatsReport) -> String {
+    let projection_summary = summarize_count_map(&stats.digest_projections_by_status);
+    if stats.digest_candidates_linked_to_x == 0 && projection_summary == "none" {
+        "none".to_string()
+    } else {
+        format!(
+            "{} linked candidate(s); projections {}",
+            stats.digest_candidates_linked_to_x, projection_summary
+        )
     }
 }
 
@@ -15880,6 +15896,11 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
             .sync_runs_by_status
             .insert("failed".to_string(), 2);
         snapshot
+            .x_stats
+            .digest_projections_by_status
+            .insert("completed".to_string(), 3);
+        snapshot.x_stats.digest_candidates_linked_to_x = 2;
+        snapshot
             .health
             .warnings
             .push("X FTS drift: 1 canonical tweet(s) are missing FTS rows".to_string());
@@ -15891,6 +15912,8 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
         assert!(html.contains("projection_failures:1"));
         assert!(html.contains("X sync statuses"));
         assert!(html.contains("failed:2"));
+        assert!(html.contains("X digest queue"));
+        assert!(html.contains("2 linked candidate(s); projections completed:3"));
         assert!(html.contains("failed X sync run"));
         assert!(html.contains("X FTS drift"));
     }

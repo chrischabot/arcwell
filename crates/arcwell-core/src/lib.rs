@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use calamine::{Data, Range, Reader, open_workbook_auto};
+use calamine::{Data, Range, Reader, SheetType, SheetVisible, open_workbook_auto};
 use chrono::{DateTime, Duration as ChronoDuration, Timelike, Utc};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -2343,6 +2343,8 @@ pub struct XStatsReport {
     pub drift: XStatsDrift,
     pub portable_export: XPortableExportFreshness,
     pub projections_by_status: BTreeMap<String, i64>,
+    pub digest_projections_by_status: BTreeMap<String, i64>,
+    pub digest_candidates_linked_to_x: i64,
     pub sync_runs_by_status: BTreeMap<String, i64>,
     pub source_health_by_status: BTreeMap<String, i64>,
     pub watch_sources_by_status: BTreeMap<String, i64>,
@@ -5202,6 +5204,49 @@ impl Store {
         Ok(())
     }
 
+    fn upsert_x_digest_projection(
+        &self,
+        x_id: &str,
+        source_card_id: &str,
+        wiki_page_id: Option<&str>,
+        digest_candidate_id: &str,
+    ) -> Result<()> {
+        validate_key(x_id)?;
+        validate_id(source_card_id)?;
+        if let Some(wiki_page_id) = wiki_page_id {
+            validate_id(wiki_page_id)?;
+        }
+        validate_id(digest_candidate_id)?;
+        let id = format!(
+            "xproj-{}",
+            &sha256(format!("tweet\n{x_id}\ndigest_candidate").as_bytes())[..32]
+        );
+        let now_value = now();
+        self.conn.execute(
+            r#"
+            INSERT INTO x_projections
+              (id, entity_kind, entity_id, projection_kind, status, source_card_id, wiki_page_id, digest_candidate_id, last_error, created_at, updated_at)
+            VALUES (?1, 'tweet', ?2, 'digest_candidate', 'completed', ?3, ?4, ?5, NULL, ?6, ?6)
+            ON CONFLICT(entity_kind, entity_id, projection_kind) DO UPDATE SET
+              status = 'completed',
+              source_card_id = excluded.source_card_id,
+              wiki_page_id = COALESCE(excluded.wiki_page_id, x_projections.wiki_page_id),
+              digest_candidate_id = excluded.digest_candidate_id,
+              last_error = NULL,
+              updated_at = excluded.updated_at
+            "#,
+            params![
+                id,
+                x_id,
+                source_card_id,
+                wiki_page_id,
+                digest_candidate_id,
+                now_value
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn x_stats(&self) -> Result<XStatsReport> {
         let mut latest_stmt = self.conn.prepare(
             r#"
@@ -5257,6 +5302,12 @@ impl Store {
             portable_export: self.x_portable_export_freshness()?,
             projections_by_status: self.grouped_counts(
                 "SELECT status, COUNT(*) FROM x_projections GROUP BY status ORDER BY status",
+            )?,
+            digest_projections_by_status: self.grouped_counts(
+                "SELECT status, COUNT(*) FROM x_projections WHERE projection_kind = 'digest_candidate' GROUP BY status ORDER BY status",
+            )?,
+            digest_candidates_linked_to_x: self.count_query(
+                "SELECT COUNT(DISTINCT digest_candidate_id) FROM x_projections WHERE projection_kind = 'digest_candidate' AND digest_candidate_id IS NOT NULL",
             )?,
             sync_runs_by_status: self.grouped_counts(
                 "SELECT status, COUNT(*) FROM x_sync_runs GROUP BY status ORDER BY status",
@@ -14845,10 +14896,19 @@ impl Store {
         let digest_candidate_id = if source_card_ids.is_empty() {
             None
         } else {
-            Some(
-                self.create_digest_candidate(&format!("X watch @{handle}"), &source_card_ids)?
-                    .id,
-            )
+            let candidate =
+                self.create_digest_candidate(&format!("X watch @{handle}"), &source_card_ids)?;
+            for item in &report.items {
+                if let Some(source_card_id) = item.source_card_id.as_deref() {
+                    self.upsert_x_digest_projection(
+                        &item.x_id,
+                        source_card_id,
+                        item.wiki_page_id.as_deref(),
+                        &candidate.id,
+                    )?;
+                }
+            }
+            Some(candidate.id)
         };
 
         self.record_source_success(SourceHealthUpdate {
@@ -34185,6 +34245,7 @@ fn extract_xlsx_document(document_id: &str, path: &Path) -> Result<ResearchDocum
         }
     };
     let sheet_names = workbook.sheet_names().to_vec();
+    let sheet_metadata = workbook.sheets_metadata().to_vec();
     let mut tables = Vec::new();
     let mut warning_flags = Vec::new();
     let mut total_cells = 0usize;
@@ -34192,6 +34253,23 @@ fn extract_xlsx_document(document_id: &str, path: &Path) -> Result<ResearchDocum
         if sheet_index >= 50 {
             warning_flags.push("xlsx_sheet_count_capped".to_string());
             break;
+        }
+        if let Some(metadata) = sheet_metadata.get(sheet_index) {
+            if metadata.typ != SheetType::WorkSheet {
+                warning_flags.push("xlsx_non_worksheet_sheets_skipped".to_string());
+                continue;
+            }
+            match metadata.visible {
+                SheetVisible::Visible => {}
+                SheetVisible::Hidden => {
+                    warning_flags.push("xlsx_hidden_sheets_skipped".to_string());
+                    continue;
+                }
+                SheetVisible::VeryHidden => {
+                    warning_flags.push("xlsx_very_hidden_sheets_skipped".to_string());
+                    continue;
+                }
+            }
         }
         let range = match workbook.worksheet_range(sheet_name) {
             Ok(range) => range,
@@ -34222,6 +34300,7 @@ fn extract_xlsx_document(document_id: &str, path: &Path) -> Result<ResearchDocum
         let formula_range = workbook.worksheet_formula(sheet_name).ok();
         let data_start = range.start().unwrap_or((0, 0));
         let xml_formulas = xlsx_formula_map(path, sheet_index).unwrap_or_default();
+        let merged_ranges = xlsx_merge_ranges(path, sheet_index).unwrap_or_default();
         let table_id = format!("sheet-{}-table-1", sheet_index + 1);
         let table_db_id = research_table_db_id(document_id, &table_id);
         let rows = range.rows().collect::<Vec<_>>();
@@ -34235,6 +34314,8 @@ fn extract_xlsx_document(document_id: &str, path: &Path) -> Result<ResearchDocum
             .unwrap_or_default();
         let mut cells = Vec::new();
         let mut formula_count = 0usize;
+        let mut merged_cell_count = 0usize;
+        let mut date_cell_count = 0usize;
         for row_index in 0..row_count {
             let row = rows.get(row_index).copied().unwrap_or(&[]);
             for column_index in 0..column_count {
@@ -34242,6 +34323,16 @@ fn extract_xlsx_document(document_id: &str, path: &Path) -> Result<ResearchDocum
                 let cached_text = xlsx_cell_cached_text(cell);
                 let absolute_row = data_start.0 as usize + row_index;
                 let absolute_column = data_start.1 as usize + column_index;
+                let date_time_iso = xlsx_cell_datetime_iso(cell);
+                if date_time_iso.is_some() {
+                    date_cell_count += 1;
+                }
+                let merged_range = merged_ranges
+                    .iter()
+                    .find(|range| range.contains(absolute_row, absolute_column));
+                if merged_range.is_some() {
+                    merged_cell_count += 1;
+                }
                 let formula = xml_formulas
                     .get(&(absolute_row, absolute_column))
                     .map(String::as_str)
@@ -34276,21 +34367,34 @@ fn extract_xlsx_document(document_id: &str, path: &Path) -> Result<ResearchDocum
                     .map(|value| sanitize_work_text(value, 500))
                     .transpose()?
                     .filter(|value| !value.trim().is_empty());
-                let bbox_json = formula.as_ref().map(|formula| {
-                    json!({
-                        "sheet_name": sheet_name,
-                        "row_index": row_index,
-                        "column_index": column_index,
-                        "formula": formula,
-                        "cached_value": cached_text,
-                        "formula_evaluation": "not_performed"
-                    })
-                });
+                let bbox_json = xlsx_cell_metadata_json(
+                    sheet_name,
+                    row_index,
+                    column_index,
+                    absolute_row,
+                    absolute_column,
+                    formula.as_deref(),
+                    &cached_text,
+                    date_time_iso.as_deref(),
+                    merged_range,
+                );
                 let (numeric_value, footnote_refs) = if formula.is_some() {
                     parse_table_numeric_and_footnote_refs(&cached_text)
+                } else if date_time_iso.is_some() {
+                    (None, Vec::new())
                 } else {
                     parse_table_numeric_and_footnote_refs(&raw)
                 };
+                let mut confidence: f64 = 0.95;
+                if formula.is_some() {
+                    confidence = confidence.min(0.86);
+                }
+                if merged_range.is_some() {
+                    confidence = confidence.min(0.78);
+                }
+                if date_time_iso.is_some() {
+                    confidence = confidence.min(0.90);
+                }
                 cells.push(ResearchTableCell {
                     id: research_table_cell_id(&table_db_id, row_index, column_index),
                     table_id: table_db_id.clone(),
@@ -34304,7 +34408,7 @@ fn extract_xlsx_document(document_id: &str, path: &Path) -> Result<ResearchDocum
                     unit: None,
                     footnote_refs,
                     bbox_json,
-                    confidence: if formula.is_some() { 0.86 } else { 0.95 },
+                    confidence,
                 });
             }
         }
@@ -34313,6 +34417,26 @@ fn extract_xlsx_document(document_id: &str, path: &Path) -> Result<ResearchDocum
             warning_flags.push("xlsx_formulas_preserved_as_untrusted_text".to_string());
             table_warnings.push("xlsx_formulas_preserved_as_untrusted_text".to_string());
         }
+        if merged_cell_count > 0 {
+            warning_flags.push("xlsx_merged_cells_present".to_string());
+            table_warnings.push("xlsx_merged_cells_present".to_string());
+        }
+        if date_cell_count > 0 {
+            warning_flags.push("xlsx_datetime_cells_normalized".to_string());
+            table_warnings.push("xlsx_datetime_cells_normalized".to_string());
+        }
+        let mut table_confidence: f64 = 0.95;
+        if formula_count > 0 {
+            table_confidence = table_confidence.min(0.90);
+        }
+        if merged_cell_count > 0 {
+            table_confidence = table_confidence.min(0.86);
+        }
+        if date_cell_count > 0 {
+            table_confidence = table_confidence.min(0.92);
+        }
+        table_warnings.sort();
+        table_warnings.dedup();
         tables.push(ResearchTableRecord {
             table: ResearchTable {
                 id: table_db_id,
@@ -34331,12 +34455,14 @@ fn extract_xlsx_document(document_id: &str, path: &Path) -> Result<ResearchDocum
                         "rows": row_count,
                         "columns": column_count
                     },
-                    "formula_cells": formula_count
+                    "formula_cells": formula_count,
+                    "merged_cells": merged_cell_count,
+                    "datetime_cells": date_cell_count
                 })),
                 row_count,
                 column_count,
                 extraction_method: "calamine-xlsx".to_string(),
-                confidence: if formula_count > 0 { 0.9 } else { 0.95 },
+                confidence: table_confidence,
                 warning_flags: table_warnings,
             },
             cells,
@@ -34413,6 +34539,67 @@ fn xlsx_formula_map(path: &Path, sheet_index: usize) -> Result<BTreeMap<(usize, 
     Ok(formulas)
 }
 
+#[derive(Debug, Clone)]
+struct XlsxMergedRange {
+    start_row: usize,
+    start_column: usize,
+    end_row: usize,
+    end_column: usize,
+    reference: String,
+}
+
+impl XlsxMergedRange {
+    fn contains(&self, row: usize, column: usize) -> bool {
+        row >= self.start_row
+            && row <= self.end_row
+            && column >= self.start_column
+            && column <= self.end_column
+    }
+}
+
+fn xlsx_merge_ranges(path: &Path, sheet_index: usize) -> Result<Vec<XlsxMergedRange>> {
+    let file = fs::File::open(path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let sheet_path = format!("xl/worksheets/sheet{}.xml", sheet_index + 1);
+    let mut file = archive.by_name(&sheet_path)?;
+    let mut xml = String::new();
+    file.read_to_string(&mut xml)?;
+    let doc = roxmltree::Document::parse(&xml)?;
+    let mut ranges = Vec::new();
+    for merge_cell in doc
+        .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name() == "mergeCell")
+    {
+        let Some(reference) = merge_cell.attribute("ref") else {
+            continue;
+        };
+        let Some((start, end)) = xlsx_cell_range_ref_to_zero_based(reference) else {
+            continue;
+        };
+        ranges.push(XlsxMergedRange {
+            start_row: start.0.min(end.0),
+            start_column: start.1.min(end.1),
+            end_row: start.0.max(end.0),
+            end_column: start.1.max(end.1),
+            reference: reference.to_string(),
+        });
+    }
+    Ok(ranges)
+}
+
+fn xlsx_cell_range_ref_to_zero_based(range_ref: &str) -> Option<((usize, usize), (usize, usize))> {
+    let mut parts = range_ref.split(':');
+    let start = xlsx_cell_ref_to_zero_based(parts.next()?.trim())?;
+    let end = match parts.next() {
+        Some(value) => xlsx_cell_ref_to_zero_based(value.trim())?,
+        None => start,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((start, end))
+}
+
 fn xlsx_cell_ref_to_zero_based(cell_ref: &str) -> Option<(usize, usize)> {
     let mut column = 0usize;
     let mut row = 0usize;
@@ -34442,7 +34629,54 @@ fn xlsx_cell_ref_to_zero_based(cell_ref: &str) -> Option<(usize, usize)> {
     Some((row - 1, column - 1))
 }
 
+fn xlsx_cell_metadata_json(
+    sheet_name: &str,
+    row_index: usize,
+    column_index: usize,
+    absolute_row: usize,
+    absolute_column: usize,
+    formula: Option<&str>,
+    cached_text: &str,
+    date_time_iso: Option<&str>,
+    merged_range: Option<&XlsxMergedRange>,
+) -> Option<Value> {
+    if formula.is_none() && date_time_iso.is_none() && merged_range.is_none() {
+        return None;
+    }
+    let mut metadata = Map::new();
+    metadata.insert("sheet_name".to_string(), json!(sheet_name));
+    metadata.insert("row_index".to_string(), json!(row_index));
+    metadata.insert("column_index".to_string(), json!(column_index));
+    metadata.insert("absolute_row_index".to_string(), json!(absolute_row));
+    metadata.insert("absolute_column_index".to_string(), json!(absolute_column));
+    if let Some(formula) = formula {
+        metadata.insert("formula".to_string(), json!(formula));
+        metadata.insert("cached_value".to_string(), json!(cached_text));
+        metadata.insert("formula_evaluation".to_string(), json!("not_performed"));
+    }
+    if let Some(date_time_iso) = date_time_iso {
+        metadata.insert("value_kind".to_string(), json!("date_time"));
+        metadata.insert("date_time_iso".to_string(), json!(date_time_iso));
+    }
+    if let Some(range) = merged_range {
+        metadata.insert(
+            "merged_range".to_string(),
+            json!({
+                "ref": range.reference,
+                "start_row_index": range.start_row,
+                "start_column_index": range.start_column,
+                "end_row_index": range.end_row,
+                "end_column_index": range.end_column
+            }),
+        );
+    }
+    Some(Value::Object(metadata))
+}
+
 fn xlsx_cell_cached_text(cell: &Data) -> String {
+    if let Some(date_time_iso) = xlsx_cell_datetime_iso(cell) {
+        return date_time_iso;
+    }
     match cell {
         Data::Empty => String::new(),
         Data::String(value) => value.clone(),
@@ -34453,6 +34687,25 @@ fn xlsx_cell_cached_text(cell: &Data) -> String {
         Data::DateTimeIso(value) => value.clone(),
         Data::DurationIso(value) => value.clone(),
         Data::Error(value) => format!("{value:?}"),
+    }
+}
+
+fn xlsx_cell_datetime_iso(cell: &Data) -> Option<String> {
+    match cell {
+        Data::DateTime(value) => {
+            let (year, month, day, hour, minute, second, millis) = value.to_ymd_hms_milli();
+            if millis > 0 {
+                Some(format!(
+                    "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}"
+                ))
+            } else {
+                Some(format!(
+                    "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}"
+                ))
+            }
+        }
+        Data::DateTimeIso(value) => Some(value.clone()),
+        _ => None,
     }
 }
 
@@ -60706,12 +60959,42 @@ reason = "test denies X link expansion"
         assert!(page.content.contains("Ignore previous instructions"));
         let digests = store.list_digest_candidates().unwrap();
         assert_eq!(digests.len(), 1);
+        let source_card_id = item.source_card_id.clone().unwrap();
+        assert_eq!(digests[0].source_card_ids, vec![source_card_id.clone()]);
+        let (projection_status, projection_source_card_id, projection_digest_candidate_id): (
+            String,
+            Option<String>,
+            Option<String>,
+        ) = store
+            .conn
+            .query_row(
+                r#"
+                SELECT status, source_card_id, digest_candidate_id
+                FROM x_projections
+                WHERE entity_kind = 'tweet'
+                  AND entity_id = '300'
+                  AND projection_kind = 'digest_candidate'
+                "#,
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(projection_status, "completed");
         assert_eq!(
-            digests[0].source_card_ids,
-            vec![item.source_card_id.unwrap()]
+            projection_source_card_id.as_deref(),
+            Some(source_card_id.as_str())
+        );
+        assert_eq!(
+            projection_digest_candidate_id.as_deref(),
+            Some(digests[0].id.as_str())
         );
         let stats = store.x_stats().unwrap();
         assert_eq!(stats.canonical.sync_runs, 1);
+        assert_eq!(stats.digest_candidates_linked_to_x, 1);
+        assert_eq!(
+            stats.digest_projections_by_status.get("completed").copied(),
+            Some(1)
+        );
         assert_eq!(stats.sync_runs_by_status.get("completed").copied(), Some(1));
         assert_eq!(stats.latest_sync_runs[0].stream, "watch_monitor");
         assert_eq!(
@@ -60744,18 +61027,6 @@ reason = "test denies X link expansion"
                 metadata: json!({ "origin": "test" }),
             })
             .unwrap();
-        store
-            .import_x_json_value(&json!([
-                {
-                    "id": "300",
-                    "author": "openai",
-                    "text": "Already imported.",
-                    "url": "https://x.com/openai/status/300",
-                    "created_at": "2026-06-20T00:00:00Z"
-                }
-            ]))
-            .unwrap();
-        store.set_cursor("x:watch:openai", "300").unwrap();
         let base = mock_base_server(
             r#"{
               "data": [
@@ -60772,8 +61043,44 @@ reason = "test denies X link expansion"
             "application/json",
         );
 
-        let report = store
+        let first = store
             .x_monitor_watch_sources_with_base(10, 10, &base)
+            .unwrap();
+        assert_eq!(first.failed_sources, 0);
+        assert_eq!(first.imported, 1);
+        assert_eq!(first.digest_candidates, 1);
+        assert_eq!(
+            store.get_cursor("x:watch:openai").unwrap().unwrap().value,
+            "300"
+        );
+        assert_eq!(store.list_digest_candidates().unwrap().len(), 1);
+        let projection_count_before: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM x_projections WHERE projection_kind = 'digest_candidate'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(projection_count_before, 1);
+
+        let base_retry = mock_base_server(
+            r#"{
+              "data": [
+                {
+                  "id": "300",
+                  "author_id": "u1",
+                  "text": "Already imported.",
+                  "created_at": "2026-06-20T00:00:00Z"
+                }
+              ],
+              "includes": { "users": [{ "id": "u1", "username": "openai" }] },
+              "meta": { "newest_id": "300" }
+            }"#,
+            "application/json",
+        );
+        let report = store
+            .x_monitor_watch_sources_with_base(10, 10, &base_retry)
             .unwrap();
         assert_eq!(report.failed_sources, 0);
         assert_eq!(report.imported, 0);
@@ -60784,7 +61091,22 @@ reason = "test denies X link expansion"
             "300"
         );
         assert_eq!(store.list_x_items(None).unwrap().len(), 1);
-        assert!(store.list_digest_candidates().unwrap().is_empty());
+        assert_eq!(store.list_digest_candidates().unwrap().len(), 1);
+        let projection_count_after: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM x_projections WHERE projection_kind = 'digest_candidate'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(projection_count_after, 1);
+        let stats = store.x_stats().unwrap();
+        assert_eq!(stats.digest_candidates_linked_to_x, 1);
+        assert_eq!(
+            stats.digest_projections_by_status.get("completed").copied(),
+            Some(1)
+        );
     }
 
     #[test]
@@ -64199,6 +64521,221 @@ The platform has achieved zero escapes in production since 2024.
         assert!(formula_cell.raw_text.starts_with("=SUM"));
         assert!(formula_cell.normalized_text.starts_with("'="));
         assert!(formula_cell.bbox_json.is_some());
+    }
+
+    #[test]
+    fn severe_research_document_xlsx_marks_hidden_merged_and_date_cells() {
+        // CLAIM: XLSX extraction does not silently turn hidden sheets, merged
+        // ranges, or date-formatted cells into clean analyst evidence.
+        // ORACLE: hidden/very-hidden sheets are skipped with document warnings,
+        // merged cells carry merge metadata and downgraded confidence, and date
+        // cells are normalized as date/time values rather than numeric measures.
+        // SEVERITY: Severe because hidden sheets and merged/date formatting are
+        // common in public spreadsheets and can otherwise poison table-backed
+        // claims with invisible or mis-anchored evidence.
+        let store = test_store("research-document-xlsx-hard");
+        let workflow = store
+            .create_deep_research_run("hard spreadsheet extraction")
+            .unwrap();
+        let path = store.paths().home.join("hard.xlsx");
+        write_hard_xlsx_fixture(&path).unwrap();
+
+        let record = store
+            .extract_research_document_file(ResearchDocumentInput {
+                run_id: workflow.run.id.clone(),
+                research_source_id: None,
+                source_card_id: None,
+                path,
+                media_type: None,
+            })
+            .unwrap();
+
+        assert_eq!(record.document.extraction_status, "extracted");
+        assert_eq!(record.document.sheet_count, 3);
+        assert_eq!(record.tables.len(), 1);
+        assert!(
+            record
+                .document
+                .warning_flags
+                .contains(&"xlsx_hidden_sheets_skipped".to_string())
+        );
+        assert!(
+            record
+                .document
+                .warning_flags
+                .contains(&"xlsx_very_hidden_sheets_skipped".to_string())
+        );
+        assert!(
+            record
+                .document
+                .warning_flags
+                .contains(&"xlsx_merged_cells_present".to_string())
+        );
+        assert!(
+            record
+                .document
+                .warning_flags
+                .contains(&"xlsx_datetime_cells_normalized".to_string())
+        );
+
+        let table = &record.tables[0];
+        assert_eq!(table.table.sheet_name.as_deref(), Some("Visible"));
+        assert!(table.table.confidence < 0.9);
+        assert!(
+            table
+                .table
+                .warning_flags
+                .contains(&"xlsx_merged_cells_present".to_string())
+        );
+        assert!(
+            table
+                .table
+                .warning_flags
+                .contains(&"xlsx_datetime_cells_normalized".to_string())
+        );
+        assert!(
+            table
+                .cells
+                .iter()
+                .all(|cell| !cell.raw_text.contains("sk-hidden"))
+        );
+
+        let merged_header = table
+            .cells
+            .iter()
+            .find(|cell| cell.row_index == 0 && cell.column_index == 0)
+            .unwrap();
+        assert_eq!(merged_header.raw_text, "Merged Header");
+        assert!(merged_header.confidence < 0.8);
+        assert_eq!(
+            merged_header
+                .bbox_json
+                .as_ref()
+                .and_then(|value| value.pointer("/merged_range/ref"))
+                .and_then(Value::as_str),
+            Some("A1:B1")
+        );
+
+        let date_cell = table
+            .cells
+            .iter()
+            .find(|cell| cell.row_index == 1 && cell.column_index == 2)
+            .unwrap();
+        assert!(date_cell.raw_text.starts_with("2024-01-15T"));
+        assert!(date_cell.normalized_text.starts_with("2024-01-15T"));
+        assert_eq!(date_cell.numeric_value, None);
+        assert_eq!(
+            date_cell
+                .bbox_json
+                .as_ref()
+                .and_then(|value| value.get("value_kind"))
+                .and_then(Value::as_str),
+            Some("date_time")
+        );
+    }
+
+    fn write_hard_xlsx_fixture(path: &Path) -> Result<()> {
+        let file = fs::File::create(path)?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in [
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>"#,
+            ),
+            (
+                "_rels/.rels",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#,
+            ),
+            (
+                "xl/workbook.xml",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Visible" sheetId="1" r:id="rId1"/>
+    <sheet name="Hidden Secrets" sheetId="2" state="hidden" r:id="rId2"/>
+    <sheet name="Very Hidden Secrets" sheetId="3" state="veryHidden" r:id="rId3"/>
+  </sheets>
+</workbook>"#,
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>"#,
+            ),
+            (
+                "xl/styles.xml",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="0"/>
+  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+  <borders count="1"><border/></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:C2"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>Merged Header</t></is></c>
+      <c r="C1" t="inlineStr"><is><t>Reported At</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="inlineStr"><is><t>Alpha</t></is></c>
+      <c r="B2"><v>123.5</v></c>
+      <c r="C2" s="1"><v>45306</v></c>
+    </row>
+  </sheetData>
+  <mergeCells count="1"><mergeCell ref="A1:B1"/></mergeCells>
+</worksheet>"#,
+            ),
+            (
+                "xl/worksheets/sheet2.xml",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>sk-hidden-sheet-token</t></is></c></row></sheetData>
+</worksheet>"#,
+            ),
+            (
+                "xl/worksheets/sheet3.xml",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>very hidden decision notes</t></is></c></row></sheetData>
+</worksheet>"#,
+            ),
+        ] {
+            zip.start_file(name, options)?;
+            zip.write_all(body.as_bytes())?;
+        }
+        zip.finish()?;
+        Ok(())
     }
 
     #[test]

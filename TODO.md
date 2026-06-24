@@ -239,7 +239,11 @@ PR, implementation note, or final report:
       audit, delivery-attempt integration, quiet-hours schedule, and no
       model-score-only sending. Generic digest candidate creation now normalizes
       and dedupes exact same-topic/source-card sets so repeated X/watch flows do
-      not inflate the queue.
+      not inflate the queue. X monitor-created candidates now also write
+      idempotent `x_projections` rows linking canonical tweet ids, source-card
+      ids, and digest candidate ids, and `/ops/ui` surfaces linked X digest
+      queue counts; review states, score freshness, delivery-denial audit,
+      delivery-attempt integration, and quiet-hours scheduling remain open.
 - [ ] Add X heuristic scoring before model scoring, with score rows as overlays,
       stale-score labels, schema-validated model output, eval fixtures,
       cost-decision rows, private-content exclusion, and proof that scores never
@@ -254,7 +258,7 @@ PR, implementation note, or final report:
       health/source-card rows render as inert text, verifies token-like provider
       errors are redacted, checks desktop/mobile overflow, and preserves
       screenshots plus a proof packet at
-      `.arcwell-dev/proofs/ops-ui-x-browser-smoke-20260624T104008Z-90805`.
+      `.arcwell-dev/proofs/ops-ui-x-browser-smoke-20260624T105627Z-44257`.
 - [x] Add X portable export/import/validate for canonical tweet rows with
       deterministic JSONL shards, manifest hashes, row counts, token-like
       content scan, malformed JSONL failure, idempotent import, unsafe shard
@@ -398,6 +402,15 @@ PR, implementation note, or final report:
       projected 16 Copilot source-card items, wrote 3 `semantic_topic` groups,
       marked 5 `duplicate_topic` scores, selected 8 items, produced 16
       source-quality windows, and passed `radar audit` with zero findings.
+- [x] Run copied-home production-data semantic/topic dedupe breadth proof over
+      the real 2,500-card source corpus:
+      `scripts/radar-semantic-dedupe-production-proof` preserved
+      `.arcwell-dev/proofs/radar-semantic-dedupe-production-proof-20260624T105627Z-44256`,
+      ran `copilot`, `codex`, `agent`, and `github` source-card profiles in a
+      sanitized disposable home, wrote 1,482 radar items/scores, kept 304
+      `semantic_topic` groups and 621 `duplicate_topic` rows inspectable with
+      source-card/wiki provenance, passed four clean audits, and wrote four
+      non-delivery summaries.
 - [x] Add local/manual radar summary delivery attempts through authorized
       Telegram/email channel send paths, with CLI/MCP/slash surfaces, durable
       `radar_deliveries` rows linked to channel delivery attempts, idempotency
@@ -468,10 +481,10 @@ PR, implementation note, or final report:
 - [ ] Add model-backed synthesis, live production delivery proof, live external
       scheduled delivery/service proof, production cross-channel delivery proof,
       production quiet-hours deferral, production-data semantic dedupe breadth
-      across more profiles, non-source-family taxonomy category-balance review,
-      live model-scoring quality proof, seven-day source-quality trend/decay
-      proof, broader ops controls, and status promotion only after real-data
-      gates pass.
+      for live-fetched public runs, non-source-family taxonomy category-balance
+      review, live model-scoring quality proof, seven-day source-quality
+      trend/decay proof, broader ops controls, and status promotion only after
+      real-data gates pass.
 - [x] Preserve tracked email defaults as `agent@example.com` and
       `user@example.com`; `scripts/verify-tracked-email-placeholders` now scans
       git-tracked files and fails on non-placeholder email domains so real local
@@ -768,7 +781,9 @@ PR, implementation note, or final report:
       extraction, formula/cell handling, and publication-grade citation links.
       Current local coverage includes CSV/XLSX formulas, malformed inputs, PDF
       heuristic tables, and a severe wrapped-header/irregular-column/footnoted
-      PDF table fixture that lowers confidence and preserves footnote refs; the
+      PDF table fixture that lowers confidence and preserves footnote refs, plus
+      a severe XLSX fixture for hidden/very-hidden sheet skipping,
+      merged-cell metadata/lowered confidence, and date-time normalization; the
       broader external difficult-document matrix remains open.
 - [x] Add publication-grade claim/report citation-quality checks that block
       completed status when evidence links are missing, stale, generated, or too

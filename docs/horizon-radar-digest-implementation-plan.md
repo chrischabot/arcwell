@@ -226,6 +226,17 @@ Evidence:
   four cursors with healthy source-health, passed both audits, and wrote two
   non-delivery summaries. This proves source-family category quotas, not
   arbitrary future topic taxonomies.
+- Production-data deterministic semantic/topic dedupe breadth proof now exists
+  through `scripts/radar-semantic-dedupe-production-proof`, preserved at
+  `.arcwell-dev/proofs/radar-semantic-dedupe-production-proof-20260624T105627Z-44256/artifacts/proof-packet.json`.
+  A sanitized copied home from the real 2,500-card source corpus ran `copilot`,
+  `codex`, `agent`, and `github` source-card profiles, wrote 1,482
+  normalized/indexed/scored radar items, kept 304 `semantic_topic` groups and
+  621 `duplicate_topic` rows inspectable with source-card/wiki provenance,
+  exposed matching run/ops score-distribution counts, passed four audits, and
+  wrote four non-delivery summaries. This proves deterministic local semantic
+  dedupe breadth over real source cards, not model semantic dedupe or live
+  adapter semantic breadth.
 
 Still not proven by this slice:
 
@@ -233,8 +244,8 @@ Still not proven by this slice:
 - Scheduled recurring radar service execution, retry/recovery, and ops UI
   controls.
 - Full recursive HN/Reddit community-thread capture.
-- Production-data semantic/topic dedupe breadth across more profiles,
-  non-source-family taxonomy category-balance review, source-quality decay.
+- Live-adapter semantic/topic dedupe breadth, non-source-family taxonomy
+  category-balance review, source-quality decay.
 - Model-backed interestingness, enrichment/synthesis, and delivery attempts.
 - Full production multi-source proof including authenticated/private sources.
 
@@ -1627,6 +1638,8 @@ Exit gate:
 - [x] Score explanations.
 - [x] Exact URL/native dedupe.
 - [x] Local deterministic semantic/topic dedupe.
+- [x] Copied-home production-data deterministic semantic/topic dedupe breadth
+      over the real source-card corpus.
 - [x] Local deterministic category/source balancing.
 - [x] Optional local/mock model scoring overlays.
 - [ ] Optional model semantic dedupe.

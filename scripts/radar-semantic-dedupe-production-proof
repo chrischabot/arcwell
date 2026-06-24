@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in node sqlite3; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for this proof." >&2
+    exit 2
+  fi
+done
+
+RUN_STAMP="${ARCWELL_RADAR_SEMANTIC_PROOF_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_RADAR_SEMANTIC_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/radar-semantic-dedupe-production-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+SOURCE_HOME="${ARCWELL_RADAR_SEMANTIC_SOURCE_HOME:-${ARCWELL_HOME:-$HOME/.arcwell}}"
+SOURCE_DB="$SOURCE_HOME/arcwell.sqlite3"
+export ARCWELL_HOME="${ARCWELL_RADAR_SEMANTIC_PROOF_HOME:-$PROOF_ROOT/home}"
+PROOF_DB="$ARCWELL_HOME/arcwell.sqlite3"
+
+if [ ! -f "$SOURCE_DB" ]; then
+  echo "BLOCKED: source Arcwell database not found: $SOURCE_DB" >&2
+  exit 2
+fi
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME/wiki"
+
+log() {
+  printf '[radar-semantic-proof] %s\n' "$*"
+}
+
+log "proof root: $PROOF_ROOT"
+log "source home: $SOURCE_HOME"
+log "copying source database into disposable proof home"
+sqlite3 "$SOURCE_DB" ".backup '$PROOF_DB'"
+sqlite3 "$PROOF_DB" <<'SQL'
+DELETE FROM secret_values;
+DELETE FROM secret_refs;
+SQL
+
+if [ -d "$SOURCE_HOME/wiki/pages" ]; then
+  mkdir -p "$ARCWELL_HOME/wiki"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a "$SOURCE_HOME/wiki/pages" "$ARCWELL_HOME/wiki/" >/dev/null
+  else
+    cp -R "$SOURCE_HOME/wiki/pages" "$ARCWELL_HOME/wiki/"
+  fi
+fi
+
+SOURCE_CARD_COUNT="$(sqlite3 "$PROOF_DB" "SELECT COUNT(*) FROM source_cards;")"
+SECRET_VALUE_COUNT="$(sqlite3 "$PROOF_DB" "SELECT COUNT(*) FROM secret_values;")"
+SECRET_REF_COUNT="$(sqlite3 "$PROOF_DB" "SELECT COUNT(*) FROM secret_refs;")"
+if [ "$SOURCE_CARD_COUNT" -lt "${ARCWELL_RADAR_SEMANTIC_MIN_SOURCE_CARDS:-1000}" ]; then
+  echo "BLOCKED: copied source-card corpus is too small for breadth proof: $SOURCE_CARD_COUNT" >&2
+  exit 2
+fi
+if [ "$SECRET_VALUE_COUNT" != "0" ] || [ "$SECRET_REF_COUNT" != "0" ]; then
+  echo "BLOCKED: disposable proof home still contains secret rows" >&2
+  exit 2
+fi
+
+QUERIES_JSON='[
+  { "name": "copilot", "query": "copilot", "min_items": 10, "min_groups": 2, "min_duplicate_topic": 4 },
+  { "name": "codex", "query": "codex", "min_items": 50, "min_groups": 2, "min_duplicate_topic": 5 },
+  { "name": "agent", "query": "agent", "min_items": 200, "min_groups": 20, "min_duplicate_topic": 50 },
+  { "name": "github", "query": "github", "min_items": 500, "min_groups": 100, "min_duplicate_topic": 200 }
+]'
+
+printf '%s\n' "$QUERIES_JSON" >"$ARTIFACT_DIR/queries.json"
+
+node - "$ARTIFACT_DIR/queries.json" <<'NODE' >"$ARTIFACT_DIR/query-names.txt"
+const fs = require("fs");
+for (const query of JSON.parse(fs.readFileSync(process.argv[2], "utf8"))) {
+  console.log(query.name);
+}
+NODE
+
+while IFS= read -r query_name; do
+  query="$(node - "$ARTIFACT_DIR/queries.json" "$query_name" <<'NODE'
+const fs = require("fs");
+const [queriesPath, name] = process.argv.slice(2);
+const query = JSON.parse(fs.readFileSync(queriesPath, "utf8")).find((item) => item.name === name);
+process.stdout.write(query.query);
+NODE
+)"
+  profile_name="semantic-dedupe-${query_name}-${RUN_STAMP}"
+  log "creating profile for query: $query"
+  "$ARCWELL_BIN" radar profile create "$profile_name" \
+    --description "Production-data semantic/topic dedupe breadth proof for real source-card query '$query'." \
+    --window-hours 720 \
+    --min-score 1 \
+    --max-items 80 \
+    --source-card-query "$query" \
+    >"$ARTIFACT_DIR/profile-$query_name.json"
+
+  log "running radar profile: $profile_name"
+  "$ARCWELL_BIN" radar run "$profile_name" >"$ARTIFACT_DIR/run-$query_name.json"
+  run_id="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(j.run.id)' "$ARTIFACT_DIR/run-$query_name.json")"
+  printf '%s\n' "$run_id" >"$ARTIFACT_DIR/run-id-$query_name.txt"
+
+  "$ARCWELL_BIN" radar stage "$run_id" >"$ARTIFACT_DIR/stage-$query_name.json"
+  "$ARCWELL_BIN" radar audit "$run_id" >"$ARTIFACT_DIR/audit-$query_name.json"
+  "$ARCWELL_BIN" radar summarize "$run_id" >"$ARTIFACT_DIR/summary-write-$query_name.json"
+  "$ARCWELL_BIN" radar summary "$run_id" >"$ARTIFACT_DIR/summary-read-$query_name.json"
+done <"$ARTIFACT_DIR/query-names.txt"
+
+"$ARCWELL_BIN" ops >"$ARTIFACT_DIR/ops.json"
+
+log "validating semantic/topic dedupe proof artifacts"
+node - "$ARTIFACT_DIR" "$PROOF_ROOT" "$SOURCE_HOME" "$SOURCE_CARD_COUNT" "$QUERIES_JSON" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const [artifactDir, proofRoot, sourceHome, sourceCardCountRaw, queriesRaw] = process.argv.slice(2);
+const sourceCardCount = Number(sourceCardCountRaw);
+const queries = JSON.parse(queriesRaw);
+
+const read = (name) => JSON.parse(fs.readFileSync(path.join(artifactDir, name), "utf8"));
+const ops = read("ops.json");
+
+function assert(condition, message, detail) {
+  if (!condition) {
+    console.error(`FAIL: ${message}`);
+    if (detail !== undefined) console.error(JSON.stringify(detail, null, 2));
+    process.exit(1);
+  }
+}
+
+function validateRun(config) {
+  const name = config.name;
+  const profile = read(`profile-${name}.json`);
+  const runReport = read(`run-${name}.json`);
+  const stage = read(`stage-${name}.json`);
+  const audit = read(`audit-${name}.json`);
+  const summaryWrite = read(`summary-write-${name}.json`);
+  const summaryRead = read(`summary-read-${name}.json`);
+
+  assert(profile.status === "local_proof_ready", `${name}: profile should be locally supported`, profile);
+  assert(runReport.run?.id === stage.run?.id, `${name}: run report and stage should agree`, { run: runReport.run, stage: stage.run });
+  assert(stage.run?.status === "scored", `${name}: run should be scored`, stage.run);
+  assert(stage.items.length >= config.min_items, `${name}: real source-card query returned too few radar items`, { count: stage.items.length, min: config.min_items });
+
+  const semanticGroups = stage.dedup_groups.filter((group) => group.dedup_kind === "semantic_topic");
+  const itemById = new Map(stage.items.map((item) => [item.id, item]));
+  const scoreByItem = new Map(stage.scores.filter((score) => score.score_kind === "heuristic_v1").map((score) => [score.item_id, score]));
+  const heuristicScores = [...scoreByItem.values()];
+  const duplicateTopicScores = heuristicScores.filter((score) => score.status === "duplicate_topic");
+  const selectedScores = heuristicScores.filter((score) => score.status === "selected");
+
+  assert(semanticGroups.length >= config.min_groups, `${name}: semantic_topic group count too low`, { actual: semanticGroups.length, min: config.min_groups });
+  assert(duplicateTopicScores.length >= config.min_duplicate_topic, `${name}: duplicate_topic score count too low`, { actual: duplicateTopicScores.length, min: config.min_duplicate_topic });
+  assert(selectedScores.length > 0, `${name}: semantic dedupe should not suppress all selected items`, heuristicScores);
+
+  const nonPrimaryMembers = new Set();
+  for (const group of semanticGroups) {
+    assert(group.member_item_ids.length >= 2, `${name}: semantic group must have at least two members`, group);
+    assert(group.member_item_ids.includes(group.primary_item_id), `${name}: semantic group primary must be listed as a member`, group);
+    assert(
+      String(group.reason || "").includes("deterministic topic similarity") &&
+        String(group.reason || "").includes("shared tokens"),
+      `${name}: semantic group should explain shared-token basis`,
+      group
+    );
+    for (const memberId of group.member_item_ids) {
+      const item = itemById.get(memberId);
+      assert(item, `${name}: semantic group member should exist as radar item`, group);
+      assert(item.source_card_id, `${name}: semantic group item should preserve source-card provenance`, item);
+      assert(item.wiki_page_id, `${name}: semantic group item should preserve wiki provenance`, item);
+      if (memberId !== group.primary_item_id) {
+        nonPrimaryMembers.add(memberId);
+        const score = scoreByItem.get(memberId);
+        assert(score, `${name}: non-primary semantic member should keep a score row`, { group, memberId });
+        assert(score.status === "duplicate_topic", `${name}: non-primary semantic member should be marked duplicate_topic`, { group, score });
+        assert((score.tags || []).includes("semantic-dedupe"), `${name}: duplicate_topic score should carry semantic-dedupe tag`, score);
+        assert((score.tags || []).includes("duplicate"), `${name}: duplicate_topic score should carry duplicate tag`, score);
+        assert(String(score.reason || "").includes("duplicate suppressed by dedupe group"), `${name}: duplicate_topic score should explain suppression`, score);
+      }
+    }
+  }
+  assert(nonPrimaryMembers.size === duplicateTopicScores.length, `${name}: duplicate_topic rows should exactly match semantic non-primary members`, { nonPrimaryMembers: nonPrimaryMembers.size, duplicateTopicScores: duplicateTopicScores.length });
+
+  const distribution = stage.run.metadata?.score_distribution || {};
+  assert(distribution.score_kind === "heuristic_v1", `${name}: run metadata should record heuristic score distribution`, distribution);
+  assert(Number(distribution.score_count || 0) === heuristicScores.length, `${name}: score distribution should cover heuristic rows`, { distribution, heuristicScores: heuristicScores.length });
+  assert(distribution.status_counts?.duplicate_topic === duplicateTopicScores.length, `${name}: score distribution should count duplicate_topic rows`, { distribution, duplicateTopicScores: duplicateTopicScores.length });
+  assert(Number(distribution.selected_count || 0) === selectedScores.length, `${name}: score distribution selected_count should match selected rows`, { distribution, selectedScores: selectedScores.length });
+
+  assert(audit.ok === true, `${name}: radar audit should pass`, audit);
+  assert(audit.findings.length === 0, `${name}: radar audit should have no findings`, audit);
+  assert(audit.item_count === stage.items.length, `${name}: audit item count should match stage`, audit);
+  assert(summaryWrite.audit_status === "audit_ok", `${name}: summary write should require audit_ok`, summaryWrite);
+  assert(summaryRead.id === summaryWrite.id, `${name}: summary read should return written summary`, { summaryWrite, summaryRead });
+  assert(summaryRead.metadata?.not_delivery === true, `${name}: summary must remain non-delivery`, summaryRead.metadata);
+  assert(summaryRead.metadata?.semantic_dedupe === "deterministic_local", `${name}: summary should declare deterministic local semantic dedupe`, summaryRead.metadata);
+  assert(summaryRead.metadata?.semantic_dedup_group_count === semanticGroups.length, `${name}: summary semantic group count should match stage`, { summary: summaryRead.metadata, semanticGroups: semanticGroups.length });
+
+  const opsRun = (ops.radar_runs || []).find((run) => run.id === stage.run.id);
+  assert(opsRun, `${name}: ops snapshot should expose radar run`, ops.radar_runs);
+  assert(opsRun.metadata?.score_distribution?.status_counts?.duplicate_topic === duplicateTopicScores.length, `${name}: ops radar run should expose duplicate_topic distribution`, opsRun);
+
+  return {
+    query: config.query,
+    profile_id: profile.id,
+    profile_name: profile.name,
+    run_id: stage.run.id,
+    item_count: stage.items.length,
+    selected_count: selectedScores.length,
+    semantic_topic_group_count: semanticGroups.length,
+    duplicate_topic_count: duplicateTopicScores.length,
+    exact_duplicate_count: heuristicScores.filter((score) => String(score.status).startsWith("duplicate_") && score.status !== "duplicate_topic").length,
+    score_distribution: {
+      score_kind: distribution.score_kind,
+      score_count: distribution.score_count,
+      selected_count: distribution.selected_count,
+      status_counts: distribution.status_counts,
+      min: distribution.min,
+      max: distribution.max,
+      average: distribution.average,
+      p50: distribution.p50,
+      p90: distribution.p90,
+    },
+    audit: {
+      ok: audit.ok,
+      item_count: audit.item_count,
+      fts_count: audit.fts_count,
+      scored_count: audit.scored_count,
+      findings: audit.findings,
+    },
+    summary: {
+      id: summaryRead.id,
+      audit_status: summaryRead.audit_status,
+      item_count: summaryRead.item_ids.length,
+      source_card_count: summaryRead.source_card_ids.length,
+      semantic_dedup_group_count: summaryRead.metadata.semantic_dedup_group_count,
+      not_delivery: summaryRead.metadata.not_delivery,
+    },
+  };
+}
+
+const runs = queries.map(validateRun);
+const aggregate = {
+  query_count: runs.length,
+  source_card_corpus_count: sourceCardCount,
+  item_count: runs.reduce((sum, run) => sum + run.item_count, 0),
+  selected_count: runs.reduce((sum, run) => sum + run.selected_count, 0),
+  semantic_topic_group_count: runs.reduce((sum, run) => sum + run.semantic_topic_group_count, 0),
+  duplicate_topic_count: runs.reduce((sum, run) => sum + run.duplicate_topic_count, 0),
+  exact_duplicate_count: runs.reduce((sum, run) => sum + run.exact_duplicate_count, 0),
+};
+assert(aggregate.semantic_topic_group_count >= 120, "aggregate semantic group count is too low for breadth proof", aggregate);
+assert(aggregate.duplicate_topic_count >= 250, "aggregate duplicate_topic count is too low for breadth proof", aggregate);
+assert(aggregate.item_count >= 800, "aggregate item count is too low for breadth proof", aggregate);
+
+const proofPacket = {
+  proof_name: "radar-semantic-dedupe-production-proof",
+  proof_level: "Production Data Proof for deterministic semantic/topic dedupe breadth over copied real source-card corpus",
+  proof_root: proofRoot,
+  source_home: sourceHome,
+  arcwell_home: process.env.ARCWELL_HOME,
+  source_card_corpus_count: sourceCardCount,
+  queries: queries.map((query) => query.query),
+  runs,
+  aggregate,
+  sanitized_copy: {
+    secret_values: 0,
+    secret_refs: 0,
+  },
+  remaining_risk: [
+    "This proves deterministic local semantic/topic dedupe breadth over a copied real source-card corpus, not model semantic dedupe.",
+    "It does not prove live X authentication, Reddit OAuth, model-backed synthesis/enrichment, live external delivery, seven-day source-quality decay, or long-running scheduled service execution.",
+  ],
+};
+
+fs.writeFileSync(
+  path.join(artifactDir, "proof-packet.json"),
+  `${JSON.stringify(proofPacket, null, 2)}\n`
+);
+process.stdout.write(JSON.stringify(proofPacket, null, 2));
+NODE
+
+printf '\n'
+log "semantic/topic dedupe production-data proof passed"
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"
