@@ -744,6 +744,27 @@ pub struct RadarSourceQuality {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarSourceQualityTrend {
+    pub source_kind: String,
+    pub locator: String,
+    pub window_count: i64,
+    pub run_count: i64,
+    pub raw_count: i64,
+    pub accepted_count: i64,
+    pub failure_count: i64,
+    pub non_healthy_count: i64,
+    pub average_score: Option<f64>,
+    pub signal_to_noise: Option<f64>,
+    pub duplicate_rate: Option<f64>,
+    pub quality_score: f64,
+    pub latest_status: String,
+    pub trend_status: String,
+    pub first_window_start: String,
+    pub last_window_end: String,
+    pub latest_run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RadarFetchReport {
     pub run: RadarRun,
     pub profile: RadarProfile,
@@ -19106,8 +19127,14 @@ impl Store {
             items_inserted += 1;
         }
         self.rebuild_radar_fts(Some(&run_id))?;
-        let _dedup_groups = self.dedupe_radar_run(&run_id)?;
-        let scores_inserted = self.score_radar_run(&run_id)?;
+        let exact_dedup_groups = self.dedupe_radar_run(&run_id)?;
+        let initial_scores_inserted = self.score_radar_run(&run_id)?;
+        let semantic_dedup_groups = self.dedupe_radar_run_semantic_topics(&run_id)?;
+        let scores_inserted = if semantic_dedup_groups > 0 {
+            self.score_radar_run(&run_id)?
+        } else {
+            initial_scores_inserted
+        };
         let source_quality_windows = self.record_radar_source_quality_window(&run_id)?;
         let selected_items = self.count_radar_selected_scores(&run_id)?;
         let raw_count = source_cards.len() as i64;
@@ -19136,6 +19163,8 @@ impl Store {
         run_metadata["live_fetch_failed"] = json!(live_failed);
         run_metadata["live_fetch_pre_job_failed"] = json!(live_pre_job_failed);
         run_metadata["adapter_job_count"] = json!(adapter_jobs.len());
+        run_metadata["exact_dedup_groups"] = json!(exact_dedup_groups);
+        run_metadata["semantic_dedup_groups"] = json!(semantic_dedup_groups);
         run_metadata["source_quality_windows"] = json!(source_quality_windows);
         self.conn.execute(
             r#"
@@ -19476,6 +19505,10 @@ impl Store {
             &sha256(format!("{run_id}\n{language}\n{format}").as_bytes())[..32]
         );
         let created_at = now();
+        let semantic_dedup_groups = dedup_groups
+            .iter()
+            .filter(|group| group.dedup_kind == "semantic_topic")
+            .count();
         let metadata = json!({
             "proof_level": "deterministic_local_summary",
             "provenance_boundary": "summary is generated from radar_items and radar_scores; it is not source evidence",
@@ -19485,7 +19518,8 @@ impl Store {
             "score_status_counts": status_counts,
             "not_delivery": true,
             "not_model_backed": true,
-            "semantic_dedupe": "not_run"
+            "semantic_dedupe": if semantic_dedup_groups > 0 { "deterministic_local" } else { "no_groups" },
+            "semantic_dedup_group_count": semantic_dedup_groups
         });
         self.conn.execute(
             r#"
@@ -19639,6 +19673,54 @@ impl Store {
             "#,
         )?;
         rows(stmt.query_map([], radar_source_quality_from_row)?)
+    }
+
+    pub fn list_radar_source_quality_trends(
+        &self,
+        min_windows: usize,
+        limit: usize,
+    ) -> Result<Vec<RadarSourceQualityTrend>> {
+        if !(1..=10_000).contains(&min_windows) {
+            bail!("min_windows must be between 1 and 10000");
+        }
+        if !(1..=500).contains(&limit) {
+            bail!("limit must be between 1 and 500");
+        }
+        let mut grouped: BTreeMap<(String, String), Vec<RadarSourceQuality>> = BTreeMap::new();
+        for row in self.list_all_radar_source_quality()? {
+            grouped
+                .entry((row.source_kind.clone(), row.locator.clone()))
+                .or_default()
+                .push(row);
+        }
+        let mut trends = Vec::new();
+        for ((source_kind, locator), mut rows) in grouped {
+            if rows.len() < min_windows {
+                continue;
+            }
+            rows.sort_by(|left, right| {
+                left.window_end
+                    .cmp(&right.window_end)
+                    .then(left.created_at.cmp(&right.created_at))
+                    .then(left.run_id.cmp(&right.run_id))
+            });
+            trends.push(radar_source_quality_trend_from_rows(
+                source_kind,
+                locator,
+                &rows,
+            )?);
+        }
+        trends.sort_by(|left, right| {
+            right
+                .quality_score
+                .partial_cmp(&left.quality_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(right.last_window_end.cmp(&left.last_window_end))
+                .then(left.source_kind.cmp(&right.source_kind))
+                .then(left.locator.cmp(&right.locator))
+        });
+        trends.truncate(limit);
+        Ok(trends)
     }
 
     pub fn rebuild_radar_fts(&self, run_id: Option<&str>) -> Result<usize> {
@@ -19879,7 +19961,18 @@ impl Store {
             .iter()
             .map(|item| item.id.clone())
             .collect::<BTreeSet<_>>();
+        let score_by_item = radar_scores
+            .iter()
+            .map(|score| (score.item_id.clone(), score))
+            .collect::<BTreeMap<_, _>>();
+        let mut expected_duplicate_status_by_item: BTreeMap<String, String> = BTreeMap::new();
         for group in self.list_radar_dedup_groups(run_id)? {
+            let expected_status = match group.dedup_kind.as_str() {
+                "canonical_url" => Some("duplicate_url"),
+                "same_native_id" => Some("duplicate_native_id"),
+                "semantic_topic" => Some("duplicate_topic"),
+                _ => Some("duplicate_exact"),
+            };
             if group.member_item_ids.len() < 2 {
                 findings.push(RadarAuditFinding {
                     severity: "high".to_string(),
@@ -19910,6 +20003,49 @@ impl Store {
                         evidence: format!("group_id={} member_id={member_id}", group.id),
                     });
                 }
+                if member_id != &group.primary_item_id
+                    && let Some(status) = expected_status
+                {
+                    expected_duplicate_status_by_item
+                        .entry(member_id.clone())
+                        .or_insert_with(|| status.to_string());
+                    match score_by_item.get(member_id) {
+                        Some(score) if score.status == status => {}
+                        Some(score) => findings.push(RadarAuditFinding {
+                            severity: "high".to_string(),
+                            code: "radar_dedup_score_drift".to_string(),
+                            message: "Radar score status does not match dedupe group membership."
+                                .to_string(),
+                            evidence: format!(
+                                "group_id={} member_id={} expected_status={} actual_status={}",
+                                group.id, member_id, status, score.status
+                            ),
+                        }),
+                        None => findings.push(RadarAuditFinding {
+                            severity: "high".to_string(),
+                            code: "radar_dedup_score_missing".to_string(),
+                            message: "A non-primary dedupe member has no radar score.".to_string(),
+                            evidence: format!(
+                                "group_id={} member_id={} expected_status={}",
+                                group.id, member_id, status
+                            ),
+                        }),
+                    }
+                }
+            }
+        }
+        for score in &radar_scores {
+            if score.status.starts_with("duplicate_")
+                && expected_duplicate_status_by_item.get(&score.item_id) != Some(&score.status)
+            {
+                findings.push(RadarAuditFinding {
+                    severity: "high".to_string(),
+                    code: "radar_duplicate_score_without_matching_group".to_string(),
+                    message:
+                        "Radar score marks an item duplicate without matching dedupe membership."
+                            .to_string(),
+                    evidence: format!("item_id={} status={}", score.item_id, score.status),
+                });
             }
         }
         let unsupported = unsupported_radar_selectors(&run.source_selection);
@@ -20062,6 +20198,77 @@ impl Store {
         Ok(inserted)
     }
 
+    fn dedupe_radar_run_semantic_topics(&self, run_id: &str) -> Result<usize> {
+        validate_id(run_id)?;
+        self.conn.execute(
+            "DELETE FROM radar_dedup_groups WHERE run_id = ?1 AND dedup_kind = 'semantic_topic'",
+            params![run_id],
+        )?;
+        let items_by_id = self
+            .list_radar_items(run_id)?
+            .into_iter()
+            .map(|item| (item.id.clone(), item))
+            .collect::<BTreeMap<_, _>>();
+        let exact_duplicate_ids = self
+            .radar_duplicate_status_by_item(run_id)?
+            .into_iter()
+            .filter(|(_, (status, _, _))| status != "duplicate_topic")
+            .map(|(item_id, _)| item_id)
+            .collect::<BTreeSet<_>>();
+        let mut topic_clusters: Vec<Vec<(RadarItem, RadarScore)>> = Vec::new();
+        let mut topic_signatures: Vec<BTreeSet<String>> = Vec::new();
+        let mut topic_candidates = self
+            .list_radar_scores(run_id)?
+            .into_iter()
+            .filter(|score| {
+                !matches!(
+                    score.status.as_str(),
+                    "below_threshold" | "duplicate_url" | "duplicate_native_id" | "duplicate_exact"
+                )
+            })
+            .filter_map(|score| {
+                let item = items_by_id.get(&score.item_id)?.clone();
+                if exact_duplicate_ids.contains(&item.id) {
+                    return None;
+                }
+                let signature = radar_topic_dedupe_signature(&item)?;
+                Some((item, score, signature))
+            })
+            .collect::<Vec<_>>();
+        topic_candidates.sort_by(|left, right| {
+            right
+                .1
+                .score
+                .partial_cmp(&left.1.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.0.title.cmp(&right.0.title))
+                .then_with(|| left.0.id.cmp(&right.0.id))
+        });
+        for (item, score, signature) in topic_candidates {
+            if let Some(index) = topic_signatures
+                .iter()
+                .position(|existing| radar_topic_signatures_match(existing, &signature))
+            {
+                topic_clusters[index].push((item, score));
+                topic_signatures[index].extend(signature);
+            } else {
+                topic_clusters.push(vec![(item, score)]);
+                topic_signatures.push(signature);
+            }
+        }
+
+        let mut inserted = 0usize;
+        for members in topic_clusters {
+            if members.len() < 2 {
+                continue;
+            }
+            let group = radar_topic_dedup_group(run_id, members)?;
+            self.insert_radar_dedup_group(&group)?;
+            inserted += 1;
+        }
+        Ok(inserted)
+    }
+
     fn insert_radar_dedup_group(&self, group: &RadarDedupGroup) -> Result<()> {
         self.conn.execute(
             r#"
@@ -20095,6 +20302,7 @@ impl Store {
             let status = match group.dedup_kind.as_str() {
                 "canonical_url" => "duplicate_url",
                 "same_native_id" => "duplicate_native_id",
+                "semantic_topic" => "duplicate_topic",
                 _ => "duplicate_exact",
             };
             for member_id in &group.member_item_ids {
@@ -20199,7 +20407,11 @@ impl Store {
                 duplicate_status_by_item.get(&item.id)
             {
                 tags.push("duplicate".to_string());
-                tags.push("exact-dedupe".to_string());
+                if status == "duplicate_topic" {
+                    tags.push("semantic-dedupe".to_string());
+                } else {
+                    tags.push("exact-dedupe".to_string());
+                }
                 reason = format!(
                     "{reason}; duplicate suppressed by dedupe group {group_id}; primary item {primary_item_id}"
                 );
@@ -29431,6 +29643,140 @@ fn radar_source_quality_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Ra
     })
 }
 
+fn radar_source_quality_trend_from_rows(
+    source_kind: String,
+    locator: String,
+    rows: &[RadarSourceQuality],
+) -> Result<RadarSourceQualityTrend> {
+    let Some(first) = rows.first() else {
+        bail!("radar source-quality trend requires at least one window");
+    };
+    let latest = rows
+        .last()
+        .expect("non-empty radar source-quality rows checked above");
+    let run_count = rows
+        .iter()
+        .map(|row| row.run_id.as_str())
+        .collect::<BTreeSet<_>>()
+        .len() as i64;
+    let raw_count = rows.iter().map(|row| row.raw_count).sum::<i64>();
+    let accepted_count = rows.iter().map(|row| row.accepted_count).sum::<i64>();
+    let failure_count = rows.iter().map(|row| row.failure_count).sum::<i64>();
+    let non_healthy_count = rows.iter().filter(|row| row.status != "healthy").count() as i64;
+    let average_score = weighted_optional_average(
+        rows.iter()
+            .filter_map(|row| row.average_score.map(|value| (value, row.raw_count))),
+    );
+    let signal_to_noise = if raw_count > 0 {
+        Some(accepted_count as f64 / raw_count as f64)
+    } else {
+        weighted_optional_average(
+            rows.iter()
+                .filter_map(|row| row.signal_to_noise.map(|value| (value, row.raw_count))),
+        )
+    };
+    let duplicate_rate = weighted_optional_average(
+        rows.iter()
+            .filter_map(|row| row.duplicate_rate.map(|value| (value, row.raw_count))),
+    );
+    let failure_rate = failure_count as f64 / rows.len().max(1) as f64;
+    let quality_score =
+        radar_source_quality_score(average_score, signal_to_noise, duplicate_rate, failure_rate);
+    let trend_status = radar_source_quality_trend_status(rows);
+    Ok(RadarSourceQualityTrend {
+        source_kind,
+        locator,
+        window_count: rows.len() as i64,
+        run_count,
+        raw_count,
+        accepted_count,
+        failure_count,
+        non_healthy_count,
+        average_score,
+        signal_to_noise,
+        duplicate_rate,
+        quality_score,
+        latest_status: latest.status.clone(),
+        trend_status,
+        first_window_start: first.window_start.clone(),
+        last_window_end: latest.window_end.clone(),
+        latest_run_id: latest.run_id.clone(),
+    })
+}
+
+fn weighted_optional_average<I>(values: I) -> Option<f64>
+where
+    I: IntoIterator<Item = (f64, i64)>,
+{
+    let mut weighted_sum = 0.0;
+    let mut weight_sum = 0.0;
+    for (value, weight) in values {
+        let weight = weight.max(1) as f64;
+        weighted_sum += value * weight;
+        weight_sum += weight;
+    }
+    if weight_sum > 0.0 {
+        Some(weighted_sum / weight_sum)
+    } else {
+        None
+    }
+}
+
+fn radar_source_quality_score(
+    average_score: Option<f64>,
+    signal_to_noise: Option<f64>,
+    duplicate_rate: Option<f64>,
+    failure_rate: f64,
+) -> f64 {
+    let score_component = average_score.unwrap_or(0.0).clamp(0.0, 10.0) * 0.60;
+    let signal_component = signal_to_noise.unwrap_or(0.0).clamp(0.0, 1.0) * 4.0;
+    let duplicate_penalty = duplicate_rate.unwrap_or(0.0).clamp(0.0, 1.0) * 2.0;
+    let failure_penalty = failure_rate.clamp(0.0, 1.0) * 2.0;
+    (score_component + signal_component - duplicate_penalty - failure_penalty).clamp(0.0, 10.0)
+}
+
+fn radar_source_quality_trend_status(rows: &[RadarSourceQuality]) -> String {
+    let Some(latest) = rows.last() else {
+        return "insufficient_history".to_string();
+    };
+    if latest.status == "failed" {
+        return "failing".to_string();
+    }
+    if rows.len() < 2 {
+        return "insufficient_history".to_string();
+    }
+    let prior_rows = &rows[..rows.len() - 1];
+    let prior_signal = weighted_optional_average(
+        prior_rows
+            .iter()
+            .filter_map(|row| row.signal_to_noise.map(|value| (value, row.raw_count))),
+    );
+    let prior_score = weighted_optional_average(
+        prior_rows
+            .iter()
+            .filter_map(|row| row.average_score.map(|value| (value, row.raw_count))),
+    );
+    let signal_delta = match (latest.signal_to_noise, prior_signal) {
+        (Some(latest), Some(prior)) => Some(latest - prior),
+        _ => None,
+    };
+    let score_delta = match (latest.average_score, prior_score) {
+        (Some(latest), Some(prior)) => Some(latest - prior),
+        _ => None,
+    };
+    if signal_delta.is_some_and(|delta| delta <= -0.25)
+        || score_delta.is_some_and(|delta| delta <= -1.0)
+    {
+        "decaying".to_string()
+    } else if signal_delta.is_some_and(|delta| delta >= 0.10)
+        || score_delta.is_some_and(|delta| delta >= 0.50)
+    {
+        "improving".to_string()
+    } else {
+        "stable".to_string()
+    }
+}
+
 fn radar_dedup_group_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RadarDedupGroup> {
     let member_item_ids_json: String = row.get(4)?;
     Ok(RadarDedupGroup {
@@ -29709,6 +30055,17 @@ fn radar_exact_dedup_group(
     run_id: &str,
     dedup_kind: &str,
     reason: &str,
+    members: Vec<RadarItem>,
+) -> Result<RadarDedupGroup> {
+    radar_dedup_group(run_id, dedup_kind, reason, 1.0, None, members)
+}
+
+fn radar_dedup_group(
+    run_id: &str,
+    dedup_kind: &str,
+    reason: &str,
+    confidence: f64,
+    model_provider: Option<String>,
     mut members: Vec<RadarItem>,
 ) -> Result<RadarDedupGroup> {
     members.sort_by(|left, right| {
@@ -29736,11 +30093,151 @@ fn radar_exact_dedup_group(
         primary_item_id,
         member_item_ids,
         reason: reason.to_string(),
-        confidence: 1.0,
+        confidence,
+        model_provider,
+        cost_decision_id: None,
+        created_at: now(),
+    })
+}
+
+fn radar_topic_dedup_group(
+    run_id: &str,
+    mut members: Vec<(RadarItem, RadarScore)>,
+) -> Result<RadarDedupGroup> {
+    members.sort_by(|left, right| {
+        right
+            .1
+            .score
+            .partial_cmp(&left.1.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.0.title.cmp(&right.0.title))
+            .then_with(|| left.0.id.cmp(&right.0.id))
+    });
+    let items = members
+        .into_iter()
+        .map(|(item, _)| item)
+        .collect::<Vec<_>>();
+    let reason = radar_topic_dedup_reason(&items);
+    let primary_item_id = items
+        .first()
+        .map(|item| item.id.clone())
+        .context("radar topic dedupe group requires at least one member")?;
+    let member_item_ids = items.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+    let stable = format!("{run_id}\nsemantic_topic\n{}", member_item_ids.join("\n"));
+    Ok(RadarDedupGroup {
+        id: format!("radar-dedup-{}", &sha256(stable.as_bytes())[..32]),
+        run_id: run_id.to_string(),
+        dedup_kind: "semantic_topic".to_string(),
+        primary_item_id,
+        member_item_ids,
+        reason,
+        confidence: 0.82,
         model_provider: None,
         cost_decision_id: None,
         created_at: now(),
     })
+}
+
+fn radar_topic_dedupe_signature(item: &RadarItem) -> Option<BTreeSet<String>> {
+    let mut tokens = BTreeSet::new();
+    radar_topic_dedupe_collect_tokens(&item.title, &mut tokens);
+    for key in ["topic", "category", "category_group"] {
+        if let Some(value) = item.metadata.get(key).and_then(Value::as_str) {
+            radar_topic_dedupe_collect_tokens(value, &mut tokens);
+        }
+    }
+    let values = item
+        .metadata
+        .get("topics")
+        .or_else(|| item.metadata.get("categories"));
+    if let Some(values) = values.and_then(Value::as_array) {
+        for value in values {
+            if let Some(value) = value.as_str() {
+                radar_topic_dedupe_collect_tokens(value, &mut tokens);
+            }
+        }
+    }
+    if tokens.len() >= 3 {
+        Some(tokens)
+    } else {
+        None
+    }
+}
+
+fn radar_topic_dedupe_collect_tokens(text: &str, tokens: &mut BTreeSet<String>) {
+    for raw in text
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let mut token = raw.to_ascii_lowercase();
+        if token.len() > 4 && token.ends_with('s') {
+            token.pop();
+        }
+        if token.len() < 3 || token.len() > 48 || radar_topic_dedupe_stopword(&token) {
+            continue;
+        }
+        tokens.insert(token);
+    }
+}
+
+fn radar_topic_dedupe_stopword(token: &str) -> bool {
+    matches!(
+        token,
+        "about"
+            | "after"
+            | "again"
+            | "against"
+            | "all"
+            | "and"
+            | "are"
+            | "around"
+            | "from"
+            | "has"
+            | "into"
+            | "new"
+            | "not"
+            | "now"
+            | "over"
+            | "per"
+            | "the"
+            | "this"
+            | "through"
+            | "via"
+            | "with"
+            | "without"
+    )
+}
+
+fn radar_topic_signatures_match(left: &BTreeSet<String>, right: &BTreeSet<String>) -> bool {
+    let intersection = left.intersection(right).count();
+    if intersection < 3 {
+        return false;
+    }
+    let left_overlap = intersection as f64 / left.len() as f64;
+    let right_overlap = intersection as f64 / right.len() as f64;
+    let union = left.union(right).count();
+    let jaccard = intersection as f64 / union as f64;
+    (left_overlap >= 0.60 && right_overlap >= 0.60) || (intersection >= 4 && jaccard >= 0.45)
+}
+
+fn radar_topic_dedup_reason(members: &[RadarItem]) -> String {
+    let shared = members
+        .iter()
+        .filter_map(radar_topic_dedupe_signature)
+        .reduce(|left, right| left.intersection(&right).cloned().collect())
+        .unwrap_or_default()
+        .into_iter()
+        .take(8)
+        .collect::<Vec<_>>();
+    if shared.is_empty() {
+        "deterministic topic similarity".to_string()
+    } else {
+        format!(
+            "deterministic topic similarity over shared tokens: {}",
+            shared.join(", ")
+        )
+    }
 }
 
 fn normalize_radar_summary_language(language: &str) -> Result<String> {
@@ -29786,7 +30283,7 @@ fn render_radar_summary_markdown(
         "# {}\n\n",
         escape_research_report_text(&format!("Radar Summary: {}", profile.name))
     ));
-    markdown.push_str("> Trust label: GENERATED_RADAR_SUMMARY. This report is generated from local radar item and score records. It is not source evidence, not a live fetch, not model-backed synthesis, not semantic dedupe, and not delivery.\n\n");
+    markdown.push_str("> Trust label: GENERATED_RADAR_SUMMARY. This report is generated from local radar item and score records. It is not source evidence, not a live fetch, not model-backed synthesis, and not delivery; any semantic dedupe is deterministic local grouping only.\n\n");
     markdown.push_str("## Run\n\n");
     markdown.push_str(&format!(
         "- Run: `{}`\n- Profile: `{}`\n- Window: `{}` to `{}`\n- Status: `{}` / stage `{}`\n- Counts: raw {}, normalized {}, indexed {}, scored {}, selected {}, dedupe groups {}, summaries {}, deliveries {}\n- Audit: `{}` with {} finding(s)\n\n",
@@ -43634,8 +44131,10 @@ reason = "X OAuth disabled during policy test"
             .find(|row| row.locator == failed_feed)
             .expect("failed source-quality row");
         assert_eq!(failed_quality.raw_count, 1);
+        assert_eq!(failed_quality.accepted_count, 0);
         assert_eq!(failed_quality.failure_count, 1);
-        assert_eq!(failed_quality.status, "partial");
+        assert_eq!(failed_quality.status, "failed");
+        assert_eq!(failed_quality.duplicate_rate, Some(1.0));
         assert!(
             failed_quality.average_score.unwrap() < healthy_quality.average_score.unwrap(),
             "{quality:?}"
@@ -43687,6 +44186,243 @@ reason = "X OAuth disabled during policy test"
     }
 
     #[test]
+    fn severe_radar_source_quality_trends_rank_local_history_without_global_claims() {
+        // CLAIM: source-quality trends rank durable local history across runs,
+        // rather than returning raw windows or inventing global/community quality.
+        // ORACLE: multi-window sources are aggregated with weighted metrics,
+        // single-window sources are filtered by min_windows, latest decay/failure
+        // is visible, and invalid bounds fail before returning misleading rows.
+        // SEVERITY: Severe because trend dashboards are high mirage risk: a table
+        // can look authoritative while hiding thin history, hostile locators, or
+        // declining recent source quality.
+        let store = test_store("radar-source-quality-trends");
+        let insert_quality = |run_id: &str,
+                              source_kind: &str,
+                              locator: &str,
+                              window_start: &str,
+                              window_end: &str,
+                              raw_count: i64,
+                              accepted_count: i64,
+                              average_score: f64,
+                              signal_to_noise: f64,
+                              duplicate_rate: f64,
+                              failure_count: i64,
+                              status: &str| {
+            store
+                .conn
+                .execute(
+                    r#"
+                    INSERT INTO radar_source_quality
+                      (id, run_id, source_kind, locator, window_start, window_end,
+                       raw_count, accepted_count, average_score, score_p50, score_p90,
+                       signal_to_noise, duplicate_rate, delivery_contribution_count,
+                       failure_count, status, created_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?9, ?10, ?11, 0, ?12, ?13, ?6)
+                    "#,
+                    params![
+                        Uuid::new_v4().to_string(),
+                        run_id,
+                        source_kind,
+                        locator,
+                        window_start,
+                        window_end,
+                        raw_count,
+                        accepted_count,
+                        average_score,
+                        signal_to_noise,
+                        duplicate_rate,
+                        failure_count,
+                        status
+                    ],
+                )
+                .unwrap();
+        };
+
+        let good = "https://example.com/good-feed.xml";
+        let decaying = "https://example.com/decay.xml?<script>alert(1)</script>";
+        let failing = "https://example.com/failing-feed.xml";
+        let thin = "https://example.com/thin-feed.xml";
+        insert_quality(
+            "run-good-1",
+            "rss",
+            good,
+            "2026-06-20T00:00:00Z",
+            "2026-06-21T00:00:00Z",
+            10,
+            7,
+            7.0,
+            0.70,
+            0.10,
+            0,
+            "healthy",
+        );
+        insert_quality(
+            "run-good-2",
+            "rss",
+            good,
+            "2026-06-21T00:00:00Z",
+            "2026-06-22T00:00:00Z",
+            10,
+            8,
+            7.5,
+            0.80,
+            0.10,
+            0,
+            "healthy",
+        );
+        insert_quality(
+            "run-good-3",
+            "rss",
+            good,
+            "2026-06-22T00:00:00Z",
+            "2026-06-23T00:00:00Z",
+            10,
+            9,
+            8.0,
+            0.90,
+            0.05,
+            0,
+            "healthy",
+        );
+        insert_quality(
+            "run-decay-1",
+            "rss",
+            decaying,
+            "2026-06-20T00:00:00Z",
+            "2026-06-21T00:00:00Z",
+            10,
+            8,
+            8.0,
+            0.80,
+            0.10,
+            0,
+            "healthy",
+        );
+        insert_quality(
+            "run-decay-2",
+            "rss",
+            decaying,
+            "2026-06-21T00:00:00Z",
+            "2026-06-22T00:00:00Z",
+            10,
+            5,
+            6.5,
+            0.50,
+            0.20,
+            0,
+            "partial",
+        );
+        insert_quality(
+            "run-decay-3",
+            "rss",
+            decaying,
+            "2026-06-22T00:00:00Z",
+            "2026-06-23T00:00:00Z",
+            10,
+            1,
+            4.0,
+            0.10,
+            0.40,
+            0,
+            "low_signal",
+        );
+        insert_quality(
+            "run-fail-1",
+            "rss",
+            failing,
+            "2026-06-21T00:00:00Z",
+            "2026-06-22T00:00:00Z",
+            4,
+            2,
+            5.0,
+            0.50,
+            0.00,
+            0,
+            "partial",
+        );
+        insert_quality(
+            "run-fail-2",
+            "rss",
+            failing,
+            "2026-06-22T00:00:00Z",
+            "2026-06-23T00:00:00Z",
+            4,
+            0,
+            2.0,
+            0.00,
+            0.00,
+            1,
+            "failed",
+        );
+        insert_quality(
+            "run-thin-1",
+            "rss",
+            thin,
+            "2026-06-22T00:00:00Z",
+            "2026-06-23T00:00:00Z",
+            10,
+            10,
+            9.0,
+            1.00,
+            0.00,
+            0,
+            "healthy",
+        );
+
+        let trends = store.list_radar_source_quality_trends(2, 10).unwrap();
+        assert_eq!(trends.len(), 3, "{trends:?}");
+        assert_eq!(trends[0].locator, good);
+        assert_eq!(trends[0].window_count, 3);
+        assert_eq!(trends[0].run_count, 3);
+        assert_eq!(trends[0].raw_count, 30);
+        assert_eq!(trends[0].accepted_count, 24);
+        assert_eq!(trends[0].trend_status, "improving");
+        assert_eq!(trends[0].latest_status, "healthy");
+        assert!(trends[0].quality_score > trends[1].quality_score);
+        assert!((trends[0].signal_to_noise.unwrap() - 0.80).abs() < 0.001);
+        assert!(
+            !trends.iter().any(|trend| trend.locator == thin),
+            "single-window source should not satisfy min_windows=2: {trends:?}"
+        );
+
+        let decaying_trend = trends
+            .iter()
+            .find(|trend| trend.locator == decaying)
+            .expect("decaying source trend");
+        assert_eq!(decaying_trend.trend_status, "decaying");
+        assert_eq!(decaying_trend.latest_status, "low_signal");
+        assert_eq!(decaying_trend.non_healthy_count, 2);
+        assert_eq!(decaying_trend.accepted_count, 14);
+        assert_eq!(decaying_trend.locator, decaying);
+
+        let failing_trend = trends
+            .iter()
+            .find(|trend| trend.locator == failing)
+            .expect("failing source trend");
+        assert_eq!(failing_trend.trend_status, "failing");
+        assert_eq!(failing_trend.latest_status, "failed");
+        assert_eq!(failing_trend.failure_count, 1);
+
+        let limited = store.list_radar_source_quality_trends(1, 2).unwrap();
+        assert_eq!(limited.len(), 2);
+        assert!(limited.iter().all(|trend| trend.quality_score >= 0.0));
+        assert!(
+            store
+                .list_radar_source_quality_trends(0, 10)
+                .unwrap_err()
+                .to_string()
+                .contains("min_windows")
+        );
+        assert!(
+            store
+                .list_radar_source_quality_trends(2, 501)
+                .unwrap_err()
+                .to_string()
+                .contains("limit")
+        );
+    }
+
+    #[test]
     fn severe_radar_balance_caps_sources_and_categories_without_hiding_rejections() {
         // CLAIM: explicit radar balance metadata can stop one source or category
         // from dominating selected items while keeping rejected items inspectable.
@@ -43704,18 +44440,18 @@ reason = "X OAuth disabled during policy test"
                 "Agent MCP release improves worker reliability.",
             ),
             (
-                "Beta Agent MCP release from same feed",
+                "Beta Agent MCP funding round from same feed",
                 "https://example.com/feed-beta-agent",
                 "rss",
                 "https://example.com/agent-feed.xml",
-                "Agent MCP release improves queue reliability.",
+                "Agent MCP funding round expands the company.",
             ),
             (
-                "Gamma Agent MCP release from GitHub",
+                "Gamma Agent MCP breaking architecture note from GitHub",
                 "https://github.com/example/agent/releases/tag/v1",
                 "github_release",
                 "example/agent",
-                "Agent MCP release improves source-card reliability.",
+                "Agent MCP breaking architecture note improves source-card reliability.",
             ),
             (
                 "Security MCP vulnerability incident",
@@ -43725,11 +44461,11 @@ reason = "X OAuth disabled during policy test"
                 "MCP vulnerability incident with technical mitigation details.",
             ),
             (
-                "Zulu Agent MCP release from Hacker News",
+                "Zulu Agent MCP benchmark results from Hacker News",
                 "https://news.ycombinator.com/item?id=123",
                 "hackernews",
                 "frontpage",
-                "Agent MCP release discussion with detailed implementation notes.",
+                "Agent MCP benchmark results with detailed implementation notes.",
             ),
         ] {
             store
@@ -43819,14 +44555,14 @@ reason = "X OAuth disabled during policy test"
             .collect::<BTreeMap<_, _>>();
 
         let (_, beta_score) = scores_by_title
-            .get("Beta Agent MCP release from same feed")
+            .get("Beta Agent MCP funding round from same feed")
             .expect("source-quota score");
         assert_eq!(beta_score.status, "source_quota");
         assert!(beta_score.reason.contains("source quota cap 1"));
         assert!(beta_score.tags.contains(&"source-quota".to_string()));
 
         let (_, zulu_score) = scores_by_title
-            .get("Zulu Agent MCP release from Hacker News")
+            .get("Zulu Agent MCP benchmark results from Hacker News")
             .expect("category-quota score");
         assert_eq!(zulu_score.status, "category_quota");
         assert!(zulu_score.reason.contains("category quota cap 2"));
@@ -43868,6 +44604,296 @@ reason = "X OAuth disabled during policy test"
             assert!(item.wiki_page_id.is_some(), "{item:?}");
         }
 
+        let audit = store.audit_radar_run(&report.run.id).unwrap();
+        assert!(audit.ok, "{audit:?}");
+    }
+
+    #[test]
+    fn severe_radar_topic_dedupe_preserves_evidence_and_avoids_broad_drops() {
+        // CLAIM: deterministic topic dedupe can suppress near-duplicate story
+        // variants without deleting evidence or merging merely adjacent stories.
+        // ORACLE: one near-duplicate receives `duplicate_topic`, the distinct
+        // adjacent SDK story remains selected, all source-card/wiki provenance is
+        // retained, and the dedupe group explains the shared-token basis.
+        // SEVERITY: Severe because semantic dedupe is a classic fake-done trap:
+        // silent drops or over-broad grouping both make a digest look cleaner than
+        // the evidence supports.
+        let store = test_store("radar-topic-dedupe");
+        for (title, url, source_kind, source_detail, summary, topic) in [
+            (
+                "OpenAI releases Codex agent SDK",
+                "https://example.com/openai-codex-agent-sdk",
+                "rss",
+                "https://example.com/openai.xml",
+                "Launch notes for the Codex agent SDK with MCP worker support.",
+                "codex-agent-sdk",
+            ),
+            (
+                "Codex agent SDK release notes",
+                "https://github.com/openai/codex-agent-sdk/releases/tag/v1",
+                "github_release",
+                "openai/codex-agent-sdk",
+                "Release notes describe the same Codex agent SDK launch.",
+                "codex-agent-sdk",
+            ),
+            (
+                "Anthropic releases browser agent SDK",
+                "https://example.com/anthropic-browser-agent-sdk",
+                "rss",
+                "https://example.com/anthropic.xml",
+                "A different browser agent SDK release for another ecosystem.",
+                "browser-agent-sdk",
+            ),
+        ] {
+            store
+                .add_source_card(SourceCardInput {
+                    title: title.to_string(),
+                    url: url.to_string(),
+                    source_type: source_kind.to_string(),
+                    provider: source_kind.to_string(),
+                    summary: summary.to_string(),
+                    claims: vec![],
+                    retrieved_at: Some(now()),
+                    metadata: json!({
+                        "source_kind": source_kind,
+                        "source_detail": source_detail,
+                        "topic": topic,
+                    }),
+                })
+                .unwrap();
+        }
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "topic-dedupe-radar".to_string(),
+                description: "Topic dedupe radar".to_string(),
+                window_hours: 24,
+                min_score: 2.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "agent SDK" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let report = store.run_radar_profile(&profile.id, None).unwrap();
+        assert_eq!(report.items_inserted, 3);
+        assert_eq!(report.scores_inserted, 3);
+        assert_eq!(report.selected_items, 2);
+
+        let stage = store.read_radar_stage(&report.run.id).unwrap();
+        assert_eq!(stage.dedup_groups.len(), 1, "{stage:?}");
+        let group = &stage.dedup_groups[0];
+        assert_eq!(group.dedup_kind, "semantic_topic");
+        assert_eq!(group.member_item_ids.len(), 2);
+        assert!(group.reason.contains("deterministic topic similarity"));
+        assert!(group.reason.contains("codex"));
+        assert!(group.reason.contains("agent"));
+        assert!(group.reason.contains("sdk"));
+
+        let item_by_id = stage
+            .items
+            .iter()
+            .map(|item| (item.id.clone(), item))
+            .collect::<BTreeMap<_, _>>();
+        let scores_by_title = stage
+            .scores
+            .iter()
+            .map(|score| {
+                let item = item_by_id.get(&score.item_id).unwrap();
+                (item.title.as_str(), (item, score))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let duplicate_scores = stage
+            .scores
+            .iter()
+            .filter(|score| score.status == "duplicate_topic")
+            .collect::<Vec<_>>();
+        assert_eq!(duplicate_scores.len(), 1, "{:?}", stage.scores);
+        let duplicate_score = duplicate_scores[0];
+        assert!(duplicate_score.tags.contains(&"duplicate".to_string()));
+        assert!(
+            duplicate_score
+                .tags
+                .contains(&"semantic-dedupe".to_string())
+        );
+        assert!(!duplicate_score.tags.contains(&"exact-dedupe".to_string()));
+
+        let (_, adjacent_score) = scores_by_title
+            .get("Anthropic releases browser agent SDK")
+            .expect("adjacent SDK story");
+        assert_eq!(adjacent_score.status, "selected");
+        assert!(!group.member_item_ids.contains(&adjacent_score.item_id));
+
+        for score in &stage.scores {
+            let item = item_by_id.get(&score.item_id).unwrap();
+            assert!(item.source_card_id.is_some(), "{item:?}");
+            assert!(item.wiki_page_id.is_some(), "{item:?}");
+        }
+
+        let quality = store.list_radar_source_quality(&report.run.id).unwrap();
+        assert_eq!(quality.iter().map(|row| row.raw_count).sum::<i64>(), 3);
+        assert_eq!(quality.iter().map(|row| row.accepted_count).sum::<i64>(), 2);
+        assert_eq!(
+            quality
+                .iter()
+                .map(|row| row.duplicate_rate.unwrap())
+                .sum::<f64>(),
+            1.0
+        );
+        let audit = store.audit_radar_run(&report.run.id).unwrap();
+        assert!(audit.ok, "{audit:?}");
+
+        store
+            .conn
+            .execute(
+                "UPDATE radar_scores SET status = 'selected' WHERE run_id = ?1 AND item_id = ?2",
+                params![report.run.id, duplicate_score.item_id],
+            )
+            .unwrap();
+        let drift_audit = store.audit_radar_run(&report.run.id).unwrap();
+        assert!(!drift_audit.ok);
+        assert!(drift_audit.findings.iter().any(|finding| {
+            finding.code == "radar_dedup_score_drift" && finding.severity == "high"
+        }));
+    }
+
+    #[test]
+    fn severe_radar_semantic_topic_dedupe_preserves_evidence_and_separates_events() {
+        // CLAIM: deterministic topic dedupe runs after initial scoring, suppresses
+        // obvious same-story repeats, and does not collapse same-product but
+        // different-event items.
+        // ORACLE: a semantic_topic dedupe group preserves both member items,
+        // the duplicate keeps a score row with duplicate_topic status, and the
+        // distinct funding item remains selected.
+        // SEVERITY: Severe because semantic dedupe can become a quiet evidence-loss
+        // mirage if duplicate rows disappear or broad token overlap collapses
+        // different events.
+        let store = test_store("radar-semantic-topic-dedupe");
+        for (title, url, provider, summary) in [
+            (
+                "Acme Agent MCP release improves worker reliability",
+                "https://example.com/acme-agent-mcp-release",
+                "rss",
+                "Acme Agent MCP release improves worker reliability for queues.",
+            ),
+            (
+                "Acme Agent MCP release improves worker reliability analysis",
+                "https://news.ycombinator.com/item?id=987",
+                "hackernews",
+                "Community analysis of the Acme Agent MCP release reliability improvements.",
+            ),
+            (
+                "Acme Agent MCP funding round",
+                "https://example.com/acme-agent-mcp-funding",
+                "rss",
+                "Acme Agent MCP funding round expands the company.",
+            ),
+        ] {
+            store
+                .add_source_card(SourceCardInput {
+                    title: title.to_string(),
+                    url: url.to_string(),
+                    source_type: provider.to_string(),
+                    provider: provider.to_string(),
+                    summary: summary.to_string(),
+                    claims: vec![],
+                    retrieved_at: Some(now()),
+                    metadata: json!({
+                        "source_kind": provider,
+                        "source_detail": url,
+                    }),
+                })
+                .unwrap();
+        }
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "semantic-topic-radar".to_string(),
+                description: "Semantic topic radar".to_string(),
+                window_hours: 24,
+                min_score: 2.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "Acme Agent MCP" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let report = store.run_radar_profile(&profile.id, None).unwrap();
+        assert_eq!(report.items_inserted, 3);
+        assert_eq!(report.scores_inserted, 3);
+        assert_eq!(report.selected_items, 2);
+        assert_eq!(
+            report
+                .run
+                .metadata
+                .get("semantic_dedup_groups")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let stage = store.read_radar_stage(&report.run.id).unwrap();
+        let semantic_groups = stage
+            .dedup_groups
+            .iter()
+            .filter(|group| group.dedup_kind == "semantic_topic")
+            .collect::<Vec<_>>();
+        assert_eq!(semantic_groups.len(), 1, "{:?}", stage.dedup_groups);
+        assert_eq!(semantic_groups[0].member_item_ids.len(), 2);
+        assert!(
+            semantic_groups[0]
+                .reason
+                .contains("deterministic topic similarity")
+        );
+        assert!(semantic_groups[0].model_provider.is_none());
+
+        let item_by_id = stage
+            .items
+            .iter()
+            .map(|item| (item.id.clone(), item))
+            .collect::<BTreeMap<_, _>>();
+        let scores_by_title = stage
+            .scores
+            .iter()
+            .map(|score| {
+                let item = item_by_id.get(&score.item_id).unwrap();
+                (item.title.as_str(), (item, score))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let (_, analysis_score) = scores_by_title
+            .get("Acme Agent MCP release improves worker reliability analysis")
+            .expect("analysis duplicate score");
+        assert_eq!(analysis_score.status, "duplicate_topic");
+        assert!(analysis_score.tags.contains(&"semantic-dedupe".to_string()));
+        assert!(analysis_score.reason.contains("duplicate suppressed"));
+
+        let (funding_item, funding_score) = scores_by_title
+            .get("Acme Agent MCP funding round")
+            .expect("funding score");
+        assert_eq!(funding_score.status, "selected");
+        assert!(
+            !semantic_groups[0]
+                .member_item_ids
+                .contains(&funding_item.id),
+            "{semantic_groups:?}"
+        );
+        for item_id in &semantic_groups[0].member_item_ids {
+            let item = item_by_id.get(item_id).unwrap();
+            assert!(item.source_card_id.is_some(), "{item:?}");
+            assert!(item.wiki_page_id.is_some(), "{item:?}");
+        }
+
+        let quality = store.list_radar_source_quality(&report.run.id).unwrap();
+        assert_eq!(quality.len(), 3, "{quality:?}");
+        assert!(
+            quality
+                .iter()
+                .any(|row| row.duplicate_rate == Some(1.0) && row.accepted_count == 0),
+            "{quality:?}"
+        );
         let audit = store.audit_radar_run(&report.run.id).unwrap();
         assert!(audit.ok, "{audit:?}");
     }

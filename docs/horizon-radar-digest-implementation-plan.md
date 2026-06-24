@@ -211,8 +211,8 @@ Still not proven by this slice:
 - Scheduled recurring radar service execution, retry/recovery, and ops UI
   controls.
 - Full recursive HN/Reddit community-thread capture.
-- Semantic dedupe, production-data category/source balance review, source-quality
-  decay.
+- Production-data semantic/topic dedupe review, production-data category/source
+  balance review, source-quality decay.
 - Model-backed interestingness, enrichment/synthesis, and delivery attempts.
 - Full production multi-source proof including authenticated/private sources.
 
@@ -875,18 +875,18 @@ Checklist:
       RSS entry id/link, and same provider/native id where existing projected
       source cards expose it.
 - [x] Implement cross-source canonical URL merging while preserving all sources.
-- [ ] Implement semantic topic dedupe only after initial scoring and only with
+- [x] Implement semantic topic dedupe only after initial scoring and only with
       preserved evidence.
 - [ ] Add model semantic-dedupe output schema with primary id, duplicate ids,
       reason, confidence.
 - [ ] Add model semantic-dedupe cost/policy gate.
-- [ ] Add deterministic fallback that skips semantic dedupe rather than hiding
-      parse failure.
+- [x] Add deterministic local semantic dedupe that does not depend on model
+      output and keeps failures from silently hiding items.
 
 Anti-mirage gate:
 
 - [x] Dedupe cannot delete source evidence.
-- [ ] Dedupe cannot collapse "same product, different event" without explicit
+- [x] Dedupe cannot collapse "same product, different event" without explicit
       evidence.
 - [ ] Model semantic dedupe failure cannot silently drop items.
 
@@ -995,8 +995,9 @@ Checklist:
       config and audit note.
 - [x] Store rejection reasons for `below_threshold`, exact duplicate statuses,
       `category_quota`, `source_quota`, and `over_profile_limit`.
-- [ ] Store later-stage rejection reasons for `duplicate_topic`,
-      `unsafe_source`, `weak_evidence`, and `delivery_policy_denied`.
+- [x] Store deterministic semantic rejection reason `duplicate_topic`.
+- [ ] Store later-stage rejection reasons for `unsafe_source`, `weak_evidence`,
+      and `delivery_policy_denied`.
 
 Anti-mirage gate:
 
@@ -1177,11 +1178,15 @@ Outputs:
 
 Checklist:
 
-- [ ] Compute per-source signal-to-noise.
-- [ ] Compute average/p50/p90 scores per source over rolling windows.
-- [ ] Compute duplicate/corroboration rate.
+- [x] Compute per-source signal-to-noise for local source-quality windows and
+      historical trend rankings.
+- [ ] Compute p50/p90 scores per source over rolling windows.
+- [x] Compute duplicate rate for local source-quality windows and historical
+      trend rankings.
 - [ ] Compute output frequency.
-- [ ] Detect source decay and staleness.
+- [x] Detect local source-quality improvement/decay/failure from durable
+      historical windows.
+- [ ] Detect source staleness over real scheduled history.
 - [ ] Recommend complementary sources based on category gaps and source
       quality.
 - [ ] Flag overlapping sources where dedupe shows persistent duplication.
@@ -1204,6 +1209,10 @@ Production-data proof:
 - [x] Local source-quality windows are exposed to operators through
       `ops_snapshot` and `/ops/ui`; non-healthy windows affect health warnings
       and UI health scoring.
+- [x] Local source-quality trend/ranking surfaces aggregate durable historical
+      windows through CLI/MCP/slash/resource access and are severe-tested for
+      thin history, decay/failure labels, hostile locators, ranking, and invalid
+      bounds.
 - [ ] Run at least seven days of real scheduled or manually repeated
       production radar runs before claiming decay/quality trend behavior.
 - [ ] Show at least one source-quality ranking generated from real local run
@@ -1375,11 +1384,11 @@ Required:
 
 ### Dedupe
 
-- [ ] Same URL across source families groups correctly.
-- [ ] Same product different events stay separate.
+- [x] Same URL across source families groups correctly.
+- [x] Same product different events stay separate.
 - [ ] Model dedupe parse failure keeps items.
-- [ ] Duplicate group preserves all member evidence.
-- [ ] Dedup does not affect source-quality raw counts incorrectly.
+- [x] Duplicate group preserves all member evidence.
+- [x] Dedup does not affect source-quality raw counts incorrectly.
 
 ### Enrichment
 
@@ -1494,9 +1503,10 @@ Exit gate:
 - [x] Heuristic scoring.
 - [x] Score explanations.
 - [x] Exact URL/native dedupe.
+- [x] Local deterministic semantic/topic dedupe.
 - [x] Local deterministic category/source balancing.
 - [ ] Optional model scoring.
-- [ ] Optional semantic dedupe.
+- [ ] Optional model semantic dedupe.
 
 Exit gate:
 

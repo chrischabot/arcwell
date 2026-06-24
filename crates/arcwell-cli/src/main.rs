@@ -980,6 +980,10 @@ const SLASH_COMMAND_ALIASES: &[(&str, SlashAliasTarget)] = &[
         SlashAliasTarget::Mcp("radar_source_quality"),
     ),
     (
+        "radar-source-quality-trends",
+        SlashAliasTarget::Mcp("radar_source_quality_trends"),
+    ),
+    (
         "radar-repair-fts",
         SlashAliasTarget::Mcp("radar_rebuild_fts"),
     ),
@@ -2257,6 +2261,12 @@ enum RadarSubcommand {
     },
     SourceQuality {
         run_id: String,
+    },
+    SourceQualityTrends {
+        #[arg(long, default_value_t = 2)]
+        min_windows: usize,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
     },
     RepairFts {
         #[arg(long)]
@@ -3726,6 +3736,9 @@ fn radar(store: Store, args: RadarCommand) -> Result<()> {
         RadarSubcommand::Audit { run_id } => print_json(&store.audit_radar_run(&run_id)?),
         RadarSubcommand::SourceQuality { run_id } => {
             print_json(&store.list_radar_source_quality(&run_id)?)
+        }
+        RadarSubcommand::SourceQualityTrends { min_windows, limit } => {
+            print_json(&store.list_radar_source_quality_trends(min_windows, limit)?)
         }
         RadarSubcommand::RepairFts { run_id } => {
             print_json(&json!({ "rebuilt": store.rebuild_radar_fts(run_id.as_deref())? }))
@@ -7093,6 +7106,7 @@ fn dispatch_mcp(paths: &AppPaths, method: &str, params: Value) -> Result<Value> 
                 { "uri": "arcwell://radar", "name": "Radar Runs", "mimeType": "application/json" },
                 { "uri": "arcwell://radar-profiles", "name": "Radar Profiles", "mimeType": "application/json" },
                 { "uri": "arcwell://radar-source-quality", "name": "Radar Source Quality", "mimeType": "application/json" },
+                { "uri": "arcwell://radar-source-quality-trends", "name": "Radar Source Quality Trends", "mimeType": "application/json" },
                 { "uri": "arcwell://edge-events", "name": "Edge Inbox Events", "mimeType": "application/json" },
                 { "uri": "arcwell://channels", "name": "Channel Messages", "mimeType": "application/json" },
                 { "uri": "arcwell://projects", "name": "Projects", "mimeType": "application/json" },
@@ -7127,6 +7141,9 @@ fn dispatch_mcp(paths: &AppPaths, method: &str, params: Value) -> Result<Value> 
                 "arcwell://radar" => json!(store.list_radar_runs()?),
                 "arcwell://radar-profiles" => json!(store.list_radar_profiles()?),
                 "arcwell://radar-source-quality" => json!(store.list_all_radar_source_quality()?),
+                "arcwell://radar-source-quality-trends" => {
+                    json!(store.list_radar_source_quality_trends(2, 100)?)
+                }
                 "arcwell://edge-events" => json!(store.list_edge_events()?),
                 "arcwell://channels" => json!(store.list_channel_messages()?),
                 "arcwell://projects" => json!(store.list_projects()?),
@@ -8704,6 +8721,13 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
             let run_id = required_string(&arguments, "run_id")?;
             Ok(json!(store.list_radar_source_quality(&run_id)?))
         }
+        "radar_source_quality_trends" => {
+            let min_windows = optional_usize(&arguments, "min_windows", 2);
+            let limit = optional_usize(&arguments, "limit", 50);
+            Ok(json!(
+                store.list_radar_source_quality_trends(min_windows, limit)?
+            ))
+        }
         "radar_rebuild_fts" => {
             let run_id = arguments.get("run_id").and_then(Value::as_str);
             Ok(json!({ "rebuilt": store.rebuild_radar_fts(run_id)? }))
@@ -10206,6 +10230,22 @@ fn mcp_tools() -> Vec<Value> {
             "radar_source_quality",
             "List source-quality windows materialized for one scored radar run, including accepted counts, score percentiles, duplicate rate, and source-health failure contribution.",
             [("run_id", "string", "Radar run id.")],
+        ),
+        tool(
+            "radar_source_quality_trends",
+            "Rank local radar source-quality history across runs. This uses only durable local windows and does not claim global/community quality or seven-day decay proof.",
+            [
+                (
+                    "min_windows",
+                    "number",
+                    "Minimum windows per source, default 2.",
+                ),
+                (
+                    "limit",
+                    "number",
+                    "Maximum rows to return, default 50, max 500.",
+                ),
+            ],
         ),
         tool(
             "radar_rebuild_fts",
@@ -11932,7 +11972,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         command_names.sort();
-        assert_eq!(command_names.len(), 131);
+        assert_eq!(command_names.len(), 132);
         let missing = command_names
             .into_iter()
             .filter(|name| slash_alias_target(name).is_none() && !slash_alias_is_dynamic(name))
@@ -13316,6 +13356,28 @@ reason = "MCP secret writes are denied for this token"
                 .and_then(Value::as_u64),
             Some(1)
         );
+        let source_quality_trends = call_mcp_tool(
+            &paths,
+            "radar_source_quality_trends",
+            json!({ "min_windows": 1, "limit": 10 }),
+        )
+        .unwrap();
+        assert_eq!(
+            source_quality_trends
+                .as_array()
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("window_count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            source_quality_trends
+                .as_array()
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("trend_status"))
+                .and_then(Value::as_str),
+            Some("insufficient_history")
+        );
 
         let summary = call_mcp_tool(
             &paths,
@@ -13418,6 +13480,7 @@ reason = "MCP secret writes are denied for this token"
             "radar_summary_read",
             "radar_audit_run",
             "radar_source_quality",
+            "radar_source_quality_trends",
         ] {
             assert!(tool_names.contains(expected), "missing MCP tool {expected}");
         }

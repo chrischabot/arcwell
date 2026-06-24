@@ -200,18 +200,20 @@ Ops:
 
 ## Proof Gates
 
-- Missing: production-data balance review, source recommendation, model
-  enrichment, delivery attempts, and scheduled/recurring operation remain absent
-  or unproven.
+- Missing: production-data semantic/topic dedupe review, production-data balance
+  review, source recommendation, model enrichment, delivery attempts, and
+  scheduled/recurring operation remain absent or unproven.
 - Scaffold: stage-two command names and data-model ideas exist in planning
   docs.
 - Local Proof: current Arcwell radar writes inspectable `radar_runs`,
   `radar_items`, FTS rows, score rows, exact URL/source-native dedupe groups,
-  local source/category quota statuses, summary artifacts, and source-card/wiki
-  links; severe tests cover foreground and queued worker execution,
-  provider-denial blocked runs, invalid enqueue, malformed balance caps,
-  source/category dominance, generated-summary/no-delivery boundaries, FTS drift,
-  corrupt dedupe groups, and prompt-injection-as-evidence rendering.
+  deterministic semantic/topic dedupe groups, local source/category quota
+  statuses, summary artifacts, and source-card/wiki links; severe tests cover
+  foreground and queued worker execution, provider-denial blocked runs, invalid
+  enqueue, malformed balance caps, source/category dominance, semantic dedupe
+  evidence preservation, same-product/different-event separation, dedupe score
+  drift, generated-summary/no-delivery boundaries, FTS drift, corrupt dedupe
+  groups, and prompt-injection-as-evidence rendering.
 - Production Data Proof: copied-home source-card projection, foreground public
   RSS/GitHub/arXiv/Hacker News live fetch, and worker-drained public
   RSS/GitHub/arXiv/Hacker News runs have passed real-data proof packets.

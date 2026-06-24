@@ -363,9 +363,17 @@ PR, implementation note, or final report:
 - [x] Add radar source-quality ops visibility in `ops_snapshot` and `/ops/ui`
       with non-healthy health warnings, summary scoring, filtered rows, and
       severe HTML escaping coverage.
-- [ ] Add radar semantic dedupe, model-backed synthesis, delivery attempts,
-      production-data balance review, source-quality trends, broader ops
-      controls, and status promotion only after real-data gates pass.
+- [x] Add local radar source-quality trend/ranking over durable historical
+      windows, with bounded CLI/MCP/slash surfaces and severe tests for thin
+      history filtering, decaying/failing sources, hostile locators, ranking,
+      and invalid limits.
+- [x] Add local deterministic semantic/topic dedupe after initial scoring, with
+      `semantic_topic` dedupe groups, `duplicate_topic` score rows, preserved
+      evidence, source-quality duplicate accounting, and audit drift coverage.
+- [ ] Add model-backed synthesis, delivery attempts, production-data semantic
+      dedupe review, production-data balance review, production-data
+      source-quality trends, broader ops controls, and status promotion only
+      after real-data gates pass.
 - [ ] Preserve tracked email defaults as `agent@example.com` and
       `user@example.com`; keep real local agent/author addresses only in ignored
       env or secret config.

@@ -161,6 +161,9 @@ typing part of the name. Use the displayed command name from the picker.
 - `/radar-summary` uses `radar_summary_read`.
 - `/radar-audit` uses `radar_audit_run`.
 - `/radar-source-quality` uses `radar_source_quality` for a specific run id.
+- `/radar-source-quality-trends` uses `radar_source_quality_trends` for local
+  historical ranking across durable source-quality windows; it is not global
+  quality telemetry or seven-day production decay proof.
 - `/radar-repair-fts` uses `radar_rebuild_fts`.
 
 ### Research
