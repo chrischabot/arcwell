@@ -970,7 +970,7 @@ Production-data proof:
 - [x] Score a fresh public-source worker run with four source families through
       the live OpenAI model-score overlay:
       `scripts/radar-model-score-production-proof` passed at
-      `.arcwell-dev/proofs/radar-model-score-production-proof-20260624T100054Z-7098`
+      `.arcwell-dev/proofs/radar-model-score-production-proof-20260624T100638Z-66866`
       with 45 heuristic rows, 30 selected heuristic rows, 3
       `model_interestingness_v1` rows, audit-ok after model scoring, and
       unchanged source-quality raw/accepted totals.

@@ -35516,6 +35516,9 @@ fn radar_model_prompt_metadata_projection(metadata: &Value) -> Value {
         "scope",
         "audience",
         "access",
+        "source_kind",
+        "source_family",
+        "source_type",
         "privacy_flags",
         "model_prompt_flags",
     ] {
@@ -35561,6 +35564,9 @@ fn metadata_model_prompt_exclusion_reason(metadata: &Value, label: &str) -> Opti
         "scope",
         "audience",
         "access",
+        "source_kind",
+        "source_family",
+        "source_type",
     ] {
         if object
             .get(key)
@@ -35595,8 +35601,19 @@ fn model_prompt_private_value(value: &str) -> bool {
             | "secret"
             | "sensitive"
             | "dm"
+            | "dms"
             | "direct_message"
+            | "direct_messages"
+            | "x_dm"
+            | "x_dms"
+            | "twitter_dm"
+            | "telegram_dm"
+            | "telegram_private"
+            | "channel_private"
+            | "private_channel"
+            | "private_email"
             | "personal"
+            | "personal_email"
             | "credential"
             | "credentials"
             | "token"
@@ -35615,11 +35632,24 @@ fn model_prompt_private_value(value: &str) -> bool {
 fn source_kind_blocks_model_prompt(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
-        "dm" | "direct_message"
+        "dm" | "dms"
+            | "direct_message"
+            | "direct_messages"
+            | "x_dm"
+            | "x_dms"
+            | "twitter_dm"
+            | "private_dm"
+            | "private_dms"
             | "private_message"
+            | "private_messages"
+            | "telegram_dm"
+            | "telegram_private"
+            | "telegram_private_channel"
+            | "channel_private"
             | "private_note"
             | "private_channel"
             | "email_private"
+            | "private_email"
             | "personal_email"
     )
 }
@@ -35629,6 +35659,11 @@ fn build_radar_model_score_prompt(
     run: &RadarRun,
     candidates: &[(RadarItem, RadarScore)],
 ) -> Result<String> {
+    for (item, _) in candidates {
+        if let Some(reason) = radar_model_prompt_exclusion_reason(item, None) {
+            bail!("radar model prompt candidate is not eligible: {reason}");
+        }
+    }
     let items = candidates
         .iter()
         .map(|(item, score)| {
@@ -46986,7 +47021,7 @@ reason = "X OAuth disabled during policy test"
                 claims: vec![],
                 retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
                 metadata: json!({
-                    "visibility": "private",
+                    "source_family": "private_dms",
                     "allow_model_scoring": false
                 }),
             })
@@ -47007,6 +47042,20 @@ reason = "X OAuth disabled during policy test"
             .unwrap();
         let report = store.run_radar_profile(&profile.id, None).unwrap();
         assert!(store.audit_radar_run(&report.run.id).unwrap().ok);
+        let private_item_id_before_score = store
+            .list_radar_items(&report.run.id)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.title == "Agent private strategy leak")
+            .unwrap()
+            .id;
+        store
+            .conn
+            .execute(
+                "UPDATE radar_items SET metadata_json = '{}' WHERE id = ?1",
+                params![private_item_id_before_score],
+            )
+            .unwrap();
 
         let model = store
             .score_radar_run_with_model(&report.run.id, "mock", None, 10, None, None)
@@ -47214,6 +47263,284 @@ reason = "X OAuth disabled during policy test"
                 .tags
                 .contains(&"private-or-unauthorized".to_string())
         );
+    }
+
+    #[test]
+    fn severe_radar_model_score_audits_all_excluded_and_backfills_eligible_candidates() {
+        // CLAIM: max_items limits eligible model context, not the exclusion
+        // audit trail; lower-ranked eligible public items still get scored when
+        // higher-ranked candidates are private.
+        // ORACLE: all eight private selected rows get model_blocked rows while
+        // two public rows are included in the prompt and scored with
+        // max_items=2.
+        // SEVERITY: Severe because capping blocked rows by prompt budget would
+        // make a run look privacy-audited while silently omitting exclusions.
+        let store = test_store("radar-model-score-excluded-limit-backfill");
+        for idx in 0..8 {
+            store
+                .add_source_card(SourceCardInput {
+                    title: format!("Agent private canary {idx}"),
+                    url: format!("https://example.com/radar-private-canary-{idx}"),
+                    source_type: "note".to_string(),
+                    provider: "fixture".to_string(),
+                    summary: format!(
+                        "Agent private canary {idx} PRIVATE_LIMIT_LEAK_{idx} sk-private-limit-{idx} has a strong score signal."
+                    ),
+                    claims: vec![],
+                    retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                    metadata: json!({ "visibility": "private" }),
+                })
+                .unwrap();
+        }
+        for idx in 0..2 {
+            store
+                .add_source_card(SourceCardInput {
+                    title: format!("Agent public backfill {idx}"),
+                    url: format!("https://example.com/radar-public-backfill-{idx}"),
+                    source_type: "note".to_string(),
+                    provider: "fixture".to_string(),
+                    summary: format!(
+                        "Agent public backfill {idx} should still reach model context."
+                    ),
+                    claims: vec![],
+                    retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                    metadata: json!({ "visibility": "public" }),
+                })
+                .unwrap();
+        }
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "model-score-excluded-limit-radar".to_string(),
+                description: "Model score excluded limit radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "agent" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+        let report = store.run_radar_profile(&profile.id, None).unwrap();
+        let model = store
+            .score_radar_run_with_model(&report.run.id, "mock", None, 2, None, None)
+            .unwrap();
+        assert_eq!(model.scored, 2);
+        assert_eq!(model.blocked, 8);
+
+        let input_artifact = store
+            .read_wiki_page(&model.input_artifact_id)
+            .unwrap()
+            .unwrap();
+        assert!(input_artifact.content.contains("Agent public backfill 0"));
+        assert!(input_artifact.content.contains("Agent public backfill 1"));
+        assert!(!input_artifact.content.contains("PRIVATE_LIMIT_LEAK_"));
+        assert!(!input_artifact.content.contains("sk-private-limit-"));
+
+        let scores = store.list_radar_scores(&report.run.id).unwrap();
+        assert_eq!(
+            scores
+                .iter()
+                .filter(|score| {
+                    score.score_kind == "model_interestingness_v1"
+                        && score.status == "model_blocked"
+                })
+                .count(),
+            8
+        );
+        assert_eq!(
+            scores
+                .iter()
+                .filter(|score| {
+                    score.score_kind == "model_interestingness_v1" && score.status == "model_scored"
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn severe_radar_model_score_item_only_privacy_and_missing_provenance_overwrite_stale_rows() {
+        // CLAIM: radar item metadata alone can block model prompts, and missing
+        // linked source-card provenance overwrites any previous model_scored row
+        // with model_blocked instead of leaving stale authorization-looking
+        // evidence.
+        // ORACLE: first score succeeds, item-only private metadata blocks the
+        // next score, clearing that metadata allows scoring again, and corrupted
+        // source-card linkage then replaces the row with a missing-provenance
+        // model_blocked status without contacting OpenAI.
+        // SEVERITY: Severe because stale model_scored rows after provenance
+        // loss make a broken run look healthier than it is.
+        let store = test_store("radar-model-score-item-only-stale-row");
+        store
+            .add_source_card(SourceCardInput {
+                title: "Agent public stale-row candidate".to_string(),
+                url: "https://example.com/radar-model-stale-row".to_string(),
+                source_type: "note".to_string(),
+                provider: "fixture".to_string(),
+                summary:
+                    "Agent public stale-row candidate should be scored before metadata changes."
+                        .to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                metadata: json!({ "visibility": "public" }),
+            })
+            .unwrap();
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "model-score-stale-row-radar".to_string(),
+                description: "Model score stale row radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(1),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "stale-row" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+        let report = store.run_radar_profile(&profile.id, None).unwrap();
+        let item = store.list_radar_items(&report.run.id).unwrap().remove(0);
+        let item_id = item.id.clone();
+        let source_card_id = item.source_card_id.clone().unwrap();
+        let first = store
+            .score_radar_run_with_model(&report.run.id, "mock", None, 1, None, None)
+            .unwrap();
+        assert_eq!(first.scored, 1);
+        assert_eq!(
+            store
+                .list_radar_scores(&report.run.id)
+                .unwrap()
+                .into_iter()
+                .find(|score| score.score_kind == "model_interestingness_v1")
+                .unwrap()
+                .status,
+            "model_scored"
+        );
+
+        store
+            .conn
+            .execute(
+                "UPDATE radar_items SET metadata_json = ?2 WHERE id = ?1",
+                params![
+                    item_id,
+                    serde_json::to_string(&json!({
+                        "model_prompt_metadata": { "source_family": "direct_messages" }
+                    }))
+                    .unwrap()
+                ],
+            )
+            .unwrap();
+        let item_only_block = store
+            .score_radar_run_with_model(&report.run.id, "mock", None, 1, None, None)
+            .unwrap();
+        assert_eq!(item_only_block.scored, 0);
+        assert_eq!(item_only_block.blocked, 1);
+        let blocked = store
+            .list_radar_scores(&report.run.id)
+            .unwrap()
+            .into_iter()
+            .find(|score| score.score_kind == "model_interestingness_v1")
+            .unwrap();
+        assert_eq!(blocked.status, "model_blocked");
+        assert!(blocked.error.as_deref().unwrap_or("").contains("metadata"));
+
+        store
+            .conn
+            .execute(
+                "UPDATE radar_items SET metadata_json = '{}', source_card_id = ?2 WHERE id = ?1",
+                params![item_id, source_card_id],
+            )
+            .unwrap();
+        let rescored = store
+            .score_radar_run_with_model(&report.run.id, "mock", None, 1, None, None)
+            .unwrap();
+        assert_eq!(rescored.scored, 1);
+        assert_eq!(
+            store
+                .list_radar_scores(&report.run.id)
+                .unwrap()
+                .into_iter()
+                .find(|score| score.score_kind == "model_interestingness_v1")
+                .unwrap()
+                .status,
+            "model_scored"
+        );
+
+        store.conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE radar_items SET source_card_id = 'missing-source-card-for-model-score' WHERE id = ?1",
+                params![item_id],
+            )
+            .unwrap();
+        store.conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        let missing = store
+            .score_radar_run_with_model(
+                &report.run.id,
+                "openai",
+                Some("gpt-5.5-mini"),
+                1,
+                Some("http://127.0.0.1:9/v1/responses"),
+                Some("MISSING_SOURCE_PROVIDER_TOKEN"),
+            )
+            .unwrap();
+        assert_eq!(missing.scored, 0);
+        assert_eq!(missing.blocked, 1);
+        assert!(missing.cost_decision_id.is_none());
+        let missing_block = store
+            .list_radar_scores(&report.run.id)
+            .unwrap()
+            .into_iter()
+            .find(|score| score.score_kind == "model_interestingness_v1")
+            .unwrap();
+        assert_eq!(missing_block.status, "model_blocked");
+        assert!(
+            missing_block
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("provenance missing linked source card")
+        );
+    }
+
+    #[test]
+    fn severe_radar_model_prompt_privacy_classifier_covers_dm_and_private_source_synonyms() {
+        // CLAIM: the radar model prompt privacy gate is not a one-spelling
+        // blocklist for only `private: true`.
+        // ORACLE: common adapter metadata spellings for DMs/private email and
+        // not-public flags all produce exclusion reasons.
+        // SEVERITY: Severe because X/Telegram/email adapters will not all spell
+        // private content the same way.
+        for metadata in [
+            json!({ "source_family": "direct_messages" }),
+            json!({ "source_kind": "x_dm" }),
+            json!({ "source_type": "private_email" }),
+            json!({ "privacy_flags": ["not_public"] }),
+            json!({ "model_prompt_flags": ["members_only"] }),
+            json!({ "access": "owner_only" }),
+        ] {
+            assert!(
+                metadata_model_prompt_exclusion_reason(&metadata, "test metadata").is_some(),
+                "{metadata}"
+            );
+        }
+        for source_kind in [
+            "dms",
+            "direct_messages",
+            "x_dm",
+            "telegram_dm",
+            "private_email",
+            "channel_private",
+        ] {
+            assert!(
+                source_kind_blocks_model_prompt(source_kind),
+                "{source_kind}"
+            );
+        }
     }
 
     #[test]
