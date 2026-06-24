@@ -19864,10 +19864,15 @@ impl Store {
                     FROM channel_delivery_attempts d2
                     WHERE d2.message_id = linked.message_id
                   )
+                  AND (
+                    rd.delivery_attempt_id != latest.id
+                    OR latest.ok = 1
+                    OR latest.attempt >= ?1
+                  )
                 ORDER BY rd.updated_at ASC, rd.id ASC
                 "#,
             )?;
-            rows(stmt.query_map([], |row| {
+            rows(stmt.query_map(params![max_attempts_per_message], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -47306,6 +47311,8 @@ channel = "telegram"
         let run = store.read_radar_run(&report.run.id).unwrap().unwrap();
         assert_eq!(run.delivery_count, 1);
         assert_eq!(run.stage, "summarized");
+        let no_new_attempt = store.reconcile_radar_delivery_attempts(3).unwrap();
+        assert_eq!(no_new_attempt.inspected, 0);
     }
 
     #[test]
