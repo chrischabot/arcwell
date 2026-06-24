@@ -223,9 +223,11 @@ Ops:
 - Production Data Proof: copied-home source-card projection, foreground public
   RSS/GitHub/arXiv/Hacker News live fetch, worker-drained public
   RSS/GitHub/arXiv/Hacker News runs, copied-home semantic/topic dedupe review,
-  repeated live-run source-quality ranking, and scheduled live public-source
-  ingestion with controlled Telegram provider delivery have passed real-data
-  proof packets.
+  repeated live-run source-quality ranking, scheduled live public-source
+  ingestion with controlled Telegram provider delivery, and live OpenAI
+  model-score overlays on public worker runs have passed real-data proof
+  packets. Model-score quality review remains separate from provider plumbing
+  proof.
 - Partial: Reddit has local proof but anonymous live attempts hit HTTP 403; X
   is limited to existing local source-card/canonical projections until
   authenticated live proof passes.

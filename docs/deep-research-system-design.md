@@ -995,7 +995,10 @@ A model-backed report may be marked complete only when:
   tests.
 - Done: bounded PDF text extraction.
 - Done: PDF layout table candidates with explicit heuristic warnings and cell
-  anchors. Difficult PDF precision remains caveated until richer fixtures pass.
+  anchors. A severe wrapped-header/irregular-column/footnoted-cell fixture now
+  lowers table/cell confidence and preserves footnote refs instead of treating
+  the table as clean evidence. Difficult PDF precision remains caveated until
+  the broader external fixture matrix passes.
 - Done: document/table/cell anchors in claim ingestion, reports, evidence packs,
   and run audit warnings.
 

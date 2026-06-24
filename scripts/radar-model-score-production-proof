@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "BLOCKED: node is required for JSON assertions." >&2
+  exit 2
+fi
+
+RUN_STAMP="${ARCWELL_RADAR_MODEL_SCORE_PROOF_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_RADAR_MODEL_SCORE_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/radar-model-score-production-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+WORKER_PROOF_DIR="$PROOF_ROOT/worker"
+MODEL_PROVIDER="${ARCWELL_RADAR_MODEL_SCORE_PROVIDER:-openai}"
+MODEL_NAME="${ARCWELL_RADAR_MODEL_SCORE_MODEL:-gpt-4.1-mini}"
+MAX_ITEMS="${ARCWELL_RADAR_MODEL_SCORE_MAX_ITEMS:-3}"
+
+mkdir -p "$ARTIFACT_DIR" "$WORKER_PROOF_DIR"
+
+log() {
+  printf '[radar-model-score-proof] %s\n' "$*"
+}
+
+fail() {
+  printf '[radar-model-score-proof] BLOCKED: %s\n' "$*" >&2
+  exit 2
+}
+
+log "proof root: $PROOF_ROOT"
+log "running worker production-data proof first"
+ARCWELL_BIN="$ARCWELL_BIN" \
+  ARCWELL_RADAR_WORKER_PROOF_DIR="$WORKER_PROOF_DIR" \
+  ARCWELL_RADAR_WORKER_MIN_ITEMS="${ARCWELL_RADAR_MODEL_SCORE_MIN_ITEMS:-10}" \
+  ARCWELL_RADAR_WORKER_MIN_SELECTED="${ARCWELL_RADAR_MODEL_SCORE_MIN_SELECTED:-1}" \
+  "$REPO_ROOT/scripts/radar-worker-production-proof" \
+  >"$ARTIFACT_DIR/worker-proof.log"
+
+WORKER_PACKET="$WORKER_PROOF_DIR/artifacts/proof-packet.json"
+if [ ! -f "$WORKER_PACKET" ]; then
+  fail "worker proof packet not found: $WORKER_PACKET"
+fi
+
+RADAR_RUN_ID="$(node - "$WORKER_PACKET" <<'NODE'
+const fs = require("fs");
+const packet = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (!packet.run_id) {
+  console.error(`worker proof packet has no run_id: ${JSON.stringify(packet)}`);
+  process.exit(1);
+}
+process.stdout.write(packet.run_id);
+NODE
+)"
+
+export ARCWELL_HOME="$WORKER_PROOF_DIR/home"
+
+log "reading pre-model stage for run: $RADAR_RUN_ID"
+"$ARCWELL_BIN" radar stage "$RADAR_RUN_ID" >"$ARTIFACT_DIR/stage-before-model.json"
+
+log "running model-score overlay provider=$MODEL_PROVIDER model=$MODEL_NAME max_items=$MAX_ITEMS"
+"$ARCWELL_BIN" radar model-score "$RADAR_RUN_ID" \
+  --provider "$MODEL_PROVIDER" \
+  --model "$MODEL_NAME" \
+  --max-items "$MAX_ITEMS" \
+  >"$ARTIFACT_DIR/model-score.json"
+
+log "reading post-model stage/audit/source-quality"
+"$ARCWELL_BIN" radar stage "$RADAR_RUN_ID" >"$ARTIFACT_DIR/stage-after-model.json"
+"$ARCWELL_BIN" radar audit "$RADAR_RUN_ID" >"$ARTIFACT_DIR/audit-after-model.json"
+"$ARCWELL_BIN" radar source-quality "$RADAR_RUN_ID" >"$ARTIFACT_DIR/source-quality-after-model.json"
+"$ARCWELL_BIN" wiki read "radar-model-score-input-$RADAR_RUN_ID" >"$ARTIFACT_DIR/input-artifact-attempt.json" 2>"$ARTIFACT_DIR/input-artifact-attempt.err" || true
+"$ARCWELL_BIN" wiki read "radar-model-score-output-$RADAR_RUN_ID" >"$ARTIFACT_DIR/output-artifact-attempt.json" 2>"$ARTIFACT_DIR/output-artifact-attempt.err" || true
+
+log "validating model-score proof artifacts"
+node - "$ARTIFACT_DIR" "$PROOF_ROOT" "$WORKER_PACKET" "$RADAR_RUN_ID" "$MODEL_PROVIDER" "$MODEL_NAME" "$MAX_ITEMS" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const [
+  artifactDir,
+  proofRoot,
+  workerPacketPath,
+  runId,
+  expectedProvider,
+  expectedModel,
+  maxItemsRaw,
+] = process.argv.slice(2);
+const maxItems = Number(maxItemsRaw);
+
+const read = (name) => JSON.parse(fs.readFileSync(path.join(artifactDir, name), "utf8"));
+const workerPacket = JSON.parse(fs.readFileSync(workerPacketPath, "utf8"));
+const before = read("stage-before-model.json");
+const report = read("model-score.json");
+const after = read("stage-after-model.json");
+const audit = read("audit-after-model.json");
+const sourceQuality = read("source-quality-after-model.json");
+
+function assert(condition, message, detail) {
+  if (!condition) {
+    console.error(`FAIL: ${message}`);
+    if (detail !== undefined) console.error(JSON.stringify(detail, null, 2));
+    process.exit(1);
+  }
+}
+
+const beforeScores = Array.isArray(before.scores) ? before.scores : [];
+const afterScores = Array.isArray(after.scores) ? after.scores : [];
+const beforeHeuristic = beforeScores.filter((score) => score.score_kind === "heuristic_v1");
+const afterHeuristic = afterScores.filter((score) => score.score_kind === "heuristic_v1");
+const beforeSelected = beforeHeuristic.filter((score) => score.status === "selected");
+const afterSelected = afterHeuristic.filter((score) => score.status === "selected");
+const modelScores = afterScores.filter((score) => score.score_kind === "model_interestingness_v1");
+const modelStatusSet = new Set(modelScores.map((score) => score.status));
+
+assert(before.run && before.run.id === runId, "pre-model stage should read the worker run", before.run);
+assert(after.run && after.run.id === runId, "post-model stage should read the worker run", after.run);
+assert(before.run.status === after.run.status && before.run.stage === after.run.stage, "model overlay must not mutate run status or stage", { before: before.run, after: after.run });
+assert(audit.ok === true, "post-model radar audit should pass", audit);
+assert(report.run_id === runId, "model-score report should target the worker run", report);
+assert(report.provider === expectedProvider, "model-score report should preserve provider", report);
+assert(report.model === expectedModel, "model-score report should preserve model", report);
+assert(report.score_kind === "model_interestingness_v1", "model-score report should use model score kind", report);
+assert(Number(report.scored || 0) >= 1, "model-score report should score at least one item", report);
+assert(Number(report.scored || 0) <= maxItems, "model-score report should respect max-items", report);
+assert(Number(report.scored || 0) + Number(report.blocked || 0) === modelScores.length, "model score row count should match report", { report, model_count: modelScores.length });
+assert(modelScores.every((score) => score.model_provider === expectedProvider), "model score rows should preserve provider", modelScores);
+assert(modelScores.every((score) => score.model_name === expectedModel), "model score rows should preserve model", modelScores);
+assert(modelScores.every((score) => score.status === "model_scored" || score.status === "model_blocked"), "model rows should use non-authorizing statuses", modelScores);
+assert(!modelStatusSet.has("selected"), "model rows must never become selected delivery authority", modelScores);
+assert(modelScores.every((score) => Array.isArray(score.tags) && score.tags.includes("model-backed") && score.tags.includes("non-authorizing")), "model rows should be visibly non-authorizing", modelScores);
+assert(modelScores.every((score) => score.input_artifact_id === report.input_artifact_id && score.output_artifact_id === report.output_artifact_id), "model rows should link audit artifacts", modelScores);
+assert(modelScores.every((score) => score.cost_decision_id === report.cost_decision_id), "model rows should link one cost decision", modelScores);
+assert(report.input_artifact_id && report.output_artifact_id, "model-score report should expose input/output artifacts", report);
+assert(report.cost_decision_id, "model-score report should expose cost decision id", report);
+assert(beforeHeuristic.length === afterHeuristic.length, "model overlay must not add/remove heuristic score rows", { before: beforeHeuristic.length, after: afterHeuristic.length });
+assert(beforeSelected.length === afterSelected.length, "model overlay must not change selected heuristic rows", { before: beforeSelected.length, after: afterSelected.length });
+assert(new Set(beforeSelected.map((score) => score.item_id)).size === beforeSelected.length, "selected heuristic item ids should be unique before model", beforeSelected);
+assert(
+  beforeSelected.map((score) => score.item_id).sort().join("\n") === afterSelected.map((score) => score.item_id).sort().join("\n"),
+  "selected heuristic item ids must be unchanged after model overlay",
+  { before: beforeSelected.map((score) => score.item_id), after: afterSelected.map((score) => score.item_id) }
+);
+
+const sourceRows = Array.isArray(sourceQuality) ? sourceQuality : [];
+assert(sourceRows.length > 0, "source-quality rows should exist after model scoring", sourceQuality);
+const rawTotal = sourceRows.reduce((sum, row) => sum + Number(row.raw_count || 0), 0);
+const acceptedTotal = sourceRows.reduce((sum, row) => sum + Number(row.accepted_count || 0), 0);
+assert(rawTotal === beforeHeuristic.length, "source-quality raw count should remain heuristic-only", { rawTotal, heuristic: beforeHeuristic.length, sourceRows });
+assert(acceptedTotal === beforeSelected.length, "source-quality accepted count should remain selected heuristic-only", { acceptedTotal, selected: beforeSelected.length, sourceRows });
+
+const serialized = JSON.stringify({ report, modelScores });
+assert(!/sk-[A-Za-z0-9_-]{12,}/.test(serialized), "proof packet must not contain obvious API secrets");
+
+const proofPacket = {
+  proof_name: "radar-model-score-production-proof",
+  proof_level: expectedProvider === "openai"
+    ? "Live Provider Attempt for model-backed radar scoring over production public-source radar data"
+    : "Local Provider Proof for model-backed radar scoring over production public-source radar data",
+  proof_root: proofRoot,
+  arcwell_home: process.env.ARCWELL_HOME,
+  run_id: runId,
+  provider: report.provider,
+  model: report.model,
+  score_kind: report.score_kind,
+  scored: report.scored,
+  blocked: report.blocked,
+  cost_decision_id: report.cost_decision_id,
+  input_artifact_id: report.input_artifact_id,
+  output_artifact_id: report.output_artifact_id,
+  worker: workerPacket.worker,
+  radar_result: workerPacket.radar_result,
+  audit_after_model: {
+    ok: audit.ok,
+    item_count: audit.item_count,
+    fts_count: audit.fts_count,
+    scored_count: audit.scored_count,
+    findings: audit.findings,
+  },
+  invariants: {
+    heuristic_score_rows_before: beforeHeuristic.length,
+    heuristic_score_rows_after: afterHeuristic.length,
+    heuristic_selected_before: beforeSelected.length,
+    heuristic_selected_after: afterSelected.length,
+    model_score_rows: modelScores.length,
+    source_quality_raw_total: rawTotal,
+    source_quality_accepted_total: acceptedTotal,
+    model_statuses: [...modelStatusSet].sort(),
+  },
+  remaining_risk: [
+    "This proves model score overlays on one live public-source radar run, not model-written synthesis/enrichment.",
+    "The model score is explicitly non-authorizing and does not replace selected heuristic rows or authorize delivery.",
+    "It does not prove Reddit OAuth, authenticated X, long-running service behavior, or external delivery transport.",
+  ],
+};
+
+fs.writeFileSync(
+  path.join(artifactDir, "proof-packet.json"),
+  `${JSON.stringify(proofPacket, null, 2)}\n`
+);
+process.stdout.write(JSON.stringify(proofPacket, null, 2));
+NODE
+
+printf '\n'
+log "production-data model-score proof passed"
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"

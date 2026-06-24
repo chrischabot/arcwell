@@ -408,11 +408,14 @@ PR, implementation note, or final report:
       scheduled email retries reconcile tick/delivery/run state, exhausted
       email retry chains dead-letter the channel message, radar delivery, and
       schedule tick, and severe tests prove token redaction.
-- [x] Add optional local/mock radar model-score overlays: CLI/MCP/core write
+- [x] Add optional radar model-score overlays: CLI/MCP/core write
       schema-validated `model_interestingness_v1` score rows and inspectable
       prompt/output artifacts, policy/cost block live OpenAI attempts before
-      credentials or score rows, malformed provider output fails closed, and
-      model scores remain non-authorizing for summaries/delivery.
+      credentials or score rows, malformed provider output fails closed, model
+      scores remain non-authorizing for summaries/delivery, and
+      `scripts/radar-model-score-production-proof` proves a live OpenAI
+      overlay on a fresh public RSS/GitHub/arXiv/Hacker News worker run without
+      mutating heuristic selected rows or source-quality accounting.
 - [x] Add repeatable production-data scheduled-delivery proof:
       `scripts/radar-scheduled-delivery-production-proof` creates a disposable
       scheduled profile over real public RSS/GitHub/arXiv/Hacker News sources,
@@ -719,6 +722,10 @@ PR, implementation note, or final report:
       structural completion.
 - [ ] Expand difficult-document fixture coverage for PDFs, XLSX, precise table
       extraction, formula/cell handling, and publication-grade citation links.
+      Current local coverage includes CSV/XLSX formulas, malformed inputs, PDF
+      heuristic tables, and a severe wrapped-header/irregular-column/footnoted
+      PDF table fixture that lowers confidence and preserves footnote refs; the
+      broader external difficult-document matrix remains open.
 - [x] Add publication-grade claim/report citation-quality checks that block
       completed status when evidence links are missing, stale, generated, or too
       weak, with severe convergence-report judgment tests for missing

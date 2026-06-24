@@ -957,12 +957,23 @@ Anti-mirage gate:
 - [x] A model score alone cannot authorize delivery.
 - [x] A score without reason is invalid.
 - [x] A score that references unavailable evidence is invalid.
-- [ ] Private or unauthorized content cannot be sent to a model as ranking
-      context.
+- [x] Private or unauthorized content cannot be sent to a model as ranking
+      context. Local severe tests now prove source-card privacy/model-prompt
+      metadata excludes candidates before prompt construction, records
+      `model_blocked` rows, omits private token-shaped sentinels from
+      input/output artifacts, and skips provider/cost paths when every
+      candidate is excluded.
 
 Production-data proof:
 
 - [ ] Score a real production run with at least five source families.
+- [x] Score a fresh public-source worker run with four source families through
+      the live OpenAI model-score overlay:
+      `scripts/radar-model-score-production-proof` passed at
+      `.arcwell-dev/proofs/radar-model-score-production-proof-20260624T100054Z-7098`
+      with 45 heuristic rows, 30 selected heuristic rows, 3
+      `model_interestingness_v1` rows, audit-ok after model scoring, and
+      unchanged source-quality raw/accepted totals.
 - [ ] Compare top 25 and bottom 25 items manually or with an adversarial review
       artifact.
 - [ ] Prove score reasons cite actual available fields.
