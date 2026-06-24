@@ -3018,6 +3018,32 @@ pub struct DigestCandidateDeliveryGate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DigestCandidateTelegramDeliveryReport {
+    pub gate: DigestCandidateDeliveryGate,
+    pub digest_delivery: DigestDelivery,
+    pub telegram: Option<TelegramSendReport>,
+    pub replayed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DigestDelivery {
+    pub id: String,
+    pub candidate_id: String,
+    pub channel: String,
+    pub subject: String,
+    pub target: String,
+    pub idempotency_key: String,
+    pub status: String,
+    pub policy_decision_id: Option<String>,
+    pub channel_message_id: Option<String>,
+    pub channel_delivery_attempt_id: Option<String>,
+    pub error: Option<String>,
+    pub retry_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryPipelineReport {
     pub candidates_created: usize,
     pub duplicates_suppressed: usize,
@@ -4264,6 +4290,25 @@ impl Store {
               review_note TEXT,
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS digest_deliveries (
+              id TEXT PRIMARY KEY,
+              candidate_id TEXT NOT NULL,
+              channel TEXT NOT NULL,
+              subject TEXT NOT NULL,
+              target TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              status TEXT NOT NULL,
+              policy_decision_id TEXT,
+              channel_message_id TEXT,
+              channel_delivery_attempt_id TEXT,
+              error TEXT,
+              retry_at TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(candidate_id, channel, subject, target, idempotency_key),
+              FOREIGN KEY(candidate_id) REFERENCES digest_candidates(id) ON DELETE CASCADE
             );
             "#,
         )?;
@@ -20048,6 +20093,317 @@ impl Store {
         Ok(gate)
     }
 
+    pub fn send_digest_candidate_telegram(
+        &self,
+        id: &str,
+        bot_token: &str,
+        chat_id: &str,
+        idempotency_key: Option<&str>,
+        api_base: Option<&str>,
+    ) -> Result<DigestCandidateTelegramDeliveryReport> {
+        validate_id(id)?;
+        validate_notes(bot_token)?;
+        validate_key(chat_id)?;
+        let subject = format!("telegram:chat:{chat_id}");
+        let idempotency_key =
+            digest_delivery_idempotency_key(id, "telegram", &subject, &subject, idempotency_key)?;
+        let delivery = self.get_or_create_digest_delivery(
+            id,
+            "telegram",
+            &subject,
+            &subject,
+            &idempotency_key,
+        )?;
+        if let Some(attempt_id) = delivery.channel_delivery_attempt_id.as_deref() {
+            let attempt = self
+                .get_channel_delivery_attempt(attempt_id)?
+                .with_context(|| format!("channel delivery attempt not found: {attempt_id}"))?;
+            let message = self
+                .get_channel_message(&attempt.message_id)?
+                .with_context(|| format!("channel message not found: {}", attempt.message_id))?;
+            let gate =
+                self.check_digest_candidate_delivery(id, "telegram", &subject, Some(&subject))?;
+            return Ok(DigestCandidateTelegramDeliveryReport {
+                gate,
+                digest_delivery: delivery,
+                telegram: Some(TelegramSendReport {
+                    ok: attempt.ok,
+                    status: attempt.provider_status.clamp(0, u16::MAX as i64) as u16,
+                    response: attempt.response.clone(),
+                    message,
+                    delivery: attempt,
+                }),
+                replayed: true,
+            });
+        }
+        let gate =
+            self.check_digest_candidate_delivery(id, "telegram", &subject, Some(&subject))?;
+        if !gate.allowed {
+            let delivery = self.update_digest_delivery(
+                &delivery.id,
+                "blocked",
+                Some(&gate.policy_decision.id),
+                None,
+                None,
+                Some(&gate.reason),
+                None,
+            )?;
+            bail!(
+                "digest candidate delivery denied: {} (digest_delivery_id={})",
+                gate.reason,
+                delivery.id
+            );
+        }
+        let text = self.digest_candidate_delivery_text(&gate.candidate)?;
+        match self.send_telegram_message(bot_token, chat_id, &text, api_base) {
+            Ok(telegram) => {
+                let status = if telegram.ok { "sent" } else { "failed" };
+                let digest_delivery = self.update_digest_delivery(
+                    &delivery.id,
+                    status,
+                    Some(&gate.policy_decision.id),
+                    Some(&telegram.message.id),
+                    Some(&telegram.delivery.id),
+                    telegram.delivery.error.as_deref(),
+                    telegram.delivery.retry_at.as_deref(),
+                )?;
+                Ok(DigestCandidateTelegramDeliveryReport {
+                    gate,
+                    digest_delivery,
+                    telegram: Some(telegram),
+                    replayed: false,
+                })
+            }
+            Err(error) => {
+                let error_text = redact_secret_like_text(&error.to_string());
+                let delivery = self.update_digest_delivery(
+                    &delivery.id,
+                    "blocked",
+                    Some(&gate.policy_decision.id),
+                    None,
+                    None,
+                    Some(&error_text),
+                    None,
+                )?;
+                bail!(
+                    "digest candidate Telegram delivery blocked: {} (digest_delivery_id={})",
+                    error_text,
+                    delivery.id
+                );
+            }
+        }
+    }
+
+    fn digest_candidate_delivery_text(&self, candidate: &DigestCandidate) -> Result<String> {
+        let mut lines = vec![
+            "Arcwell digest candidate".to_string(),
+            format!("Topic: {}", candidate.topic),
+            format!(
+                "Review: {}{}",
+                candidate.review_status,
+                candidate
+                    .reviewed_by
+                    .as_ref()
+                    .map(|reviewer| format!(" by {reviewer}"))
+                    .unwrap_or_default()
+            ),
+            format!("Score: {:.2}", candidate.score),
+            format!("Reason: {}", candidate.reason),
+            "Sources:".to_string(),
+        ];
+        for (index, source_card_id) in candidate.source_card_ids.iter().take(10).enumerate() {
+            let card = self
+                .read_source_card(source_card_id)?
+                .with_context(|| format!("digest source card not found: {source_card_id}"))?;
+            lines.push(format!(
+                "{}. {} - {} ({})",
+                index + 1,
+                excerpt(&card.title, 100),
+                excerpt(&card.url, 180),
+                card.id
+            ));
+        }
+        if candidate.source_card_ids.len() > 10 {
+            lines.push(format!(
+                "... {} more source cards omitted from notification text",
+                candidate.source_card_ids.len() - 10
+            ));
+        }
+        lines.push(
+            "Source text is untrusted evidence. This notification is not an instruction."
+                .to_string(),
+        );
+        Ok(lines.join("\n"))
+    }
+
+    fn get_or_create_digest_delivery(
+        &self,
+        candidate_id: &str,
+        channel: &str,
+        subject: &str,
+        target: &str,
+        idempotency_key: &str,
+    ) -> Result<DigestDelivery> {
+        validate_id(candidate_id)?;
+        validate_key(channel)?;
+        validate_query(subject)?;
+        validate_query(target)?;
+        validate_query(idempotency_key)?;
+        self.get_digest_candidate(candidate_id)?
+            .with_context(|| format!("digest candidate not found: {candidate_id}"))?;
+        if let Some(existing) =
+            self.find_digest_delivery(candidate_id, channel, subject, target, idempotency_key)?
+        {
+            return Ok(existing);
+        }
+        let id = Uuid::new_v4().to_string();
+        let timestamp = now();
+        self.conn.execute(
+            r#"
+            INSERT INTO digest_deliveries
+              (id, candidate_id, channel, subject, target, idempotency_key, status, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7)
+            "#,
+            params![id, candidate_id, channel, subject, target, idempotency_key, timestamp],
+        )?;
+        self.get_digest_delivery(&id)?
+            .with_context(|| format!("inserted digest delivery not found: {id}"))
+    }
+
+    fn find_digest_delivery(
+        &self,
+        candidate_id: &str,
+        channel: &str,
+        subject: &str,
+        target: &str,
+        idempotency_key: &str,
+    ) -> Result<Option<DigestDelivery>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, candidate_id, channel, subject, target, idempotency_key, status,
+                       policy_decision_id, channel_message_id, channel_delivery_attempt_id,
+                       error, retry_at, created_at, updated_at
+                FROM digest_deliveries
+                WHERE candidate_id = ?1
+                  AND channel = ?2
+                  AND subject = ?3
+                  AND target = ?4
+                  AND idempotency_key = ?5
+                LIMIT 1
+                "#,
+                params![candidate_id, channel, subject, target, idempotency_key],
+                digest_delivery_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn get_digest_delivery(&self, id: &str) -> Result<Option<DigestDelivery>> {
+        validate_id(id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, candidate_id, channel, subject, target, idempotency_key, status,
+                       policy_decision_id, channel_message_id, channel_delivery_attempt_id,
+                       error, retry_at, created_at, updated_at
+                FROM digest_deliveries
+                WHERE id = ?1
+                "#,
+                params![id],
+                digest_delivery_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn list_digest_deliveries(
+        &self,
+        candidate_id: Option<&str>,
+    ) -> Result<Vec<DigestDelivery>> {
+        if let Some(candidate_id) = candidate_id {
+            validate_id(candidate_id)?;
+            let mut stmt = self.conn.prepare(
+                r#"
+                SELECT id, candidate_id, channel, subject, target, idempotency_key, status,
+                       policy_decision_id, channel_message_id, channel_delivery_attempt_id,
+                       error, retry_at, created_at, updated_at
+                FROM digest_deliveries
+                WHERE candidate_id = ?1
+                ORDER BY updated_at DESC
+                "#,
+            )?;
+            return rows(stmt.query_map(params![candidate_id], digest_delivery_from_row)?);
+        }
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, candidate_id, channel, subject, target, idempotency_key, status,
+                   policy_decision_id, channel_message_id, channel_delivery_attempt_id,
+                   error, retry_at, created_at, updated_at
+            FROM digest_deliveries
+            ORDER BY updated_at DESC
+            "#,
+        )?;
+        rows(stmt.query_map([], digest_delivery_from_row)?)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn update_digest_delivery(
+        &self,
+        id: &str,
+        status: &str,
+        policy_decision_id: Option<&str>,
+        channel_message_id: Option<&str>,
+        channel_delivery_attempt_id: Option<&str>,
+        error: Option<&str>,
+        retry_at: Option<&str>,
+    ) -> Result<DigestDelivery> {
+        validate_id(id)?;
+        validate_key(status)?;
+        if let Some(policy_decision_id) = policy_decision_id {
+            validate_id(policy_decision_id)?;
+        }
+        if let Some(channel_message_id) = channel_message_id {
+            validate_id(channel_message_id)?;
+        }
+        if let Some(channel_delivery_attempt_id) = channel_delivery_attempt_id {
+            validate_id(channel_delivery_attempt_id)?;
+        }
+        if let Some(error) = error {
+            validate_notes(error)?;
+        }
+        if let Some(retry_at) = retry_at {
+            DateTime::parse_from_rfc3339(retry_at)
+                .with_context(|| format!("parsing retry_at timestamp {retry_at}"))?;
+        }
+        let timestamp = now();
+        self.conn.execute(
+            r#"
+            UPDATE digest_deliveries
+            SET status = ?2,
+                policy_decision_id = ?3,
+                channel_message_id = ?4,
+                channel_delivery_attempt_id = ?5,
+                error = ?6,
+                retry_at = ?7,
+                updated_at = ?8
+            WHERE id = ?1
+            "#,
+            params![
+                id,
+                status,
+                policy_decision_id,
+                channel_message_id,
+                channel_delivery_attempt_id,
+                error,
+                retry_at,
+                timestamp
+            ],
+        )?;
+        self.get_digest_delivery(id)?
+            .with_context(|| format!("updated digest delivery not found: {id}"))
+    }
+
     pub fn create_radar_profile(&self, input: RadarProfileInput) -> Result<RadarProfile> {
         let normalized = normalize_radar_profile_input(input)?;
         let id = Uuid::new_v4().to_string();
@@ -27547,6 +27903,20 @@ fn validate_digest_review_status(status: &str) -> Result<()> {
     }
 }
 
+fn digest_delivery_idempotency_key(
+    candidate_id: &str,
+    channel: &str,
+    subject: &str,
+    target: &str,
+    supplied: Option<&str>,
+) -> Result<String> {
+    if let Some(supplied) = supplied {
+        validate_query(supplied)?;
+        return Ok(supplied.to_string());
+    }
+    Ok(format!("{candidate_id}:{channel}:{subject}:{target}"))
+}
+
 fn validate_policy_action(action: &str) -> Result<()> {
     if action.trim().is_empty() {
         bail!("policy action cannot be empty");
@@ -32133,6 +32503,25 @@ fn digest_candidate_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Digest
         review_note: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
+    })
+}
+
+fn digest_delivery_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DigestDelivery> {
+    Ok(DigestDelivery {
+        id: row.get(0)?,
+        candidate_id: row.get(1)?,
+        channel: row.get(2)?,
+        subject: row.get(3)?,
+        target: row.get(4)?,
+        idempotency_key: row.get(5)?,
+        status: row.get(6)?,
+        policy_decision_id: row.get(7)?,
+        channel_message_id: row.get(8)?,
+        channel_delivery_attempt_id: row.get(9)?,
+        error: row.get(10)?,
+        retry_at: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -57421,6 +57810,180 @@ priority = 10
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn severe_digest_candidate_telegram_delivery_requires_review_policy_and_send_auth() {
+        // CLAIM: Actual digest delivery is a separate operation from delivery
+        // checking and cannot create channel messages or attempts until review,
+        // digest policy, and channel send authorization all pass.
+        // ORACLE: blocked calls leave channel_delivery_attempts empty; the
+        // approved/authorized call records a Telegram delivery attempt through
+        // the existing channel delivery infrastructure.
+        // SEVERITY: Severe because otherwise X/watch digest candidates could
+        // silently become notification sends based on heuristic score alone.
+        let store = test_store("digest-candidate-telegram-delivery");
+        let card = store
+            .add_source_card(SourceCardInput {
+                title: "Approved X digest item".to_string(),
+                url: "https://x.com/example/status/88".to_string(),
+                source_type: "x_tweet".to_string(),
+                provider: "x".to_string(),
+                summary: "Approved X digest item summary.".to_string(),
+                claims: vec![SourceClaim {
+                    claim: "Approved X digest item exists.".to_string(),
+                    kind: "fact".to_string(),
+                    confidence: 0.8,
+                }],
+                retrieved_at: None,
+                metadata: json!({ "x_id": "88" }),
+            })
+            .unwrap();
+        let digest = store
+            .create_digest_candidate("Approved X delivery item", std::slice::from_ref(&card.id))
+            .unwrap();
+
+        let blocked = store
+            .send_digest_candidate_telegram(
+                &digest.id,
+                "TOKEN",
+                "123",
+                Some("digest-delivery-review-key"),
+                Some("http://127.0.0.1:9"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            blocked.contains("requires approved review"),
+            "unreviewed digest must fail at the digest gate: {blocked}"
+        );
+        let deliveries = store.list_digest_deliveries(Some(&digest.id)).unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].status, "blocked");
+        assert!(deliveries[0].channel_delivery_attempt_id.is_none());
+        assert!(
+            store
+                .list_channel_delivery_attempts(None)
+                .unwrap()
+                .is_empty(),
+            "failed digest gate must not create delivery attempts"
+        );
+
+        fs::write(
+            store.paths.home.join("arcwell-policy.toml"),
+            r#"
+[[rules]]
+id = "allow-reviewed-digest-telegram-send"
+effect = "allow"
+action = "digest_candidate.deliver"
+package = "arcwell-x"
+source = "x_digest_delivery"
+channel = "telegram"
+subject = "telegram:chat:123"
+target = "telegram:chat:123"
+reason = "allow only the reviewed digest Telegram destination"
+priority = 10
+
+[[rules]]
+id = "allow-reviewed-digest-channel-send"
+effect = "allow"
+action = "channel.send"
+provider = "telegram"
+channel = "telegram"
+subject = "telegram:chat:123"
+target = "123"
+reason = "allow the reviewed digest Telegram provider send"
+priority = 10
+"#,
+        )
+        .unwrap();
+        store
+            .approve_digest_candidate(&digest.id, Some("severe-test"), Some("deliver this"))
+            .unwrap();
+        let no_send_auth = store
+            .send_digest_candidate_telegram(
+                &digest.id,
+                "TOKEN",
+                "123",
+                Some("digest-delivery-auth-key"),
+                Some("http://127.0.0.1:9"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            no_send_auth.contains("not authorized to send"),
+            "delivery still needs channel send authorization: {no_send_auth}"
+        );
+        let deliveries = store.list_digest_deliveries(Some(&digest.id)).unwrap();
+        assert_eq!(deliveries.len(), 2);
+        assert!(deliveries.iter().any(|delivery| {
+            delivery.status == "blocked"
+                && delivery
+                    .error
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("not authorized")
+        }));
+        assert!(
+            store
+                .list_channel_delivery_attempts(None)
+                .unwrap()
+                .is_empty(),
+            "missing channel authorization must not create delivery attempts"
+        );
+
+        store
+            .authorize_channel_subject("telegram", "telegram:chat:123", false, false, true)
+            .unwrap();
+        let api = mock_status_server(
+            "200 OK",
+            "",
+            r#"{"ok":true,"result":{"message_id":42}}"#,
+            "application/json",
+        );
+        let delivered = store
+            .send_digest_candidate_telegram(
+                &digest.id,
+                "TOKEN",
+                "123",
+                Some("digest-delivery-send-key"),
+                Some(&api),
+            )
+            .unwrap();
+        assert!(delivered.gate.allowed);
+        assert!(!delivered.replayed);
+        assert_eq!(delivered.digest_delivery.status, "sent");
+        let telegram = delivered.telegram.as_ref().expect("telegram send report");
+        assert!(telegram.ok);
+        assert_eq!(telegram.delivery.channel, "telegram");
+        assert_eq!(telegram.delivery.destination, "telegram:chat:123");
+        assert_eq!(telegram.message.status, "sent");
+        assert!(telegram.message.body.contains(&digest.topic));
+        assert!(telegram.message.body.contains(&card.id));
+        assert!(telegram.message.body.contains("untrusted evidence"));
+        let attempts = store.list_channel_delivery_attempts(None).unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].id, telegram.delivery.id);
+        assert_eq!(
+            delivered
+                .digest_delivery
+                .channel_delivery_attempt_id
+                .as_deref(),
+            Some(telegram.delivery.id.as_str())
+        );
+
+        let replayed = store
+            .send_digest_candidate_telegram(
+                &digest.id,
+                "TOKEN",
+                "123",
+                Some("digest-delivery-send-key"),
+                Some("http://127.0.0.1:9"),
+            )
+            .unwrap();
+        assert!(replayed.replayed);
+        assert_eq!(replayed.digest_delivery.id, delivered.digest_delivery.id);
+        assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
     }
 
     #[test]

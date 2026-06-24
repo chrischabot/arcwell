@@ -250,9 +250,13 @@ PR, implementation note, or final report:
       queue counts. Digest candidates now carry durable `review_status`,
       reviewer, review note, approve/reject MCP/slash surfaces, and a
       fail-closed delivery check that records policy-decision audit metadata
-      while refusing unreviewed/rejected/model-score-only delivery; score
-      freshness, actual delivery-attempt integration, and quiet-hours
-      scheduling remain open.
+      while refusing unreviewed/rejected/model-score-only delivery. Approved
+      Telegram delivery now writes an idempotent `digest_deliveries` ledger row,
+      links the generic channel message and channel delivery attempt, records
+      blocked review/policy/auth rows without provider calls, exposes MCP/slash
+      delivery/list surfaces, and replays the same idempotency key without
+      duplicate sends; score freshness, email parity, retry orchestration, and
+      quiet-hours scheduling remain open.
 - [ ] Add X heuristic scoring before model scoring, with score rows as overlays,
       stale-score labels, schema-validated model output, eval fixtures,
       cost-decision rows, private-content exclusion, and proof that scores never
@@ -329,7 +333,11 @@ PR, implementation note, or final report:
 - [ ] Add model-backed interestingness for X/source/digest candidates behind
       explicit config, policy, cost gates, and eval coverage.
 - [ ] Add delivery routing for X/watch-source digest candidates through the same
-      email/Telegram delivery-attempt infrastructure.
+      email/Telegram delivery-attempt infrastructure. Telegram now has a
+      review/policy/channel-auth gated, idempotent `digest_deliveries` ledger
+      path over the generic channel delivery-attempt table; email parity,
+      quiet-hours scheduling, due retry, and live external digest-delivery proof
+      remain open.
 - [x] Add Horizon-inspired radar substrate with durable profiles, runs,
       normalized source-card-backed items, radar FTS, heuristic score overlays,
       CLI/MCP run/stage/audit surfaces, and severe local-proof tests for

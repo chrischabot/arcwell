@@ -425,7 +425,7 @@ Intent:
 - `$wiki-research`: search and write source-backed wiki pages.
 - `$deep-research`: plan, gather, audit, and brief multi-source research.
 - `$research-audit`: adversarially check sources and claims.
-- `$anti-mirage`: require explicit claims, refutation tests, production-data proof gates, ops visibility, and honest status before substantial work is promoted; use it before substantial work changes capability claims, real-data pipelines, scheduled operation, delivery, reports, or done/production status.
+- `$anti-mirage`: require explicit claims, refutation tests, production-data proof gates, ops visibility, and honest status before substantial work is promoted; use it before substantial work adopts external/reference-product lessons or changes capability claims, real-data pipelines, scheduled operation, delivery, reports, or done/production status.
 - `$x-research`: import/search/report X evidence and render local source-card-backed briefs.
 - `$tidal-control`: manage TIDAL playlists and favorites from an existing TIDAL desktop session.
 - `$lumin-control`: discover/inspect LUMIN/OpenHome renderers and send explicit LUMIN UDP/SOAP control commands.

@@ -1,6 +1,6 @@
 ---
 name: anti-mirage
-description: Use when planning, implementing, reviewing, or promoting substantial Arcwell capabilities where fake-done risk matters: production readiness, done/completion claims, major integrations, roadmaps, implementation plans, proof gates, status/TODO updates, live data pipelines, delivery paths, scheduled workers, provider/model features, migrations, indexing, reports, or any user concern about mirages, empty shells, fake promises, illusions, or half-finished work.
+description: Use when planning, implementing, reviewing, or promoting substantial Arcwell capabilities where fake-done risk matters: production readiness, done/completion claims, external product/reference-repo integrations, "full value" adoption plans, major integrations, roadmaps, implementation plans, proof gates, status/TODO updates, live data pipelines, delivery paths, scheduled workers, provider/model features, migrations, ingestion, indexing, ranking, summarization, reports, or any user concern about mirages, empty shells, fake promises, illusions, or half-finished work.
 ---
 
 # Anti-Mirage
@@ -15,16 +15,21 @@ Use this skill when:
 
 - the user asks for a design, roadmap, implementation plan, architecture plan,
   readiness plan, or "make sure this is real"
+- the user asks to adopt lessons from an external product, repo, paper, system,
+  or reference implementation and wants Arcwell to capture the full value rather
+  than copying a foreign runtime
 - the task touches production readiness, live data, scheduled workers,
-  provider/model calls, delivery, ingestion, indexing, reports, migrations,
-  source adapters, cost/policy/secrets, ops visibility, or user-visible status
+  provider/model calls, delivery, ingestion, indexing, ranking, summarization,
+  report writing, update sending, migrations, source adapters,
+  cost/policy/secrets, ops visibility, or user-visible status
 - the work could be mistaken for done because docs, prompts, schemas,
   commands, mock tests, or scaffolding exist
 - updating `STATUS.md`, `TODO.md`, package READMEs, plugin commands, or skill
   docs would change what Arcwell claims it can do
 - the user uses language such as "anti-mirage", "fake done", "empty shell",
   "half finished", "illusion", "production", "real data", "proof",
-  "quality gates", "readiness", or "done"
+  "quality gates", "readiness", "full value", "exact detail", "go deeper",
+  "not mocks", or "done"
 
 Do not use this skill for:
 
@@ -41,6 +46,9 @@ when any of these are true:
 
 - The user asks for "done", "complete", "production", "real data",
   "quality gates", "proof", "anti-mirage", or worries about half-finished work.
+- The user asks to learn from or integrate a named external/reference project
+  into Arcwell, especially when the words "full value", "entire value",
+  "learnings", "lessons", "concepts", or "ideas" appear.
 - The task creates or changes a capability claim in `STATUS.md`, `TODO.md`,
   README files, plugin commands, MCP tool descriptions, skills, or docs.
 - The task promotes a workflow from design to implementation, from local proof
@@ -48,6 +56,8 @@ when any of these are true:
 - The task touches ingestion, indexing, ranking, summarization, report writing,
   delivery, workers, source health, cursors, secrets, provider calls, cost
   policy, or ops visibility.
+- The task asks for a plan that could be mistaken for implementation, or an
+  implementation that could be mistaken for operational readiness.
 - The task is large enough that a prompt, schema, command, or mock could look
   like completion without proving the underlying behavior.
 

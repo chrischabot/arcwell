@@ -969,6 +969,14 @@ const SLASH_COMMAND_ALIASES: &[(&str, SlashAliasTarget)] = &[
         SlashAliasTarget::Mcp("digest_candidate_delivery_check"),
     ),
     (
+        "digest-candidate-deliveries",
+        SlashAliasTarget::Mcp("digest_candidate_deliveries"),
+    ),
+    (
+        "digest-candidate-deliver-telegram",
+        SlashAliasTarget::Mcp("digest_candidate_deliver_telegram"),
+    ),
+    (
         "radar-profile-create",
         SlashAliasTarget::Mcp("radar_profile_create"),
     ),
@@ -9123,6 +9131,24 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 &id, &channel, &subject, target
             )?))
         }
+        "digest_candidate_deliveries" => {
+            let candidate_id = arguments.get("candidate_id").and_then(Value::as_str);
+            Ok(json!(store.list_digest_deliveries(candidate_id)?))
+        }
+        "digest_candidate_deliver_telegram" => {
+            let id = required_string(&arguments, "id")?;
+            let bot_token = required_string(&arguments, "bot_token")?;
+            let chat_id = required_string(&arguments, "chat_id")?;
+            let idempotency_key = arguments.get("idempotency_key").and_then(Value::as_str);
+            let api_base = arguments.get("api_base").and_then(Value::as_str);
+            Ok(json!(store.send_digest_candidate_telegram(
+                &id,
+                &bot_token,
+                &chat_id,
+                idempotency_key,
+                api_base
+            )?))
+        }
         "radar_profile_create" => {
             let name = required_string(&arguments, "name")?;
             let description = optional_string(&arguments, "description", "");
@@ -10759,6 +10785,29 @@ fn mcp_tools() -> Vec<Value> {
                     "Authorized delivery subject, such as telegram:chat:123.",
                 ),
                 ("target", "string", "Optional delivery target/destination."),
+            ],
+        ),
+        tool(
+            "digest_candidate_deliveries",
+            "List durable digest delivery ledger rows, optionally filtered by digest candidate id.",
+            [(
+                "candidate_id",
+                "string",
+                "Optional digest candidate id filter.",
+            )],
+        ),
+        tool(
+            "digest_candidate_deliver_telegram",
+            "Deliver an approved digest candidate to Telegram after review, policy, channel authorization, cost, and provider-send gates.",
+            [
+                ("id", "string", "Digest candidate id."),
+                ("bot_token", "string", "Telegram bot token."),
+                ("chat_id", "string", "Telegram chat id."),
+                (
+                    "idempotency_key",
+                    "string",
+                    "Optional idempotency key for deliberate replays.",
+                ),
             ],
         ),
         tool(
@@ -12618,7 +12667,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         command_names.sort();
-        assert_eq!(command_names.len(), 137);
+        assert_eq!(command_names.len(), 139);
         let missing = command_names
             .into_iter()
             .filter(|name| slash_alias_target(name).is_none() && !slash_alias_is_dynamic(name))
@@ -14077,6 +14126,17 @@ subject = "telegram:chat:mcp"
 target = "telegram:chat:mcp"
 reason = "allow reviewed MCP digest delivery check"
 priority = 10
+
+[[rules]]
+id = "allow-mcp-digest-channel-send"
+effect = "allow"
+action = "channel.send"
+provider = "telegram"
+channel = "telegram"
+subject = "telegram:chat:mcp"
+target = "mcp"
+reason = "allow reviewed MCP digest Telegram provider send"
+priority = 10
 "#,
         )
         .unwrap();
@@ -14114,6 +14174,80 @@ priority = 10
                 .and_then(Value::as_str),
             Some("allow-mcp-digest-delivery")
         );
+
+        call_mcp_tool(
+            &paths,
+            "channel_authorize",
+            json!({
+                "channel": "telegram",
+                "subject": "telegram:chat:mcp",
+                "can_send": true
+            }),
+        )
+        .unwrap();
+        let api = mock_base_server(
+            r#"{"ok":true,"result":{"message_id":314}}"#,
+            "application/json",
+        );
+        let delivered = call_mcp_tool(
+            &paths,
+            "digest_candidate_deliver_telegram",
+            json!({
+                "id": candidate_id,
+                "bot_token": "TOKEN",
+                "chat_id": "mcp",
+                "idempotency_key": "mcp-digest-send",
+                "api_base": api
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            delivered.get("replayed").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            delivered
+                .pointer("/telegram/delivery/channel")
+                .and_then(Value::as_str),
+            Some("telegram")
+        );
+        assert_eq!(
+            delivered
+                .pointer("/telegram/message/status")
+                .and_then(Value::as_str),
+            Some("sent")
+        );
+        let replayed = call_mcp_tool(
+            &paths,
+            "digest_candidate_deliver_telegram",
+            json!({
+                "id": candidate_id,
+                "bot_token": "TOKEN",
+                "chat_id": "mcp",
+                "idempotency_key": "mcp-digest-send",
+                "api_base": "http://127.0.0.1:9"
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            replayed.get("replayed").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            replayed
+                .pointer("/digest_delivery/id")
+                .and_then(Value::as_str),
+            delivered
+                .pointer("/digest_delivery/id")
+                .and_then(Value::as_str)
+        );
+        let deliveries = call_mcp_tool(
+            &paths,
+            "digest_candidate_deliveries",
+            json!({ "candidate_id": candidate_id }),
+        )
+        .unwrap();
+        assert_eq!(deliveries.as_array().map(Vec::len), Some(1));
     }
 
     #[test]
