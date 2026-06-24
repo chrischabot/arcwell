@@ -3100,6 +3100,7 @@ pub struct OpsSnapshot {
     pub channel_messages: Vec<ChannelMessage>,
     pub channel_delivery_attempts: Vec<ChannelDeliveryAttempt>,
     pub digest_candidates: Vec<DigestCandidate>,
+    pub digest_deliveries: Vec<DigestDelivery>,
     pub work_runs: Vec<WorkRun>,
     pub procedures: Vec<Procedure>,
     pub procedure_candidates: Vec<ProcedureCandidate>,
@@ -23335,6 +23336,7 @@ impl Store {
             channel_messages: self.list_channel_messages()?,
             channel_delivery_attempts: self.list_channel_delivery_attempts(None)?,
             digest_candidates: self.list_digest_candidates()?,
+            digest_deliveries: self.list_digest_deliveries(None)?,
             work_runs: self.search_work_runs(None, None, None, 50)?,
             procedures: self.search_procedures(None, Some("active"), 50)?,
             procedure_candidates: self.list_procedure_candidates("pending")?,
@@ -57984,6 +57986,10 @@ priority = 10
         assert!(replayed.replayed);
         assert_eq!(replayed.digest_delivery.id, delivered.digest_delivery.id);
         assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
+        let ops = store.ops_snapshot().unwrap();
+        assert!(ops.digest_deliveries.iter().any(|delivery| {
+            delivery.id == delivered.digest_delivery.id && delivery.status == "sent"
+        }));
 
         let failing_api = mock_status_server(
             "429 Too Many Requests",
