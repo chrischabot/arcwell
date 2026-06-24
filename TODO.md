@@ -398,7 +398,8 @@ PR, implementation note, or final report:
       `radar_scheduled_delivery`, run/summarize/audit, deliver through
       configured authorized Telegram, record tick/run/summary/delivery lineage,
       suppress duplicate ticks inside the interval, reject raw secrets in
-      profile policy, and block quiet-hours config until real deferral exists.
+      profile policy, and defer active quiet-hours windows without provider
+      sends.
 - [ ] Add model-backed synthesis, live production delivery proof, production
       scheduled delivery, cross-channel scheduled delivery, quiet-hours
       deferral, production-data semantic dedupe breadth across more profiles,

@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use calamine::{Data, Range, Reader, open_workbook_auto};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Timelike, Utc};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use reqwest::header::{
@@ -999,7 +999,13 @@ struct ScheduledRadarDeliveryPolicy {
     language: String,
     format: String,
     fetch_live: bool,
-    quiet_hours_present: bool,
+    quiet_hours: Option<ScheduledRadarQuietHours>,
+}
+
+#[derive(Debug, Clone)]
+struct ScheduledRadarQuietHours {
+    start_minutes: u32,
+    end_minutes: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1025,6 +1031,7 @@ pub struct WorkerRunReport {
     pub processed: usize,
     pub completed: usize,
     pub failed: usize,
+    pub deferred: usize,
     pub dead_lettered: usize,
     pub jobs: Vec<WikiJob>,
     pub watch_poll: Option<WatchSourcePollEnqueueReport>,
@@ -12584,8 +12591,8 @@ impl Store {
             FROM radar_schedule_ticks t
             JOIN wiki_jobs j ON j.id = t.job_id
             WHERE t.profile_id = ?1
-              AND t.status IN ('pending', 'running')
-              AND j.status IN ('pending', 'running', 'failed')
+              AND t.status IN ('pending', 'running', 'deferred')
+              AND j.status IN ('pending', 'running', 'failed', 'deferred')
             "#,
             params![profile_id],
             |row| row.get(0),
@@ -12877,6 +12884,7 @@ impl Store {
         };
         let completed = jobs.iter().filter(|job| job.status == "completed").count();
         let failed = jobs.iter().filter(|job| job.status == "failed").count();
+        let deferred = jobs.iter().filter(|job| job.status == "deferred").count();
         let dead_lettered = jobs
             .iter()
             .filter(|job| job.status == "dead_lettered")
@@ -12886,6 +12894,7 @@ impl Store {
             processed: jobs.len(),
             completed,
             failed,
+            deferred,
             dead_lettered,
             jobs,
             watch_poll,
@@ -23133,6 +23142,7 @@ impl Store {
                 FROM wiki_jobs
                 WHERE (
                     status = 'pending'
+                    OR (status = 'deferred' AND next_run_at IS NOT NULL AND next_run_at <= ?1)
                     OR (status = 'failed' AND (next_run_at IS NULL OR next_run_at <= ?1))
                     OR (status = 'running' AND leased_until IS NOT NULL AND leased_until <= ?1)
                 )
@@ -23159,6 +23169,7 @@ impl Store {
             WHERE id = ?1
               AND (
                 status = 'pending'
+                OR (status = 'deferred' AND next_run_at IS NOT NULL AND next_run_at <= ?4)
                 OR (status = 'failed' AND (next_run_at IS NULL OR next_run_at <= ?4))
                 OR (status = 'running' AND leased_until IS NOT NULL AND leased_until <= ?4)
               )
@@ -23197,7 +23208,13 @@ impl Store {
                 other => bail!("unsupported wiki job kind: {other}"),
             });
         match result {
-            Ok(result) => self.complete_wiki_job(&job.id, result),
+            Ok(result) => {
+                if let Some(deferred_until) = deferred_job_until(&result)? {
+                    self.defer_wiki_job(&job.id, result, &deferred_until)
+                } else {
+                    self.complete_wiki_job(&job.id, result)
+                }
+            }
             Err(error) => self.fail_wiki_job(&job.id, &error.to_string()),
         }
     }
@@ -23380,21 +23397,22 @@ impl Store {
             .with_context(|| format!("radar schedule profile not found: {}", tick.profile_id))?;
         let policy = scheduled_radar_delivery_policy(&profile)?
             .context("radar profile is not configured for scheduled delivery")?;
-        if policy.quiet_hours_present {
-            let error = "quiet-hours deferral is not implemented for scheduled radar delivery";
+        if let Some(deferred_until) = radar_quiet_hours_deferred_until(&policy, Utc::now())? {
+            let note = format!("quiet hours active until {}", deferred_until.to_rfc3339());
             let updated = self.update_radar_schedule_tick(
                 &tick.id,
-                "blocked",
+                "deferred",
                 tick.run_id.as_deref(),
                 tick.summary_id.as_deref(),
                 tick.delivery_id.as_deref(),
-                Some(error),
+                Some(&note),
             )?;
             return Ok(json!({
                 "tick": updated,
-                "status": "blocked",
-                "error": error,
-                "proof_level": "Local Proof boundary: quiet-hours policy is rejected, not silently ignored"
+                "status": "deferred",
+                "deferred_until": deferred_until.to_rfc3339(),
+                "reason": "quiet_hours",
+                "proof_level": "Local Proof: quiet-hours policy deferred scheduled radar delivery before provider send"
             }));
         }
         self.update_radar_schedule_tick(
@@ -24417,6 +24435,28 @@ impl Store {
         )?;
         self.get_wiki_job(id)?
             .with_context(|| format!("completed wiki job not found: {id}"))
+    }
+
+    fn defer_wiki_job(&self, id: &str, result_json: Value, next_run_at: &str) -> Result<WikiJob> {
+        validate_timestamp(next_run_at)?;
+        self.conn.execute(
+            r#"
+            UPDATE wiki_jobs
+            SET status = 'deferred',
+                result_json = ?2,
+                error = NULL,
+                attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE attempts END,
+                leased_until = NULL,
+                worker_id = NULL,
+                next_run_at = ?3,
+                dead_lettered_at = NULL,
+                updated_at = ?4
+            WHERE id = ?1
+            "#,
+            params![id, serde_json::to_string(&result_json)?, next_run_at, now()],
+        )?;
+        self.get_wiki_job(id)?
+            .with_context(|| format!("deferred wiki job not found: {id}"))
     }
 
     fn fail_wiki_job(&self, id: &str, error: &str) -> Result<WikiJob> {
@@ -26682,6 +26722,18 @@ fn provider_network_source_for_job(kind: &str) -> &str {
         "x_monitor_watch_source" => "x_monitor",
         other => other,
     }
+}
+
+fn deferred_job_until(result: &Value) -> Result<Option<String>> {
+    if result.get("status").and_then(Value::as_str) != Some("deferred") {
+        return Ok(None);
+    }
+    let deferred_until = result
+        .get("deferred_until")
+        .and_then(Value::as_str)
+        .context("deferred job result requires deferred_until")?;
+    validate_timestamp(deferred_until)?;
+    Ok(Some(deferred_until.to_string()))
 }
 
 fn scheduled_job_cost_projection(
@@ -31407,6 +31459,10 @@ fn scheduled_radar_delivery_policy(
     {
         bail!("scheduled radar delivery policy must not contain raw secrets");
     }
+    let quiet_hours = policy
+        .get("quiet_hours")
+        .map(parse_scheduled_radar_quiet_hours)
+        .transpose()?;
     Ok(Some(ScheduledRadarDeliveryPolicy {
         interval_hours,
         channel,
@@ -31417,8 +31473,90 @@ fn scheduled_radar_delivery_policy(
             .get("fetch_live")
             .and_then(Value::as_bool)
             .unwrap_or(false),
-        quiet_hours_present: policy.get("quiet_hours").is_some(),
+        quiet_hours,
     }))
+}
+
+fn parse_scheduled_radar_quiet_hours(value: &Value) -> Result<ScheduledRadarQuietHours> {
+    let object = value
+        .as_object()
+        .context("scheduled radar quiet_hours must be an object")?;
+    let timezone = object
+        .get("timezone")
+        .and_then(Value::as_str)
+        .unwrap_or("UTC");
+    if timezone != "UTC" {
+        bail!("scheduled radar quiet_hours currently supports timezone='UTC' only");
+    }
+    let start = object
+        .get("start")
+        .and_then(Value::as_str)
+        .context("scheduled radar quiet_hours requires start")?;
+    let end = object
+        .get("end")
+        .and_then(Value::as_str)
+        .context("scheduled radar quiet_hours requires end")?;
+    let start_minutes = parse_hh_mm_minutes(start, "quiet_hours.start")?;
+    let end_minutes = parse_hh_mm_minutes(end, "quiet_hours.end")?;
+    if start_minutes == end_minutes {
+        bail!("scheduled radar quiet_hours start and end must differ");
+    }
+    Ok(ScheduledRadarQuietHours {
+        start_minutes,
+        end_minutes,
+    })
+}
+
+fn parse_hh_mm_minutes(value: &str, label: &str) -> Result<u32> {
+    let (hour, minute) = value
+        .split_once(':')
+        .with_context(|| format!("{label} must use HH:MM"))?;
+    if hour.len() != 2 || minute.len() != 2 {
+        bail!("{label} must use zero-padded HH:MM");
+    }
+    let hour = hour
+        .parse::<u32>()
+        .with_context(|| format!("{label} hour must be numeric"))?;
+    let minute = minute
+        .parse::<u32>()
+        .with_context(|| format!("{label} minute must be numeric"))?;
+    if hour > 23 || minute > 59 {
+        bail!("{label} must be within 00:00 and 23:59");
+    }
+    Ok(hour * 60 + minute)
+}
+
+fn radar_quiet_hours_deferred_until(
+    policy: &ScheduledRadarDeliveryPolicy,
+    now: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>> {
+    let Some(quiet_hours) = &policy.quiet_hours else {
+        return Ok(None);
+    };
+    let now_minutes = now.hour() * 60 + now.minute();
+    let start = quiet_hours.start_minutes;
+    let end = quiet_hours.end_minutes;
+    let active = if start < end {
+        now_minutes >= start && now_minutes < end
+    } else {
+        now_minutes >= start || now_minutes < end
+    };
+    if !active {
+        return Ok(None);
+    }
+    let end_hour = end / 60;
+    let end_minute = end % 60;
+    let today_end = now
+        .date_naive()
+        .and_hms_opt(end_hour, end_minute, 0)
+        .context("constructing scheduled radar quiet-hours end")?
+        .and_utc();
+    let deferred_until = if today_end <= now {
+        today_end + ChronoDuration::days(1)
+    } else {
+        today_end
+    };
+    Ok(Some(deferred_until))
 }
 
 fn radar_schedule_due_slot(interval_hours: i64) -> String {
@@ -31434,8 +31572,7 @@ fn radar_schedule_due_slot(interval_hours: i64) -> String {
 fn radar_schedule_interval_elapsed(latest_due_at: &str, interval_hours: i64) -> bool {
     DateTime::parse_from_rfc3339(latest_due_at)
         .map(|latest| {
-            latest.with_timezone(&Utc) + chrono::Duration::hours(interval_hours.max(1))
-                <= Utc::now()
+            latest.with_timezone(&Utc) + ChronoDuration::hours(interval_hours.max(1)) <= Utc::now()
         })
         .unwrap_or(true)
 }
@@ -46415,15 +46552,20 @@ reason = "X OAuth disabled during policy test"
     }
 
     #[test]
-    fn severe_radar_scheduled_delivery_blocks_quiet_hours_until_real_deferral_exists() {
-        // CLAIM: quiet-hours configuration is not silently ignored by scheduled
-        // radar delivery.
-        // ORACLE: a scheduled profile with quiet_hours records a blocked tick,
-        // creates no run/summary/delivery side effects, and completes the worker
-        // job with an explicit boundary result.
-        // SEVERITY: Severe because ignoring quiet hours would turn a safety
-        // policy into decorative JSON.
+    fn severe_radar_scheduled_delivery_defers_quiet_hours_and_resumes_same_tick() {
+        // CLAIM: quiet-hours configuration is real scheduled-delivery control,
+        // not decorative JSON and not a terminal block.
+        // ORACLE: a scheduled profile with active quiet_hours records a deferred
+        // tick/job without run/summary/delivery/provider side effects, is not
+        // claimed before deferred_until, and later resumes the same tick into a
+        // single authorized Telegram delivery when the quiet-hours policy clears.
+        // SEVERITY: Severe because unattended schedules must not send inside a
+        // quiet window, duplicate ticks while waiting, or get stuck forever.
         let store = test_store("radar-scheduled-delivery-quiet-hours");
+        let current_minutes = Utc::now().hour() * 60 + Utc::now().minute();
+        let start_minutes = (current_minutes + 24 * 60 - 1) % (24 * 60);
+        let end_minutes = (current_minutes + 10) % (24 * 60);
+        let quiet_time = |minutes: u32| format!("{:02}:{:02}", minutes / 60, minutes % 60);
         store
             .add_source_card(SourceCardInput {
                 title: "Quiet hours radar note".to_string(),
@@ -46436,7 +46578,7 @@ reason = "X OAuth disabled during policy test"
                 metadata: json!({}),
             })
             .unwrap();
-        store
+        let profile = store
             .create_radar_profile(RadarProfileInput {
                 name: "scheduled-quiet-hours-radar".to_string(),
                 description: "Scheduled quiet hours radar".to_string(),
@@ -46450,7 +46592,11 @@ reason = "X OAuth disabled during policy test"
                     "channel": "telegram",
                     "recipient_ref": "123",
                     "interval_hours": 24,
-                    "quiet_hours": { "start": "22:00", "end": "08:00", "timezone": "UTC" }
+                    "quiet_hours": {
+                        "start": quiet_time(start_minutes),
+                        "end": quiet_time(end_minutes),
+                        "timezone": "UTC"
+                    }
                 }),
                 model_policy: json!({ "model_scoring": "disabled" }),
                 metadata: json!({}),
@@ -46459,22 +46605,34 @@ reason = "X OAuth disabled during policy test"
 
         let worker = store.run_worker_once(2).unwrap();
         assert_eq!(worker.processed, 1);
-        assert_eq!(worker.completed, 1);
+        assert_eq!(worker.completed, 0);
+        assert_eq!(worker.deferred, 1);
+        assert_eq!(worker.jobs[0].status, "deferred");
+        assert_eq!(worker.jobs[0].attempts, 0, "{:?}", worker.jobs[0]);
+        assert!(worker.jobs[0].next_run_at.is_some());
+        let job_id = worker.jobs[0].id.clone();
         let result = worker.jobs[0].result_json.as_ref().unwrap();
         assert_eq!(
             result.get("status").and_then(Value::as_str),
-            Some("blocked")
+            Some("deferred")
         );
-        assert!(
-            result
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .contains("quiet-hours deferral is not implemented")
-        );
+        let deferred_until = result
+            .get("deferred_until")
+            .and_then(Value::as_str)
+            .expect("deferred_until");
+        validate_timestamp(deferred_until).unwrap();
+        assert_eq!(worker.jobs[0].next_run_at.as_deref(), Some(deferred_until));
         let ticks = store.list_radar_schedule_ticks().unwrap();
         assert_eq!(ticks.len(), 1);
-        assert_eq!(ticks[0].status, "blocked");
+        let tick_id = ticks[0].id.clone();
+        assert_eq!(ticks[0].status, "deferred");
+        assert!(
+            ticks[0]
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("quiet hours active until")
+        );
         assert!(ticks[0].run_id.is_none(), "{ticks:?}");
         assert!(ticks[0].summary_id.is_none(), "{ticks:?}");
         assert!(ticks[0].delivery_id.is_none(), "{ticks:?}");
@@ -46487,6 +46645,61 @@ reason = "X OAuth disabled during policy test"
                 .unwrap()
                 .is_empty()
         );
+        let second = store.run_worker_once(2).unwrap();
+        let second_schedule = second.radar_schedule.expect("second schedule report");
+        assert_eq!(second_schedule.inspected, 1);
+        assert_eq!(second_schedule.enqueued, 0);
+        assert_eq!(second.processed, 0);
+        assert_eq!(store.list_radar_schedule_ticks().unwrap().len(), 1);
+
+        store
+            .authorize_channel_subject("telegram", "telegram:chat:123", false, false, true)
+            .unwrap();
+        store
+            .set_secret_value("TELEGRAM_BOT_TOKEN", "TOKEN", "telegram")
+            .unwrap();
+        let ok_base = mock_status_server("200 OK", "", r#"{"ok":true}"#, "application/json");
+        store
+            .set_secret_value("TELEGRAM_API_BASE", &ok_base, "telegram")
+            .unwrap();
+        let resumed_policy = json!({
+            "delivery": "scheduled",
+            "channel": "telegram",
+            "recipient_ref": "123",
+            "interval_hours": 24
+        });
+        store
+            .conn
+            .execute(
+                "UPDATE radar_profiles SET delivery_policy_json = ?2, updated_at = ?3 WHERE id = ?1",
+                params![profile.id, serde_json::to_string(&resumed_policy).unwrap(), now()],
+            )
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE wiki_jobs SET next_run_at = ?2 WHERE id = ?1",
+                params![job_id, "2000-01-01T00:00:00Z"],
+            )
+            .unwrap();
+
+        let resumed = store.run_worker_once(2).unwrap();
+        assert_eq!(resumed.processed, 1);
+        assert_eq!(resumed.completed, 1);
+        assert_eq!(resumed.deferred, 0);
+        assert_eq!(resumed.jobs[0].id, job_id);
+        let ticks = store.list_radar_schedule_ticks().unwrap();
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].id, tick_id);
+        assert_eq!(ticks[0].status, "sent");
+        let run_id = ticks[0].run_id.as_deref().expect("resumed run id");
+        assert_eq!(
+            store.read_radar_run(run_id).unwrap().unwrap().stage,
+            "delivered"
+        );
+        assert_eq!(store.list_radar_deliveries(Some(run_id)).unwrap().len(), 1);
+        assert_eq!(store.list_channel_messages().unwrap().len(), 1);
+        assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
     }
 
     #[test]
@@ -46644,6 +46857,76 @@ reason = "X OAuth disabled during policy test"
         );
         assert!(store.list_radar_schedule_ticks().unwrap().is_empty());
         assert!(store.list_wiki_jobs().unwrap().is_empty());
+    }
+
+    #[test]
+    fn severe_radar_scheduled_delivery_rejects_invalid_quiet_hours_before_enqueue() {
+        // CLAIM: quiet-hours policy is validated before durable scheduled work
+        // exists.
+        // ORACLE: unsupported timezones and malformed windows fail the schedule
+        // enqueue report with no tick, no worker job, and no provider side
+        // effects.
+        // SEVERITY: Severe because a malformed quiet-hours policy must not be
+        // ignored or converted into an always-send schedule.
+        let store = test_store("radar-scheduled-delivery-invalid-quiet-hours");
+        store
+            .add_source_card(SourceCardInput {
+                title: "Scheduled invalid quiet hours radar note".to_string(),
+                url: "https://example.com/scheduled-invalid-quiet-hours-radar".to_string(),
+                source_type: "note".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Scheduled radar should reject invalid quiet-hours config.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                metadata: json!({}),
+            })
+            .unwrap();
+        store
+            .create_radar_profile(RadarProfileInput {
+                name: "scheduled-invalid-quiet-hours-radar".to_string(),
+                description: "Scheduled invalid quiet hours radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(5),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "invalid quiet hours radar" }]),
+                delivery_policy: json!({
+                    "delivery": "scheduled",
+                    "channel": "telegram",
+                    "recipient_ref": "123",
+                    "interval_hours": 24,
+                    "quiet_hours": {
+                        "start": "22:00",
+                        "end": "08:00",
+                        "timezone": "Europe/London"
+                    }
+                }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let report = store.enqueue_due_radar_schedule_jobs(10).unwrap();
+        assert_eq!(report.inspected, 1);
+        assert_eq!(report.enqueued, 0);
+        assert_eq!(report.skipped, 1);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|error| error.contains("timezone='UTC' only")),
+            "{:?}",
+            report.errors
+        );
+        assert!(store.list_radar_schedule_ticks().unwrap().is_empty());
+        assert!(store.list_wiki_jobs().unwrap().is_empty());
+        assert!(store.list_channel_messages().unwrap().is_empty());
+        assert!(
+            store
+                .list_channel_delivery_attempts(None)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

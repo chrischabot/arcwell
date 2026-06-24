@@ -214,7 +214,7 @@ Ops:
   evidence preservation, same-product/different-event separation, dedupe score
   drift, generated-summary/no-delivery boundaries, manual radar delivery
   authorization/idempotency/provider-failure boundaries, local scheduled
-  Telegram delivery through the resident worker, quiet-hours rejection, raw
+  Telegram delivery through the resident worker, quiet-hours deferral, raw
   secret rejection, FTS drift, corrupt dedupe groups, and
   prompt-injection-as-evidence rendering.
 - Production Data Proof: copied-home source-card projection, foreground public

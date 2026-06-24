@@ -1133,7 +1133,7 @@ Checklist:
 - [x] Add policy check before delivery.
 - [x] Add cost check where provider delivery has cost.
 - [x] Add idempotency keys per run/summary/recipient.
-- [ ] Add quiet-hours deferral.
+- [x] Add local quiet-hours deferral for scheduled Telegram delivery.
 - [x] Add local Telegram retry reconciliation for manual radar deliveries:
       worker-driven successful retries update the original `radar_deliveries`
       row and exhausted local retry chains become `dead_lettered`.
@@ -1148,9 +1148,11 @@ Checklist:
       manual delivery proof: scheduled profiles write durable schedule ticks,
       enqueue `radar_scheduled_delivery`, run/summarize/audit, deliver through
       configured authorized Telegram, link tick/run/summary/delivery lineage,
-      and suppress duplicate ticks inside the configured interval.
-- [ ] Add production/live scheduled delivery proof, quiet-hours deferral, and
-      cross-channel scheduled delivery.
+      suppress duplicate ticks inside the configured interval, reject raw
+      secrets in profile policy, and defer active quiet-hours without provider
+      sends.
+- [ ] Add production/live scheduled delivery proof, production quiet-hours
+      deferral, and cross-channel scheduled delivery.
 
 Anti-mirage gate:
 
@@ -1167,7 +1169,8 @@ Production-data proof:
       or disposable authorized Telegram test chat.
 - [ ] Send one real production-data digest to an authorized email recipient or
       disposable authorized email route.
-- [ ] Prove quiet-hours deferral with a real delivery row and no provider send.
+- [x] Prove local quiet-hours deferral with a deferred worker job/tick and no
+      provider send.
 - [ ] Prove retry/dead-letter with a controlled provider failure or disabled
       route, without leaking secrets.
 - [x] Prove local Telegram retry/dead-letter behavior with controlled provider
@@ -1176,8 +1179,8 @@ Production-data proof:
       resident worker enqueues one schedule tick, completes the
       `radar_scheduled_delivery` job, records run/summary/delivery lineage,
       reaches `sent`, avoids duplicate ticks inside the interval, rejects raw
-      secrets in profile policy, and blocks quiet-hours config until real
-      deferral exists.
+      secrets in profile policy, and defers active quiet-hours without provider
+      sends.
 
 ### Stage 9: Source Quality And Recommendation Loop
 
@@ -1559,11 +1562,11 @@ Exit gate:
 ### Phase 6: Delivery And Scheduling
 
 - [x] Manual authorized delivery.
-- [ ] Quiet-hours deferral.
+- [x] Local quiet-hours deferral.
 - [x] Local Telegram retry reconciliation/dead-letter for manual deliveries.
 - [x] Local scheduled Telegram delivery through `worker run-once` with durable
   ticks, authorized provider attempts, duplicate suppression, raw-secret
-  rejection, and explicit quiet-hours blocking.
+  rejection, and explicit quiet-hours deferral.
 - [ ] Cross-channel/scheduled retry/dead-letter.
 - [ ] Production scheduled worker/service runs.
 - [ ] Source-quality rollups.
