@@ -393,19 +393,27 @@ PR, implementation note, or final report:
       delivery retry path: worker-driven successful retries now promote the
       original `radar_deliveries` row and radar run, and exhausted local retry
       chains become `dead_lettered` without continued sends.
-- [x] Add local scheduled Telegram delivery through the resident worker:
+- [x] Add local scheduled Telegram/email delivery through the resident worker:
       scheduled profiles write durable ticks, enqueue
       `radar_scheduled_delivery`, run/summarize/audit, deliver through
-      configured authorized Telegram, record tick/run/summary/delivery lineage,
-      suppress duplicate ticks inside the interval, reject raw secrets in
-      profile policy, and defer active quiet-hours windows without provider
-      sends.
-- [ ] Add model-backed synthesis, live production delivery proof, production
-      scheduled delivery, cross-channel scheduled delivery, quiet-hours
-      deferral, production-data semantic dedupe breadth across more profiles,
-      production-data balance review, seven-day source-quality trend/decay
-      proof, broader ops controls, and status promotion only after real-data
-      gates pass.
+      configured authorized Telegram or Cloudflare Email, record
+      tick/run/summary/delivery lineage, suppress duplicate ticks inside the
+      interval, reject raw secrets in profile policy, block unauthorized email
+      recipients before provider send, and defer active quiet-hours windows
+      without provider sends.
+- [x] Add repeatable production-data scheduled-delivery proof:
+      `scripts/radar-scheduled-delivery-production-proof` creates a disposable
+      scheduled profile over real public RSS/GitHub/arXiv/Hacker News sources,
+      drains the resident worker, verifies real indexed/scored items and
+      healthy cursor/source-health state, sends one audit-ok summary through a
+      controlled Telegram endpoint, records tick/run/summary/delivery lineage,
+      and proves duplicate suppression on a second worker pass.
+- [ ] Add model-backed synthesis, live production delivery proof, live external
+      scheduled delivery/service proof, production cross-channel scheduled
+      delivery, quiet-hours deferral, production-data semantic dedupe breadth
+      across more profiles, production-data balance review, seven-day
+      source-quality trend/decay proof, broader ops controls, and status
+      promotion only after real-data gates pass.
 - [ ] Preserve tracked email defaults as `agent@example.com` and
       `user@example.com`; keep real local agent/author addresses only in ignored
       env or secret config.

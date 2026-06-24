@@ -1,0 +1,355 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "BLOCKED: node is required for JSON assertions and the controlled Telegram endpoint." >&2
+  exit 2
+fi
+
+RUN_STAMP="${ARCWELL_RADAR_SCHEDULED_PROOF_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_RADAR_SCHEDULED_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/radar-scheduled-delivery-production-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_RADAR_SCHEDULED_PROOF_HOME:-$PROOF_ROOT/home}"
+
+RSS_URL="${ARCWELL_RADAR_SCHEDULED_RSS_URL:-https://hnrss.org/newest?points=100}"
+GITHUB_OWNER="${ARCWELL_RADAR_SCHEDULED_GITHUB_OWNER:-Thysrael}"
+ARXIV_QUERY="${ARCWELL_RADAR_SCHEDULED_ARXIV_QUERY:-cat:cs.AI}"
+HACKERNEWS_FEED="${ARCWELL_RADAR_SCHEDULED_HACKERNEWS_FEED:-frontpage}"
+PROFILE_NAME="${ARCWELL_RADAR_SCHEDULED_PROFILE_NAME:-scheduled-delivery-proof-$RUN_STAMP}"
+TELEGRAM_CHAT_ID="${ARCWELL_RADAR_SCHEDULED_TELEGRAM_CHAT_ID:-123456789}"
+TELEGRAM_TOKEN="${ARCWELL_RADAR_SCHEDULED_TELEGRAM_TOKEN:-PROOF_TOKEN_DO_NOT_USE}"
+MIN_ITEMS="${ARCWELL_RADAR_SCHEDULED_MIN_ITEMS:-10}"
+MIN_SELECTED="${ARCWELL_RADAR_SCHEDULED_MIN_SELECTED:-1}"
+MAX_DELIVERY_ITEMS="${ARCWELL_RADAR_SCHEDULED_MAX_DELIVERY_ITEMS:-5}"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[radar-scheduled-delivery-proof] %s\n' "$*"
+}
+
+fail() {
+  printf '[radar-scheduled-delivery-proof] BLOCKED: %s\n' "$*" >&2
+  exit 2
+}
+
+MOCK_BASE_FILE="$ARTIFACT_DIR/telegram-api-base.txt"
+MOCK_LOG_FILE="$ARTIFACT_DIR/telegram-provider-requests.jsonl"
+node - "$MOCK_BASE_FILE" "$MOCK_LOG_FILE" <<'NODE' &
+const fs = require("fs");
+const http = require("http");
+const [basePath, logPath] = process.argv.slice(2);
+
+const server = http.createServer((req, res) => {
+  const chunks = [];
+  req.on("data", (chunk) => chunks.push(chunk));
+  req.on("end", () => {
+    const body = Buffer.concat(chunks).toString("utf8");
+    const sanitizedUrl = String(req.url || "").replace(/\/bot[^/]+/g, "/bot<redacted>");
+    fs.appendFileSync(
+      logPath,
+      `${JSON.stringify({
+        method: req.method,
+        url: sanitizedUrl,
+        content_type: req.headers["content-type"] || null,
+        body,
+      })}\n`
+    );
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, result: { message_id: 4242 } }));
+  });
+});
+
+server.listen(0, "127.0.0.1", () => {
+  const address = server.address();
+  fs.writeFileSync(basePath, `http://127.0.0.1:${address.port}\n`);
+});
+
+process.on("SIGTERM", () => server.close(() => process.exit(0)));
+NODE
+MOCK_PID=$!
+trap 'kill "$MOCK_PID" >/dev/null 2>&1 || true' EXIT
+
+for _ in $(seq 1 50); do
+  [ -s "$MOCK_BASE_FILE" ] && break
+  sleep 0.1
+done
+[ -s "$MOCK_BASE_FILE" ] || fail "controlled Telegram endpoint did not start"
+TELEGRAM_API_BASE="$(tr -d '\n' <"$MOCK_BASE_FILE")"
+
+log "proof root: $PROOF_ROOT"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+log "controlled Telegram API base: $TELEGRAM_API_BASE"
+
+log "authorizing disposable Telegram recipient"
+"$ARCWELL_BIN" telegram authorize "telegram:chat:$TELEGRAM_CHAT_ID" --send \
+  >"$ARTIFACT_DIR/telegram-authorization.json"
+
+log "storing local Telegram provider configuration"
+"$ARCWELL_BIN" secrets set-value TELEGRAM_BOT_TOKEN "$TELEGRAM_TOKEN" --provider telegram \
+  >/dev/null
+"$ARCWELL_BIN" secrets set-value TELEGRAM_API_BASE "$TELEGRAM_API_BASE" --provider telegram \
+  >/dev/null
+
+DELIVERY_POLICY="$(node - "$TELEGRAM_CHAT_ID" <<'NODE'
+const [chatId] = process.argv.slice(2);
+process.stdout.write(JSON.stringify({
+  delivery: "scheduled",
+  channel: "telegram",
+  recipient_ref: chatId,
+  interval_hours: 24,
+  language: "en",
+  format: "markdown",
+  fetch_live: true,
+}));
+NODE
+)"
+
+log "creating scheduled live radar profile: $PROFILE_NAME"
+"$ARCWELL_BIN" radar profile create "$PROFILE_NAME" \
+  --description "Scheduled delivery production-data proof over public RSS, GitHub, arXiv, and Hacker News sources." \
+  --window-hours 168 \
+  --min-score 1 \
+  --max-items "$MAX_DELIVERY_ITEMS" \
+  --selector-json "{\"kind\":\"rss\",\"locator\":\"$RSS_URL\",\"limit\":10}" \
+  --selector-json "{\"kind\":\"github_owner\",\"locator\":\"$GITHUB_OWNER\",\"limit\":10}" \
+  --selector-json "{\"kind\":\"arxiv\",\"locator\":\"$ARXIV_QUERY\",\"limit\":10}" \
+  --selector-json "{\"kind\":\"hackernews\",\"locator\":\"$HACKERNEWS_FEED\",\"limit\":5}" \
+  --delivery-policy-json "$DELIVERY_POLICY" \
+  >"$ARTIFACT_DIR/profile.json"
+
+log "draining resident worker once; scheduler should enqueue and deliver exactly one tick"
+"$ARCWELL_BIN" worker run-once --max-jobs 3 >"$ARTIFACT_DIR/worker-first.json"
+
+RUN_ID="$(node - "$ARTIFACT_DIR/worker-first.json" "$MIN_ITEMS" "$MIN_SELECTED" <<'NODE'
+const fs = require("fs");
+const [workerPath, minItemsRaw, minSelectedRaw] = process.argv.slice(2);
+const worker = JSON.parse(fs.readFileSync(workerPath, "utf8"));
+const minItems = Number(minItemsRaw);
+const minSelected = Number(minSelectedRaw);
+function fail(message, detail) {
+  console.error(message);
+  if (detail !== undefined) console.error(JSON.stringify(detail, null, 2));
+  process.exit(1);
+}
+const schedule = worker.radar_schedule || {};
+if (schedule.inspected < 1 || schedule.enqueued !== 1) fail("worker did not enqueue exactly one scheduled radar tick", worker);
+if (worker.processed !== 1 || worker.completed !== 1 || worker.failed !== 0 || worker.dead_lettered !== 0) {
+  fail("scheduled worker pass did not complete one clean job", worker);
+}
+const job = (worker.jobs || []).find((candidate) => candidate.kind === "radar_scheduled_delivery");
+if (!job) fail("worker did not process radar_scheduled_delivery", worker.jobs);
+if (job.status !== "completed") fail("scheduled delivery job did not complete", job);
+const result = job.result_json || {};
+if (result.status !== "sent") fail("scheduled delivery did not reach sent", result);
+const tick = result.tick || {};
+if (tick.status !== "sent") fail("schedule tick did not reach sent", tick);
+if (!tick.run_id || !tick.summary_id || !tick.delivery_id) fail("tick is missing run/summary/delivery lineage", tick);
+const delivery = result.delivery && result.delivery.delivery;
+if (!delivery || delivery.status !== "sent") fail("radar delivery row did not reach sent", result.delivery);
+const summary = result.delivery && result.delivery.summary;
+if (!summary || summary.audit_status !== "audit_ok") fail("delivery did not use an audit_ok summary", summary);
+if (Number(summary.item_ids?.length || 0) < minSelected) fail("summary selected too few items", summary);
+if (delivery.delivery_attempt_id == null) fail("delivery is missing channel delivery attempt linkage", result.delivery);
+process.stdout.write(tick.run_id);
+NODE
+)"
+
+log "reading stage/audit/summary/deliveries for scheduled run: $RUN_ID"
+"$ARCWELL_BIN" radar stage "$RUN_ID" >"$ARTIFACT_DIR/stage.json"
+"$ARCWELL_BIN" radar audit "$RUN_ID" >"$ARTIFACT_DIR/audit.json"
+"$ARCWELL_BIN" radar summary "$RUN_ID" >"$ARTIFACT_DIR/summary-read.json"
+"$ARCWELL_BIN" radar deliveries --run-id "$RUN_ID" >"$ARTIFACT_DIR/radar-deliveries.json"
+"$ARCWELL_BIN" telegram deliveries >"$ARTIFACT_DIR/telegram-deliveries.json"
+"$ARCWELL_BIN" wiki jobs >"$ARTIFACT_DIR/wiki-jobs.json"
+"$ARCWELL_BIN" cursors list >"$ARTIFACT_DIR/cursors.json"
+"$ARCWELL_BIN" ops >"$ARTIFACT_DIR/ops.json"
+
+log "draining worker again to prove duplicate schedule suppression inside interval"
+"$ARCWELL_BIN" worker run-once --max-jobs 3 >"$ARTIFACT_DIR/worker-second.json"
+
+log "validating scheduled delivery proof artifacts"
+node - "$ARTIFACT_DIR" "$PROOF_ROOT" "$RUN_ID" "$RSS_URL" "$GITHUB_OWNER" "$ARXIV_QUERY" "$HACKERNEWS_FEED" "$TELEGRAM_CHAT_ID" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const [
+  artifactDir,
+  proofRoot,
+  runId,
+  rssUrl,
+  githubOwner,
+  arxivQuery,
+  hackernewsFeed,
+  telegramChatId,
+] = process.argv.slice(2);
+
+const read = (name) => JSON.parse(fs.readFileSync(path.join(artifactDir, name), "utf8"));
+const readJsonl = (name) =>
+  fs.readFileSync(path.join(artifactDir, name), "utf8")
+    .trim()
+    .split(/\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+
+function assert(condition, message, detail) {
+  if (!condition) {
+    console.error(`FAIL: ${message}`);
+    if (detail !== undefined) console.error(JSON.stringify(detail, null, 2));
+    process.exit(1);
+  }
+}
+
+const profile = read("profile.json");
+const first = read("worker-first.json");
+const second = read("worker-second.json");
+const stage = read("stage.json");
+const audit = read("audit.json");
+const summary = read("summary-read.json");
+const radarDeliveries = read("radar-deliveries.json");
+const telegramDeliveries = read("telegram-deliveries.json");
+const wikiJobs = read("wiki-jobs.json");
+const cursors = read("cursors.json");
+const ops = read("ops.json");
+const providerRequests = readJsonl("telegram-provider-requests.jsonl");
+
+assert(profile.status === "local_proof_ready", "profile should be locally supported", profile);
+assert(first.radar_schedule && first.radar_schedule.enqueued === 1, "first worker pass should enqueue one schedule tick", first.radar_schedule);
+assert(second.radar_schedule && second.radar_schedule.enqueued === 0, "second worker pass should suppress duplicate schedule tick", second.radar_schedule);
+assert(second.processed === 0, "second worker pass should not process duplicate delivery", second);
+
+const scheduledJob = (first.jobs || []).find((job) => job.kind === "radar_scheduled_delivery");
+assert(scheduledJob && scheduledJob.status === "completed", "scheduled delivery job should complete", first.jobs);
+const result = scheduledJob.result_json || {};
+const tick = result.tick || {};
+assert(result.status === "sent" && tick.status === "sent", "scheduled result and tick should be sent", result);
+assert(tick.run_id === runId, "tick should link to inspected run", tick);
+assert(tick.summary_id && tick.delivery_id && tick.job_id === scheduledJob.id, "tick should preserve full lineage", tick);
+
+assert(stage.run && stage.run.id === runId, "stage should read scheduled run", stage.run);
+assert(stage.run.status === "scored" || stage.run.stage === "delivered", "scheduled run should be scored/delivered", stage.run);
+assert(Array.isArray(stage.items) && stage.items.length >= 10, "stage should contain real normalized items", { count: stage.items?.length });
+assert(Array.isArray(stage.scores) && stage.scores.length >= stage.items.length, "stage should contain score overlays", { items: stage.items?.length, scores: stage.scores?.length });
+assert(audit.ok === true, "scheduled run audit should pass", audit);
+assert(summary.audit_status === "audit_ok", "summary should preserve audit_ok", summary);
+assert(summary.metadata && summary.metadata.not_delivery === true, "summary artifact itself must remain non-delivery", summary.metadata);
+assert(Array.isArray(summary.source_card_ids) && summary.source_card_ids.length > 0, "summary should cite source cards", summary);
+
+assert(Array.isArray(radarDeliveries) && radarDeliveries.length === 1, "exactly one radar delivery should exist for the scheduled run", radarDeliveries);
+assert(radarDeliveries[0].status === "sent", "radar delivery should be sent", radarDeliveries[0]);
+assert(radarDeliveries[0].recipient_ref === `telegram:chat:${telegramChatId}`, "radar delivery should target authorized chat", radarDeliveries[0]);
+assert(Array.isArray(telegramDeliveries) && telegramDeliveries.length === 1, "exactly one Telegram delivery attempt should exist", telegramDeliveries);
+assert(telegramDeliveries[0].ok === true && telegramDeliveries[0].provider_status === 200, "Telegram channel delivery attempt should succeed", telegramDeliveries[0]);
+assert(providerRequests.length === 1, "controlled provider should receive exactly one request", providerRequests);
+assert(providerRequests[0].url.includes("/bot<redacted>/sendMessage"), "provider request URL should be sanitized and use sendMessage", providerRequests[0]);
+assert(providerRequests[0].body.includes(telegramChatId), "provider request body should include the authorized chat id", providerRequests[0]);
+assert(!JSON.stringify(providerRequests).includes("PROOF_TOKEN_DO_NOT_USE"), "proof artifact must not leak the token", providerRequests);
+
+assert((wikiJobs || []).some((job) => job.id === scheduledJob.id && job.status === "completed"), "wiki jobs should include completed scheduled delivery", wikiJobs);
+const cursorKeys = new Set((cursors || []).map((cursor) => cursor.key));
+assert(cursorKeys.has(`rss:${rssUrl}`), "RSS cursor should advance", cursors);
+assert(cursorKeys.has(`github-owner:${githubOwner}`), "GitHub cursor should advance", cursors);
+assert(cursorKeys.has(`arxiv:${arxivQuery}`), "arXiv cursor should advance", cursors);
+assert(cursorKeys.has("hackernews:topstories"), "Hacker News cursor should advance", cursors);
+
+const sourceHealth = Array.isArray(ops.source_health) ? ops.source_health : [];
+const hasHealthy = (provider, locatorNeedle) =>
+  sourceHealth.some((row) =>
+    row.provider === provider &&
+    row.status === "healthy" &&
+    String(row.locator || row.key || "").includes(locatorNeedle)
+  );
+assert(hasHealthy("rss", rssUrl), "ops should show healthy RSS source", sourceHealth);
+assert(hasHealthy("github", githubOwner), "ops should show healthy GitHub source", sourceHealth);
+assert(hasHealthy("arxiv", arxivQuery), "ops should show healthy arXiv source", sourceHealth);
+assert(hasHealthy("hackernews", "topstories"), "ops should show healthy Hacker News source", sourceHealth);
+
+const proofPacket = {
+  proof_name: "radar-scheduled-delivery-production-proof",
+  proof_level: "Production Data Proof for scheduled live public radar ingestion with controlled Telegram provider delivery",
+  proof_root: proofRoot,
+  arcwell_home: process.env.ARCWELL_HOME,
+  run_id: runId,
+  profile_id: profile.id,
+  profile_name: profile.name,
+  source_families: [
+    { provider: "rss", locator: rssUrl },
+    { provider: "github", locator: githubOwner },
+    { provider: "arxiv", locator: arxivQuery },
+    { provider: "hackernews", locator: hackernewsFeed },
+  ],
+  scheduled_tick: {
+    id: tick.id,
+    key: tick.tick_key,
+    due_at: tick.due_at,
+    status: tick.status,
+    job_id: tick.job_id,
+    run_id: tick.run_id,
+    summary_id: tick.summary_id,
+    delivery_id: tick.delivery_id,
+  },
+  worker: {
+    first: {
+      processed: first.processed,
+      completed: first.completed,
+      failed: first.failed,
+      deferred: first.deferred,
+      dead_lettered: first.dead_lettered,
+      schedule: first.radar_schedule,
+    },
+    second: {
+      processed: second.processed,
+      completed: second.completed,
+      failed: second.failed,
+      deferred: second.deferred,
+      dead_lettered: second.dead_lettered,
+      schedule: second.radar_schedule,
+    },
+  },
+  radar: {
+    item_count: stage.items.length,
+    score_count: stage.scores.length,
+    selected_count: summary.item_ids.length,
+    audit_ok: audit.ok,
+    source_card_count: summary.source_card_ids.length,
+    delivery_status: radarDeliveries[0].status,
+  },
+  provider_delivery: {
+    channel_ok: telegramDeliveries[0].ok,
+    provider_status: telegramDeliveries[0].provider_status,
+    provider_request_count: providerRequests.length,
+    sanitized_url: providerRequests[0].url,
+  },
+  cursor_keys: [...cursorKeys].filter((key) =>
+    key === `rss:${rssUrl}` ||
+    key === `github-owner:${githubOwner}` ||
+    key === `arxiv:${arxivQuery}` ||
+    key === "hackernews:topstories"
+  ),
+  remaining_risk: [
+    "This proves production-data scheduled ingestion and controlled provider delivery in a disposable home, not a live external Telegram chat send.",
+    "It proves one scheduled worker drain and duplicate suppression, not a long-running OS service or seven-day scheduled decay behavior.",
+    "It does not prove authenticated X, Reddit OAuth, model synthesis, live email provider delivery, or live notification routing.",
+  ],
+};
+
+fs.writeFileSync(
+  path.join(artifactDir, "proof-packet.json"),
+  `${JSON.stringify(proofPacket, null, 2)}\n`
+);
+process.stdout.write(JSON.stringify(proofPacket, null, 2));
+NODE
+
+printf '\n'
+log "scheduled delivery production-data proof passed"
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"

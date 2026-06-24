@@ -19140,6 +19140,54 @@ impl Store {
         Ok(value)
     }
 
+    fn configured_cloudflare_account_id(&self) -> Result<Option<String>> {
+        self.get_usable_secret_value("CLOUDFLARE_ACCOUNT_ID")
+            .map(|secret| secret.or_else(|| std::env::var("CLOUDFLARE_ACCOUNT_ID").ok()))
+    }
+
+    fn configured_cloudflare_email_api_token(&self) -> Result<Option<String>> {
+        self.get_usable_secret_value("CLOUDFLARE_EMAIL_API_TOKEN")
+            .and_then(|secret| {
+                if secret.is_some() {
+                    Ok(secret)
+                } else {
+                    self.get_usable_secret_value("CLOUDFLARE_API_TOKEN")
+                }
+            })
+            .map(|secret| {
+                secret
+                    .or_else(|| std::env::var("CLOUDFLARE_EMAIL_API_TOKEN").ok())
+                    .or_else(|| std::env::var("CLOUDFLARE_API_TOKEN").ok())
+            })
+    }
+
+    fn configured_cloudflare_email_api_base(&self) -> Result<Option<String>> {
+        let value = self
+            .get_usable_secret_value("CLOUDFLARE_EMAIL_API_BASE")?
+            .or_else(|| std::env::var("CLOUDFLARE_EMAIL_API_BASE").ok())
+            .or_else(|| std::env::var("ARCWELL_CLOUDFLARE_EMAIL_API_BASE").ok());
+        if let Some(value) = &value {
+            validate_public_http_url(value)?;
+        }
+        Ok(value)
+    }
+
+    fn configured_agent_email_from(&self) -> Result<Option<String>> {
+        let value = match self.get_usable_secret_value("ARCWELL_AGENT_EMAIL_FROM")? {
+            Some(value) => Some(value),
+            None => self
+                .get_usable_secret_value("ARCWELL_AGENT_EMAIL")?
+                .or_else(|| std::env::var("ARCWELL_AGENT_EMAIL_FROM").ok())
+                .or_else(|| std::env::var("ARCWELL_AGENT_EMAIL").ok()),
+        };
+        value
+            .map(|email| {
+                normalize_email_address(&email)
+                    .context("invalid configured Arcwell agent email sender")
+            })
+            .transpose()
+    }
+
     fn send_existing_telegram_message(
         &self,
         message_id: &str,
@@ -23487,10 +23535,64 @@ impl Store {
             tick.delivery_id.as_deref(),
             None,
         )?;
-        let bot_token = self
-            .configured_telegram_bot_token()?
-            .context("TELEGRAM_BOT_TOKEN is required for scheduled radar Telegram delivery")?;
-        let api_base = self.configured_telegram_api_base()?;
+        let credentials = (|| -> Result<_> {
+            match policy.channel.as_str() {
+                "telegram" => Ok((
+                    Some(self.configured_telegram_bot_token()?.context(
+                        "TELEGRAM_BOT_TOKEN is required for scheduled radar Telegram delivery",
+                    )?),
+                    None,
+                    None,
+                    None,
+                    self.configured_telegram_api_base()?,
+                    "Local Proof: scheduled Telegram radar delivery through resident worker",
+                )),
+                "email" => Ok((
+                    None,
+                    Some(self.configured_cloudflare_account_id()?.context(
+                        "CLOUDFLARE_ACCOUNT_ID is required for scheduled radar email delivery",
+                    )?),
+                    Some(self.configured_cloudflare_email_api_token()?.context(
+                        "CLOUDFLARE_EMAIL_API_TOKEN or CLOUDFLARE_API_TOKEN is required for scheduled radar email delivery",
+                    )?),
+                    Some(self.configured_agent_email_from()?.context(
+                        "ARCWELL_AGENT_EMAIL_FROM or ARCWELL_AGENT_EMAIL is required for scheduled radar email delivery",
+                    )?),
+                    self.configured_cloudflare_email_api_base()?,
+                    "Local Proof: scheduled email radar delivery through resident worker",
+                )),
+                other => bail!("unsupported scheduled radar delivery channel: {other}"),
+            }
+        })();
+        let (
+            telegram_bot_token,
+            email_account_id,
+            email_api_token,
+            email_from,
+            api_base,
+            proof_level,
+        ) = match credentials {
+            Ok(credentials) => credentials,
+            Err(error) => {
+                let error = error.to_string();
+                let updated = self.update_radar_schedule_tick(
+                    &tick.id,
+                    "blocked",
+                    Some(&run.id),
+                    Some(&summary.id),
+                    tick.delivery_id.as_deref(),
+                    Some(&error),
+                )?;
+                return Ok(json!({
+                    "tick": updated,
+                    "run_id": run.id,
+                    "summary_id": summary.id,
+                    "status": "blocked",
+                    "error": sanitize_radar_delivery_error(&error)?,
+                    "proof_level": "Local Proof boundary: scheduled radar delivery is blocked before provider send when channel config is missing"
+                }));
+            }
+        };
         let delivery = self.deliver_radar_summary(RadarDeliveryInput {
             run_id: run.id.clone(),
             language: policy.language.clone(),
@@ -23498,10 +23600,10 @@ impl Store {
             channel: policy.channel.clone(),
             recipient_ref: policy.recipient_ref.clone(),
             idempotency_key: Some(format!("radar-schedule-{}", tick.tick_key)),
-            telegram_bot_token: Some(bot_token),
-            email_account_id: None,
-            email_api_token: None,
-            email_from: None,
+            telegram_bot_token,
+            email_account_id,
+            email_api_token,
+            email_from,
             api_base,
         })?;
         let tick_status = match delivery.delivery.status.as_str() {
@@ -23524,7 +23626,7 @@ impl Store {
             "summary_id": summary.id,
             "delivery": delivery,
             "status": tick_status,
-            "proof_level": "Local Proof: scheduled Telegram radar delivery through resident worker"
+            "proof_level": proof_level
         }))
     }
 
@@ -31361,8 +31463,12 @@ fn normalize_radar_delivery_recipient(channel: &str, recipient_ref: &str) -> Res
             Ok(format!("telegram:chat:{chat_id}"))
         }
         "email" => {
-            let email = normalize_email_address(recipient_ref)
-                .context("invalid radar delivery email recipient")?;
+            let email = recipient_ref
+                .trim()
+                .strip_prefix("email:")
+                .unwrap_or_else(|| recipient_ref.trim());
+            let email =
+                normalize_email_address(email).context("invalid radar delivery email recipient")?;
             Ok(format!("email:{email}"))
         }
         other => bail!("unsupported radar delivery channel: {other}"),
@@ -31418,9 +31524,6 @@ fn scheduled_radar_delivery_policy(
             .and_then(Value::as_str)
             .unwrap_or("telegram"),
     )?;
-    if channel != "telegram" {
-        bail!("scheduled radar delivery currently supports telegram only");
-    }
     let recipient_raw = policy
         .get("recipient_ref")
         .or_else(|| policy.get("recipient"))
@@ -31456,6 +31559,11 @@ fn scheduled_radar_delivery_policy(
     if policy.get("bot_token").is_some()
         || policy.get("telegram_bot_token").is_some()
         || policy.get("api_token").is_some()
+        || policy.get("email_api_token").is_some()
+        || policy.get("cloudflare_api_token").is_some()
+        || policy.get("cloudflare_email_api_token").is_some()
+        || policy.get("email_account_id").is_some()
+        || policy.get("cloudflare_account_id").is_some()
     {
         bail!("scheduled radar delivery policy must not contain raw secrets");
     }
@@ -46406,7 +46514,7 @@ reason = "X OAuth disabled during policy test"
 
         let worker = store.run_worker_once(1).unwrap();
         assert_eq!(worker.processed, 1);
-        assert_eq!(worker.completed, 1);
+        assert_eq!(worker.completed, 1, "{worker:#?}");
         let completed = &worker.jobs[0];
         assert_eq!(completed.kind, "radar_run");
         assert_eq!(completed.status, "completed");
@@ -46506,11 +46614,11 @@ reason = "X OAuth disabled during policy test"
             .unwrap();
 
         let worker = store.run_worker_once(2).unwrap();
-        let schedule = worker.radar_schedule.expect("schedule report");
+        let schedule = worker.radar_schedule.as_ref().expect("schedule report");
         assert_eq!(schedule.inspected, 1);
         assert_eq!(schedule.enqueued, 1);
         assert_eq!(worker.processed, 1);
-        assert_eq!(worker.completed, 1);
+        assert_eq!(worker.completed, 1, "{worker:#?}");
         assert_eq!(worker.jobs[0].kind, "radar_scheduled_delivery");
         let result = worker.jobs[0]
             .result_json
@@ -46703,6 +46811,130 @@ reason = "X OAuth disabled during policy test"
     }
 
     #[test]
+    fn severe_radar_scheduled_email_delivery_worker_delivers_once_and_records_tick() {
+        // CLAIM: scheduled radar delivery is cross-channel local worker
+        // behavior, not a Telegram-only special case hidden behind generic
+        // policy text.
+        // ORACLE: one worker pass sends through the authorized Cloudflare Email
+        // path, records schedule/run/summary/delivery lineage, and does not
+        // duplicate provider attempts inside the interval.
+        // SEVERITY: Severe because "scheduled delivery" is misleading if only
+        // one transport actually reaches the provider attempt ledger.
+        let store = test_store("radar-scheduled-email-delivery-worker");
+        store
+            .authorize_channel_subject("email", "email:friend@example.com", false, false, true)
+            .unwrap();
+        store
+            .set_secret_value("CLOUDFLARE_ACCOUNT_ID", "abcd1234", "email")
+            .unwrap();
+        store
+            .set_secret_value(
+                "CLOUDFLARE_EMAIL_API_TOKEN",
+                "EMAIL_TOKEN_SHOULD_NOT_LEAK",
+                "email",
+            )
+            .unwrap();
+        store
+            .set_secret_value("ARCWELL_AGENT_EMAIL_FROM", "agent@example.com", "email")
+            .unwrap();
+        let ok_base = mock_status_server(
+            "200 OK",
+            "",
+            r#"{"success":true,"result":{"id":"msg_456"}}"#,
+            "application/json",
+        );
+        store
+            .set_secret_value("CLOUDFLARE_EMAIL_API_BASE", &ok_base, "email")
+            .unwrap();
+        store
+            .add_source_card(SourceCardInput {
+                title: "Scheduled email radar agent release".to_string(),
+                url: "https://example.com/scheduled-email-radar-agent".to_string(),
+                source_type: "release".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Scheduled email radar finds an agent reliability release.".to_string(),
+                claims: vec![SourceClaim {
+                    claim: "The scheduled email release improves worker reliability.".to_string(),
+                    kind: "product".to_string(),
+                    confidence: 0.8,
+                }],
+                retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                metadata: json!({ "source_role": "primary", "trust_level": "medium" }),
+            })
+            .unwrap();
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "scheduled-email-delivery-radar".to_string(),
+                description: "Scheduled email delivery radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(5),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "scheduled email radar agent" }]),
+                delivery_policy: json!({
+                    "delivery": "scheduled",
+                    "channel": "email",
+                    "recipient_ref": "friend@example.com",
+                    "interval_hours": 24,
+                    "language": "en",
+                    "format": "markdown"
+                }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let worker = store.run_worker_once(2).unwrap();
+        let schedule = worker.radar_schedule.as_ref().expect("schedule report");
+        assert_eq!(schedule.inspected, 1);
+        assert_eq!(schedule.enqueued, 1);
+        assert_eq!(worker.processed, 1);
+        assert_eq!(worker.completed, 1, "{worker:#?}");
+        assert_eq!(worker.jobs[0].kind, "radar_scheduled_delivery");
+        let result = worker.jobs[0]
+            .result_json
+            .as_ref()
+            .expect("scheduled email result");
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("sent"));
+        assert!(
+            !serde_json::to_string(result)
+                .unwrap()
+                .contains("EMAIL_TOKEN_SHOULD_NOT_LEAK")
+        );
+        let ticks = store.list_radar_schedule_ticks().unwrap();
+        assert_eq!(ticks.len(), 1, "{ticks:?}");
+        assert_eq!(ticks[0].profile_id, profile.id);
+        assert_eq!(ticks[0].status, "sent");
+        let run_id = ticks[0].run_id.as_deref().expect("run id");
+        let deliveries = store.list_radar_deliveries(Some(run_id)).unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].status, "sent");
+        assert_eq!(deliveries[0].channel, "email");
+        assert_eq!(deliveries[0].recipient_ref, "email:friend@example.com");
+        assert_eq!(
+            store.read_radar_run(run_id).unwrap().unwrap().stage,
+            "delivered"
+        );
+        let channel_messages = store.list_channel_messages().unwrap();
+        assert_eq!(channel_messages.len(), 1);
+        assert_eq!(channel_messages[0].channel, "email");
+        assert_eq!(channel_messages[0].status, "sent");
+        assert!(channel_messages[0].body.contains("GENERATED_RADAR_SUMMARY"));
+        let attempts = store.list_channel_delivery_attempts(None).unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert!(attempts[0].ok);
+
+        let second = store.run_worker_once(2).unwrap();
+        let second_schedule = second.radar_schedule.expect("second schedule report");
+        assert_eq!(second_schedule.inspected, 1);
+        assert_eq!(second_schedule.enqueued, 0);
+        assert_eq!(second.processed, 0);
+        assert_eq!(store.list_radar_schedule_ticks().unwrap().len(), 1);
+        assert_eq!(store.list_radar_deliveries(Some(run_id)).unwrap().len(), 1);
+        assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
+    }
+
+    #[test]
     fn severe_radar_scheduled_delivery_blocks_unauthorized_recipient_without_provider_send() {
         // CLAIM: scheduled Telegram delivery uses the same authorization boundary
         // as manual radar delivery.
@@ -46749,7 +46981,7 @@ reason = "X OAuth disabled during policy test"
             .unwrap();
 
         let worker = store.run_worker_once(2).unwrap();
-        let schedule = worker.radar_schedule.expect("schedule report");
+        let schedule = worker.radar_schedule.as_ref().expect("schedule report");
         assert_eq!(schedule.inspected, 1);
         assert_eq!(schedule.enqueued, 1);
         assert_eq!(worker.processed, 1);
@@ -46780,6 +47012,115 @@ reason = "X OAuth disabled during policy test"
         let deliveries = store.list_radar_deliveries(Some(run_id)).unwrap();
         assert_eq!(deliveries.len(), 1);
         assert_eq!(deliveries[0].status, "blocked");
+        assert!(
+            deliveries[0]
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("not authorized")
+        );
+        assert!(store.list_channel_messages().unwrap().is_empty());
+        assert!(
+            store
+                .list_channel_delivery_attempts(None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn severe_radar_scheduled_email_delivery_blocks_unauthorized_recipient_without_provider_send() {
+        // CLAIM: scheduled email delivery preserves the manual email recipient
+        // authorization boundary.
+        // ORACLE: missing recipient authorization records blocked radar/tick
+        // evidence after run/summary proof, redacts credentials, and writes no
+        // channel message or provider attempt.
+        // SEVERITY: Severe because unattended email delivery must not bypass
+        // explicit channel authorization.
+        let store = test_store("radar-scheduled-email-delivery-unauthorized");
+        store
+            .set_secret_value("CLOUDFLARE_ACCOUNT_ID", "abcd1234", "email")
+            .unwrap();
+        store
+            .set_secret_value(
+                "CLOUDFLARE_EMAIL_API_TOKEN",
+                "EMAIL_TOKEN_SHOULD_NOT_LEAK",
+                "email",
+            )
+            .unwrap();
+        store
+            .set_secret_value("ARCWELL_AGENT_EMAIL_FROM", "agent@example.com", "email")
+            .unwrap();
+        store
+            .set_secret_value("CLOUDFLARE_EMAIL_API_BASE", "http://127.0.0.1:9", "email")
+            .unwrap();
+        store
+            .add_source_card(SourceCardInput {
+                title: "Scheduled unauthorized email radar note".to_string(),
+                url: "https://example.com/scheduled-unauthorized-email-radar".to_string(),
+                source_type: "note".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Scheduled radar should block unauthorized email recipients.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                metadata: json!({}),
+            })
+            .unwrap();
+        store
+            .create_radar_profile(RadarProfileInput {
+                name: "scheduled-unauthorized-email-radar".to_string(),
+                description: "Scheduled unauthorized email radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(5),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "unauthorized email radar" }]),
+                delivery_policy: json!({
+                    "delivery": "scheduled",
+                    "channel": "email",
+                    "recipient_ref": "friend@example.com",
+                    "interval_hours": 24
+                }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let worker = store.run_worker_once(2).unwrap();
+        let schedule = worker.radar_schedule.as_ref().expect("schedule report");
+        assert_eq!(schedule.inspected, 1);
+        assert_eq!(schedule.enqueued, 1);
+        assert_eq!(worker.processed, 1);
+        assert_eq!(worker.completed, 1, "{worker:#?}");
+        let result = worker.jobs[0].result_json.as_ref().unwrap();
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert!(
+            !serde_json::to_string(result)
+                .unwrap()
+                .contains("EMAIL_TOKEN_SHOULD_NOT_LEAK")
+        );
+        let ticks = store.list_radar_schedule_ticks().unwrap();
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].status, "blocked");
+        assert!(
+            ticks[0]
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("not authorized")
+        );
+        let run_id = ticks[0].run_id.as_deref().expect("blocked run id");
+        assert_eq!(
+            store.read_radar_run(run_id).unwrap().unwrap().stage,
+            "summarized"
+        );
+        let deliveries = store.list_radar_deliveries(Some(run_id)).unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].status, "blocked");
+        assert_eq!(deliveries[0].channel, "email");
         assert!(
             deliveries[0]
                 .error
@@ -46831,7 +47172,8 @@ reason = "X OAuth disabled during policy test"
                     "channel": "telegram",
                     "recipient_ref": "123",
                     "interval_hours": 24,
-                    "telegram_bot_token": "SHOULD_NOT_BE_STORED_HERE"
+                    "telegram_bot_token": "SHOULD_NOT_BE_STORED_HERE",
+                    "cloudflare_email_api_token": "ALSO_SHOULD_NOT_BE_STORED_HERE"
                 }),
                 model_policy: json!({ "model_scoring": "disabled" }),
                 metadata: json!({}),
@@ -46854,6 +47196,11 @@ reason = "X OAuth disabled during policy test"
             !serde_json::to_string(&report)
                 .unwrap()
                 .contains("SHOULD_NOT_BE_STORED_HERE")
+        );
+        assert!(
+            !serde_json::to_string(&report)
+                .unwrap()
+                .contains("ALSO_SHOULD_NOT_BE_STORED_HERE")
         );
         assert!(store.list_radar_schedule_ticks().unwrap().is_empty());
         assert!(store.list_wiki_jobs().unwrap().is_empty());

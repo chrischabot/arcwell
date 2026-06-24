@@ -2327,6 +2327,10 @@ enum RadarProfileSubcommand {
         source_card_query: Vec<String>,
         #[arg(long = "selector-json")]
         selector_json: Vec<String>,
+        #[arg(long = "delivery-policy-json")]
+        delivery_policy_json: Option<String>,
+        #[arg(long = "model-policy-json")]
+        model_policy_json: Option<String>,
     },
     List,
     Read {
@@ -3713,6 +3717,8 @@ fn radar(store: Store, args: RadarCommand) -> Result<()> {
                 language,
                 source_card_query,
                 selector_json,
+                delivery_policy_json,
+                model_policy_json,
             } => {
                 let mut selectors: Vec<Value> = source_card_query
                     .into_iter()
@@ -3726,6 +3732,18 @@ fn radar(store: Store, args: RadarCommand) -> Result<()> {
                 if selectors.is_empty() {
                     bail!("radar profile requires at least one selector");
                 }
+                let delivery_policy = delivery_policy_json
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .context("invalid delivery policy JSON")?
+                    .unwrap_or_else(|| json!({ "delivery": "manual_only" }));
+                let model_policy = model_policy_json
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .context("invalid model policy JSON")?
+                    .unwrap_or_else(|| json!({ "model_scoring": "disabled" }));
                 print_json(&store.create_radar_profile(RadarProfileInput {
                     name,
                     description,
@@ -3734,8 +3752,8 @@ fn radar(store: Store, args: RadarCommand) -> Result<()> {
                     max_items,
                     languages: language,
                     source_selectors: Value::Array(selectors),
-                    delivery_policy: json!({ "delivery": "manual_only" }),
-                    model_policy: json!({ "model_scoring": "disabled" }),
+                    delivery_policy,
+                    model_policy,
                     metadata: json!({ "created_from": "cli" }),
                 })?)
             }

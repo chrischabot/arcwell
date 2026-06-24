@@ -201,8 +201,9 @@ Ops:
 ## Proof Gates
 
 - Missing: production-data balance review, source recommendation, model
-  enrichment, live production delivery proof, production scheduled delivery,
-  and scheduled/recurring service operation remain absent or unproven.
+  enrichment, live external delivery proof, production cross-channel scheduled
+  delivery, and scheduled/recurring service operation remain absent or
+  unproven.
 - Scaffold: stage-two command names and data-model ideas exist in planning
   docs.
 - Local Proof: current Arcwell radar writes inspectable `radar_runs`,
@@ -214,19 +215,22 @@ Ops:
   evidence preservation, same-product/different-event separation, dedupe score
   drift, generated-summary/no-delivery boundaries, manual radar delivery
   authorization/idempotency/provider-failure boundaries, local scheduled
-  Telegram delivery through the resident worker, quiet-hours deferral, raw
-  secret rejection, FTS drift, corrupt dedupe groups, and
+  Telegram/email delivery through the resident worker, email authorization
+  blocking, quiet-hours deferral, raw secret rejection, FTS drift, corrupt
+  dedupe groups, and
   prompt-injection-as-evidence rendering.
 - Production Data Proof: copied-home source-card projection, foreground public
   RSS/GitHub/arXiv/Hacker News live fetch, worker-drained public
   RSS/GitHub/arXiv/Hacker News runs, copied-home semantic/topic dedupe review,
-  and repeated live-run source-quality ranking have passed real-data proof
-  packets.
+  repeated live-run source-quality ranking, and scheduled live public-source
+  ingestion with controlled Telegram provider delivery have passed real-data
+  proof packets.
 - Partial: Reddit has local proof but anonymous live attempts hit HTTP 403; X
   is limited to existing local source-card/canonical projections until
   authenticated live proof passes.
-- Operational: scheduled runs, retries, stale/failed source-health recovery,
-  production scheduled delivery, and ops controls still need proof.
+- Operational: long-running scheduled service execution, live external
+  notification routing, production cross-channel scheduled retry/dead-letter,
+  stale/failed source-health recovery, and ops controls still need proof.
 - Done: every claimed source family satisfies the real-data gate and the docs
   distinguish fetch, digest, and delivery claims.
 

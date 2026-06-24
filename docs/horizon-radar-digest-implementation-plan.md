@@ -1144,15 +1144,31 @@ Checklist:
 - [x] Add manual `radar deliver` confirmation path with CLI/MCP/slash surfaces,
       durable `radar_deliveries`, idempotency, authorization/policy gates,
       provider-failure recording, and local severe tests.
-- [x] Add local scheduled Telegram delivery through the resident worker after
+- [x] Add local scheduled Telegram/email delivery through the resident worker after
       manual delivery proof: scheduled profiles write durable schedule ticks,
       enqueue `radar_scheduled_delivery`, run/summarize/audit, deliver through
-      configured authorized Telegram, link tick/run/summary/delivery lineage,
-      suppress duplicate ticks inside the configured interval, reject raw
-      secrets in profile policy, and defer active quiet-hours without provider
-      sends.
-- [ ] Add production/live scheduled delivery proof, production quiet-hours
-      deferral, and cross-channel scheduled delivery.
+      configured authorized Telegram or Cloudflare Email, link
+      tick/run/summary/delivery lineage, suppress duplicate ticks inside the
+      configured interval, reject raw secrets in profile policy, block
+      unauthorized email recipients before provider sends, and defer active
+      quiet-hours without provider sends.
+- [x] Add repeatable production-data scheduled-delivery proof with controlled
+      Telegram provider delivery: `scripts/radar-scheduled-delivery-production-proof`
+      creates a disposable scheduled profile over real public RSS/GitHub/arXiv/
+      Hacker News sources, drains the resident worker, verifies real
+      indexed/scored items plus healthy cursor/source-health state, sends one
+      audit-ok summary through a controlled Telegram endpoint, records
+      tick/run/summary/delivery lineage, and proves duplicate suppression on a
+      second worker pass.
+- [x] Prove local scheduled email delivery with controlled provider success and
+      authorization blocking: resident worker enqueues one schedule tick,
+      completes `radar_scheduled_delivery`, records run/summary/delivery
+      lineage, reaches `sent` through the Cloudflare Email path, avoids
+      duplicate ticks inside the interval, redacts configured tokens, and
+      writes no channel message/provider attempt for unauthorized recipients.
+- [ ] Add live external scheduled delivery proof, long-running service proof,
+      production quiet-hours deferral, and production cross-channel scheduled
+      delivery.
 
 Anti-mirage gate:
 
@@ -1181,6 +1197,20 @@ Production-data proof:
       reaches `sent`, avoids duplicate ticks inside the interval, rejects raw
       secrets in profile policy, and defers active quiet-hours without provider
       sends.
+- [x] Prove local scheduled email delivery with controlled provider success and
+      recipient authorization failure: resident worker enqueues one schedule
+      tick, completes `radar_scheduled_delivery`, records
+      run/summary/delivery lineage, reaches `sent` through the Cloudflare Email
+      path, avoids duplicate ticks inside the interval, redacts configured
+      tokens, and writes no channel message/provider attempt for unauthorized
+      recipients.
+- [x] Prove production-data scheduled delivery with real public-source ingestion
+      and controlled Telegram provider delivery using
+      `scripts/radar-scheduled-delivery-production-proof`: real items are
+      ingested/indexed/scored from RSS/GitHub/arXiv/Hacker News with healthy
+      cursor/source-health state, selected items are summarized after audit,
+      one provider request is sent to a sanitized controlled Telegram endpoint,
+      and duplicate schedule enqueue is suppressed on the second worker pass.
 
 ### Stage 9: Source Quality And Recommendation Loop
 
@@ -1564,11 +1594,15 @@ Exit gate:
 - [x] Manual authorized delivery.
 - [x] Local quiet-hours deferral.
 - [x] Local Telegram retry reconciliation/dead-letter for manual deliveries.
-- [x] Local scheduled Telegram delivery through `worker run-once` with durable
-  ticks, authorized provider attempts, duplicate suppression, raw-secret
-  rejection, and explicit quiet-hours deferral.
+- [x] Local scheduled Telegram/email delivery through `worker run-once` with
+  durable ticks, authorized provider attempts, duplicate suppression,
+  raw-secret rejection, email authorization blocking, and explicit quiet-hours
+  deferral.
+- [x] Production-data scheduled delivery proof through `worker run-once` with
+  live public-source ingestion and controlled Telegram provider delivery.
 - [ ] Cross-channel/scheduled retry/dead-letter.
-- [ ] Production scheduled worker/service runs.
+- [ ] Live external scheduled delivery and production scheduled worker/service
+  runs.
 - [ ] Source-quality rollups.
 - [x] Ops snapshot/UI visibility for manual delivery attempts.
 - [ ] Doctor visibility and broader delivery controls.
