@@ -481,9 +481,9 @@ This is an early but working implementation. It has a broad first-pass surface
 area and severe tests for key failure modes, but several parts still need
 production depth: fresh real Telegram client-message drain, richer
 project/thread sync, model-backed librarian synthesis, model-backed memory
-extraction/evals, backup forget policy, scheduler/digest delivery, production
-monitoring, and broader interactive ops controls beyond the current narrow
-authenticated edge-event dead-letter action.
+extraction/evals, backup forget policy, scheduled digest alert routing with
+live external proof, production monitoring, and broader interactive ops
+controls beyond the current narrow authenticated edge-event dead-letter action.
 
 Packaging is release-readiness-smoked locally, but Homebrew/tap publication,
 signed release artifacts, checksum-verifying installers, and Linux systemd
