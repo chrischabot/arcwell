@@ -286,6 +286,9 @@ PR, implementation note, or final report:
       hours, dedupe windows, and live external delivery proof. Manual reviewed
       Telegram/email digest delivery now uses policy/cost checks, recipient
       authorization, durable delivery attempts, and retry reconciliation.
+      Controlled-provider email proof over copied real source cards passed at
+      `.arcwell-dev/proofs/digest-email-production-proof-20260624T143355Z-46300`;
+      live external delivery remains unproven.
 - [ ] Add production monitoring for email ingress/outbound if email becomes a
       critical alert path.
 - [ ] Add Cloudflare callback/cron event capture after edge inbox is durable and
