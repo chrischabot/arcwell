@@ -1,8 +1,10 @@
 use anyhow::{Context, Result, bail};
 use arcwell_core::{
-    AppPaths, DigestAlertScheduleInput, DoctorOptions, ImportRunFinish, OpsSnapshot, PolicyRequest,
-    ProcedureCandidateInput, RadarDeliveryInput, RadarProfileInput, RadarRun,
-    RenderedPageSnapshotInput, ResearchActiveFactCheckInput, ResearchArtifactInput,
+    AppPaths, CommerceAvailabilityProofInput, CommerceCandidateInput, CommerceContextFactInput,
+    CommerceRenderedPageCheckInput, CommerceReportJudgmentInput, CommerceRunConfigInput,
+    CommerceVerificationAttemptInput, DigestAlertScheduleInput, DoctorOptions, ImportRunFinish,
+    OpsSnapshot, PolicyRequest, ProcedureCandidateInput, RadarDeliveryInput, RadarProfileInput,
+    RadarRun, RenderedPageSnapshotInput, ResearchActiveFactCheckInput, ResearchArtifactInput,
     ResearchConvergenceCloseLoopInput, ResearchConvergenceProviderSearchInput,
     ResearchConvergenceStartInput, ResearchConvergenceStepInput, ResearchDocumentInput,
     ResearchEditorialInvokeInput, ResearchEditorialRunInput, ResearchHostSearchInput,
@@ -55,6 +57,7 @@ enum Command {
     Wiki(WikiCommand),
     SourceCard(SourceCardCommand),
     Research(ResearchCommand),
+    Commerce(CommerceCommand),
     Radar(RadarCommand),
     X(XCommand),
     Telegram(TelegramCommand),
@@ -1314,6 +1317,7 @@ fn run(store: Store, command: Command) -> Result<()> {
         Command::Wiki(args) => wiki(store, args),
         Command::SourceCard(args) => source_card(store, args),
         Command::Research(args) => research(store, args),
+        Command::Commerce(args) => commerce(store, args),
         Command::Radar(args) => radar(store, args),
         Command::X(args) => x_command(store, args),
         Command::Telegram(args) => telegram(store, args),
@@ -2066,6 +2070,222 @@ enum ResearchSubcommand {
         query: String,
     },
     Runs,
+}
+
+#[derive(Args)]
+struct CommerceCommand {
+    #[command(subcommand)]
+    command: CommerceSubcommand,
+}
+
+#[derive(Subcommand)]
+enum CommerceSubcommand {
+    Capabilities,
+    ConfigSet {
+        run_id: String,
+        #[arg(long)]
+        domain_profile: String,
+        #[arg(long, default_value_t = 20)]
+        target_qualified_count: usize,
+        #[arg(long)]
+        geography: Option<String>,
+        #[arg(long, default_value = "24h")]
+        freshness_window: String,
+        #[arg(long = "private-source")]
+        allowed_private_context_sources: Vec<String>,
+        #[arg(long = "public-source-family")]
+        allowed_public_source_families: Vec<String>,
+        #[arg(long)]
+        allow_marketplaces: bool,
+        #[arg(long)]
+        allow_chrome_profile: bool,
+        #[arg(long)]
+        max_provider_calls: Option<usize>,
+        #[arg(long)]
+        max_browser_pages: Option<usize>,
+        #[arg(long)]
+        max_cost_usd: Option<f64>,
+        #[arg(long, default_value = "{}")]
+        stop_rules_json: String,
+    },
+    Config {
+        run_id: String,
+    },
+    CandidateAdd {
+        run_id: String,
+        #[arg(long)]
+        domain: String,
+        #[arg(long)]
+        source_url: String,
+        #[arg(long)]
+        retailer_or_provider: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        normalized_item_key: String,
+        #[arg(long)]
+        variant_key: String,
+        #[arg(long)]
+        price: Option<String>,
+        #[arg(long)]
+        currency: Option<String>,
+        #[arg(long)]
+        geography: Option<String>,
+        #[arg(long, default_value = "maybe")]
+        candidate_status: String,
+        #[arg(long)]
+        score: Option<f64>,
+        #[arg(long, default_value = "{}")]
+        score_reasons_json: String,
+        #[arg(long, default_value = "[]")]
+        disqualification_reasons_json: String,
+        #[arg(long, default_value = "{}")]
+        metadata_json: String,
+    },
+    Candidates {
+        run_id: String,
+    },
+    AvailabilityProofAdd {
+        run_id: String,
+        #[arg(long)]
+        candidate_id: String,
+        #[arg(long)]
+        proof_method: String,
+        #[arg(long)]
+        variant_key: String,
+        #[arg(long)]
+        variant_label: String,
+        #[arg(long)]
+        availability_state: String,
+        #[arg(long)]
+        visible_evidence: Option<String>,
+        #[arg(long)]
+        selector_or_dom_hint: Option<String>,
+        #[arg(long)]
+        screenshot_artifact_id: Option<String>,
+        #[arg(long)]
+        page_snapshot_artifact_id: Option<String>,
+        #[arg(long, default_value_t = 0.7)]
+        confidence: f64,
+        #[arg(long, default_value = "[]")]
+        caveats_json: String,
+        #[arg(long)]
+        checked_at: Option<String>,
+    },
+    AvailabilityProofs {
+        run_id: String,
+    },
+    RenderedPageCheck {
+        run_id: String,
+        #[arg(long)]
+        candidate_id: String,
+        #[arg(long)]
+        variant_key: String,
+        #[arg(long)]
+        variant_label: String,
+        #[arg(long)]
+        requested_url: String,
+        #[arg(long)]
+        final_url: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        rendered_html: Option<String>,
+        #[arg(long)]
+        rendered_html_file: Option<PathBuf>,
+        #[arg(long)]
+        rendered_text: Option<String>,
+        #[arg(long)]
+        rendered_text_file: Option<PathBuf>,
+        #[arg(long)]
+        captured_at: Option<String>,
+        #[arg(long)]
+        browser: Option<String>,
+        #[arg(long)]
+        screenshot_path: Option<String>,
+        #[arg(long)]
+        selector_or_dom_hint: Option<String>,
+        #[arg(long)]
+        chrome_profile_required: bool,
+    },
+    ContextFactAdd {
+        run_id: String,
+        #[arg(long)]
+        fact_key: String,
+        #[arg(long)]
+        fact_kind: String,
+        #[arg(long)]
+        redacted_value: String,
+        #[arg(long)]
+        source_family: String,
+        #[arg(long)]
+        source_ref: Option<String>,
+        #[arg(long, default_value_t = 0.7)]
+        confidence: f64,
+        #[arg(long)]
+        user_confirmed: bool,
+        #[arg(long)]
+        may_persist_to_memory: bool,
+        #[arg(long, default_value = "{}")]
+        metadata_json: String,
+    },
+    ContextFacts {
+        run_id: String,
+    },
+    ContextPacket {
+        run_id: String,
+    },
+    VerificationAttemptAdd {
+        run_id: String,
+        #[arg(long)]
+        candidate_id: String,
+        #[arg(long)]
+        method: String,
+        #[arg(long)]
+        result: String,
+        #[arg(long)]
+        error_kind: Option<String>,
+        #[arg(long)]
+        final_url: Option<String>,
+        #[arg(long)]
+        http_status: Option<i64>,
+        #[arg(long)]
+        browser_required: bool,
+        #[arg(long)]
+        chrome_profile_required: bool,
+        #[arg(long = "artifact-id")]
+        artifact_ids: Vec<String>,
+        #[arg(long)]
+        next_action: Option<String>,
+        #[arg(long)]
+        attempted_at: Option<String>,
+    },
+    VerificationAttempts {
+        run_id: String,
+    },
+    ReportJudgmentAdd {
+        run_id: String,
+        #[arg(long)]
+        decision: String,
+        #[arg(long, default_value = "[]")]
+        blocking_findings_json: String,
+        #[arg(long, default_value = "[]")]
+        non_blocking_findings_json: String,
+        #[arg(long, default_value = "[]")]
+        claims_checked_json: String,
+        #[arg(long, default_value = "[]")]
+        availability_proofs_checked_json: String,
+        #[arg(long, default_value = "{}")]
+        privacy_review_json: String,
+        #[arg(long, default_value = "[]")]
+        remaining_risks_json: String,
+    },
+    ReportJudgments {
+        run_id: String,
+    },
+    Report {
+        run_id: String,
+    },
 }
 
 #[derive(Args, Clone)]
@@ -3772,6 +3992,253 @@ fn research(store: Store, args: ResearchCommand) -> Result<()> {
         }
         ResearchSubcommand::Audit { query } => print_json(&store.audit_research_output(&query)?),
         ResearchSubcommand::Runs => print_json(&store.list_research_runs()?),
+    }
+}
+
+fn commerce(store: Store, args: CommerceCommand) -> Result<()> {
+    match args.command {
+        CommerceSubcommand::Capabilities => print_json(&commerce_capabilities(store.paths())),
+        CommerceSubcommand::ConfigSet {
+            run_id,
+            domain_profile,
+            target_qualified_count,
+            geography,
+            freshness_window,
+            allowed_private_context_sources,
+            allowed_public_source_families,
+            allow_marketplaces,
+            allow_chrome_profile,
+            max_provider_calls,
+            max_browser_pages,
+            max_cost_usd,
+            stop_rules_json,
+        } => print_json(&store.record_commerce_run_config(CommerceRunConfigInput {
+            run_id,
+            domain_profile,
+            target_qualified_count,
+            geography,
+            freshness_window,
+            allowed_private_context_sources,
+            allowed_public_source_families,
+            allow_marketplaces,
+            allow_chrome_profile,
+            max_provider_calls,
+            max_browser_pages,
+            max_cost_usd,
+            stop_rules: parse_json_arg(&stop_rules_json, "--stop-rules-json")?,
+        })?),
+        CommerceSubcommand::Config { run_id } => {
+            print_json(&store.read_commerce_run_config(&run_id)?)
+        }
+        CommerceSubcommand::CandidateAdd {
+            run_id,
+            domain,
+            source_url,
+            retailer_or_provider,
+            title,
+            normalized_item_key,
+            variant_key,
+            price,
+            currency,
+            geography,
+            candidate_status,
+            score,
+            score_reasons_json,
+            disqualification_reasons_json,
+            metadata_json,
+        } => print_json(&store.record_commerce_candidate(CommerceCandidateInput {
+            run_id,
+            domain,
+            source_url,
+            retailer_or_provider,
+            title,
+            normalized_item_key,
+            variant_key,
+            price,
+            currency,
+            geography,
+            candidate_status,
+            score,
+            score_reasons: parse_json_arg(&score_reasons_json, "--score-reasons-json")?,
+            disqualification_reasons: parse_json_arg(
+                &disqualification_reasons_json,
+                "--disqualification-reasons-json",
+            )?,
+            metadata: parse_json_arg(&metadata_json, "--metadata-json")?,
+        })?),
+        CommerceSubcommand::Candidates { run_id } => {
+            print_json(&store.list_commerce_candidates(&run_id)?)
+        }
+        CommerceSubcommand::AvailabilityProofAdd {
+            run_id,
+            candidate_id,
+            proof_method,
+            variant_key,
+            variant_label,
+            availability_state,
+            visible_evidence,
+            selector_or_dom_hint,
+            screenshot_artifact_id,
+            page_snapshot_artifact_id,
+            confidence,
+            caveats_json,
+            checked_at,
+        } => print_json(&store.record_commerce_availability_proof(
+            CommerceAvailabilityProofInput {
+                run_id,
+                candidate_id,
+                proof_method,
+                variant_key,
+                variant_label,
+                availability_state,
+                visible_evidence,
+                selector_or_dom_hint,
+                screenshot_artifact_id,
+                page_snapshot_artifact_id,
+                confidence,
+                caveats: parse_json_arg(&caveats_json, "--caveats-json")?,
+                checked_at,
+            },
+        )?),
+        CommerceSubcommand::AvailabilityProofs { run_id } => {
+            print_json(&store.list_commerce_availability_proofs(&run_id)?)
+        }
+        CommerceSubcommand::RenderedPageCheck {
+            run_id,
+            candidate_id,
+            variant_key,
+            variant_label,
+            requested_url,
+            final_url,
+            title,
+            rendered_html,
+            rendered_html_file,
+            rendered_text,
+            rendered_text_file,
+            captured_at,
+            browser,
+            screenshot_path,
+            selector_or_dom_hint,
+            chrome_profile_required,
+        } => print_json(&store.record_commerce_rendered_page_check(
+            CommerceRenderedPageCheckInput {
+                run_id,
+                candidate_id,
+                variant_key,
+                variant_label,
+                snapshot: RenderedPageSnapshotInput {
+                    requested_url,
+                    final_url,
+                    title,
+                    rendered_html: optional_inline_or_file(rendered_html, rendered_html_file)?,
+                    rendered_text: optional_inline_or_file(rendered_text, rendered_text_file)?,
+                    captured_at,
+                    browser,
+                    screenshot_path,
+                },
+                selector_or_dom_hint,
+                chrome_profile_required,
+            },
+        )?),
+        CommerceSubcommand::ContextFactAdd {
+            run_id,
+            fact_key,
+            fact_kind,
+            redacted_value,
+            source_family,
+            source_ref,
+            confidence,
+            user_confirmed,
+            may_persist_to_memory,
+            metadata_json,
+        } => print_json(
+            &store.record_commerce_context_fact(CommerceContextFactInput {
+                run_id,
+                fact_key,
+                fact_kind,
+                redacted_value,
+                source_family,
+                source_ref,
+                confidence,
+                user_confirmed,
+                may_persist_to_memory,
+                metadata: parse_json_arg(&metadata_json, "--metadata-json")?,
+            })?,
+        ),
+        CommerceSubcommand::ContextFacts { run_id } => {
+            print_json(&store.list_commerce_context_facts(&run_id)?)
+        }
+        CommerceSubcommand::ContextPacket { run_id } => {
+            print_json(&store.compile_commerce_context_packet(&run_id)?)
+        }
+        CommerceSubcommand::VerificationAttemptAdd {
+            run_id,
+            candidate_id,
+            method,
+            result,
+            error_kind,
+            final_url,
+            http_status,
+            browser_required,
+            chrome_profile_required,
+            artifact_ids,
+            next_action,
+            attempted_at,
+        } => print_json(&store.record_commerce_verification_attempt(
+            CommerceVerificationAttemptInput {
+                run_id,
+                candidate_id,
+                method,
+                result,
+                error_kind,
+                final_url,
+                http_status,
+                browser_required,
+                chrome_profile_required,
+                artifact_ids,
+                next_action,
+                attempted_at,
+            },
+        )?),
+        CommerceSubcommand::VerificationAttempts { run_id } => {
+            print_json(&store.list_commerce_verification_attempts(&run_id)?)
+        }
+        CommerceSubcommand::ReportJudgmentAdd {
+            run_id,
+            decision,
+            blocking_findings_json,
+            non_blocking_findings_json,
+            claims_checked_json,
+            availability_proofs_checked_json,
+            privacy_review_json,
+            remaining_risks_json,
+        } => print_json(
+            &store.record_commerce_report_judgment(CommerceReportJudgmentInput {
+                run_id,
+                decision,
+                blocking_findings: parse_json_arg(
+                    &blocking_findings_json,
+                    "--blocking-findings-json",
+                )?,
+                non_blocking_findings: parse_json_arg(
+                    &non_blocking_findings_json,
+                    "--non-blocking-findings-json",
+                )?,
+                claims_checked: parse_json_arg(&claims_checked_json, "--claims-checked-json")?,
+                availability_proofs_checked: parse_json_arg(
+                    &availability_proofs_checked_json,
+                    "--availability-proofs-checked-json",
+                )?,
+                privacy_review: parse_json_arg(&privacy_review_json, "--privacy-review-json")?,
+                remaining_risks: parse_json_arg(&remaining_risks_json, "--remaining-risks-json")?,
+            })?,
+        ),
+        CommerceSubcommand::ReportJudgments { run_id } => {
+            print_json(&store.list_commerce_report_judgments(&run_id)?)
+        }
+        CommerceSubcommand::Report { run_id } => {
+            print_json(&store.compile_commerce_report(&run_id)?)
+        }
     }
 }
 
@@ -7837,10 +8304,139 @@ fn research_capabilities(paths: &AppPaths) -> Value {
     })
 }
 
+fn commerce_capabilities(paths: &AppPaths) -> Value {
+    json!({
+        "schema_version": 1,
+        "arcwell_home": paths.home.display().to_string(),
+        "status": "partial_bounded_production_data_proof",
+        "current_proof_level": "Production Data Proof for a bounded supervised host-browser packet; Local Proof for durable storage, host-supplied rendered-page checks, source-card linkage, context packets, and gated report rendering",
+        "user_visible_claim": "Arcwell can persist a qualified-commerce research run ledger with exact variant candidates, host-supplied rendered-page checks, selector-backed page-visible availability proof records, run-linked commerce source cards, redacted private-context facts, verification attempts, compiled context packets, and gated commerce reports. A bounded two-item live M&S UK proof packet has passed. Arcwell cannot yet perform autonomous broad live browser shopping or produce 20+ production-data-proven shopping recommendations.",
+        "durable_records": {
+            "run_config": true,
+            "candidates": true,
+            "availability_proofs": true,
+            "context_facts": true,
+            "verification_attempts": true,
+            "report_judgments": true,
+            "context_packet_artifacts": true,
+            "report_artifacts": true,
+            "commerce_source_cards": true
+        },
+        "proof_boundaries": {
+            "exact_variant_availability_storage": "locally_proven",
+            "same_run_candidate_and_artifact_validation": "locally_proven",
+            "browser_rendered_extraction": "host_supplied_local_check_proven_no_daemon_browse",
+            "source_card_linkage": "locally_proven_for_host_supplied_rendered_pages",
+            "price_shipping_extraction": "locally_proven_for_visible_rendered_text",
+            "context_packet_compiler": "locally_proven_redacted_artifacts",
+            "report_acceptance_gate": "locally_proven_compiled_judgment",
+            "bounded_live_uk_fashion_packet": "production_data_proven_for_two_mands_pages",
+            "autonomous_search_or_discovery": false,
+            "broad_production_data_proof": false,
+            "operational_worker": false
+        },
+        "domain_profiles": {
+            "uk-fashion-retail": "partial_bounded_two_item_mands_proof",
+            "rental": "missing",
+            "travel": "missing"
+        },
+        "agent_flow": [
+            "Create a research_run for the user query.",
+            "Call commerce_run_config_set with the domain profile, geography, source families, private context consent, budget, and stop rules.",
+            "Record context facts only as redacted evidence with source family and confidence.",
+            "Record every candidate with a normalized item key and exact variant key.",
+            "Use host/browser tools outside Arcwell to inspect rendered pages; store screenshots or rendered text as research artifacts when available.",
+            "Prefer commerce_rendered_page_check for host/browser captures; it records rendered evidence, source cards, selector-backed exact-variant proof, price/currency, and blocked states.",
+            "Call commerce_availability_proof_add only for manually reviewed visible page evidence with artifact provenance that supports the exact variant state.",
+            "Record failed/blocked browser checks as commerce_verification_attempt_add instead of silently dropping them.",
+            "Call commerce_context_packet_compile to render the redacted private-context packet.",
+            "Call commerce_report_compile to render the gated report and judgment; accept is invalid while blocking findings remain.",
+            "Use commerce_report_judgment_add only for an external/manual audit judgment, not as the primary report compiler."
+        ],
+        "known_required_tools": [
+            "research_run",
+            "commerce_research_capabilities",
+            "commerce_run_config_set",
+            "commerce_run_config",
+            "commerce_candidate_add",
+            "commerce_candidates",
+            "commerce_availability_proof_add",
+            "commerce_availability_proofs",
+            "commerce_rendered_page_check",
+            "commerce_context_fact_add",
+            "commerce_context_facts",
+            "commerce_context_packet_compile",
+            "commerce_verification_attempt_add",
+            "commerce_verification_attempts",
+            "commerce_report_compile",
+            "commerce_report_judgment_add",
+            "commerce_report_judgments",
+            "research_artifact_add"
+        ]
+    })
+}
+
 fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value> {
     let store = Store::open(paths.clone())?;
     match name {
         "research_capabilities" => Ok(research_capabilities(paths)),
+        "commerce_research_capabilities" => Ok(commerce_capabilities(paths)),
+        "commerce_run_config_set" => Ok(json!(
+            store.record_commerce_run_config(commerce_run_config_input_from_mcp(&arguments)?)?
+        )),
+        "commerce_run_config" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.read_commerce_run_config(&run_id)?))
+        }
+        "commerce_candidate_add" => Ok(json!(
+            store.record_commerce_candidate(commerce_candidate_input_from_mcp(&arguments)?)?
+        )),
+        "commerce_candidates" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_commerce_candidates(&run_id)?))
+        }
+        "commerce_availability_proof_add" => Ok(json!(store.record_commerce_availability_proof(
+            commerce_availability_proof_input_from_mcp(&arguments)?
+        )?)),
+        "commerce_availability_proofs" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_commerce_availability_proofs(&run_id)?))
+        }
+        "commerce_rendered_page_check" => Ok(json!(store.record_commerce_rendered_page_check(
+            commerce_rendered_page_check_input_from_mcp(&arguments)?
+        )?)),
+        "commerce_context_fact_add" => Ok(json!(
+            store
+                .record_commerce_context_fact(commerce_context_fact_input_from_mcp(&arguments)?)?
+        )),
+        "commerce_context_facts" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_commerce_context_facts(&run_id)?))
+        }
+        "commerce_context_packet_compile" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.compile_commerce_context_packet(&run_id)?))
+        }
+        "commerce_verification_attempt_add" => {
+            Ok(json!(store.record_commerce_verification_attempt(
+                commerce_verification_attempt_input_from_mcp(&arguments)?
+            )?))
+        }
+        "commerce_verification_attempts" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_commerce_verification_attempts(&run_id)?))
+        }
+        "commerce_report_judgment_add" => Ok(json!(store.record_commerce_report_judgment(
+            commerce_report_judgment_input_from_mcp(&arguments)?
+        )?)),
+        "commerce_report_judgments" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.list_commerce_report_judgments(&run_id)?))
+        }
+        "commerce_report_compile" => {
+            let run_id = required_string(&arguments, "run_id")?;
+            Ok(json!(store.compile_commerce_report(&run_id)?))
+        }
         "arcwell_health" => Ok(json!(store.health()?)),
         "profile_list" => Ok(json!(store.list_profile()?)),
         "profile_search" => {
@@ -10081,6 +10677,120 @@ fn mcp_tools() -> Vec<Value> {
             [],
         ),
         tool(
+            "commerce_research_capabilities",
+            "Read the anti-mirage qualified-commerce capability contract. Current status is bounded production-data proof for a small supervised browser packet; it explicitly does not claim autonomous broad live browser shopping.",
+            [],
+        ),
+        tool_with_schema(
+            "commerce_run_config_set",
+            "Record or update a qualified-commerce run config for an existing research_run. This is local durable config only, not proof that live search ran.",
+            commerce_run_config_tool_properties(),
+            &["run_id", "domain_profile"],
+        ),
+        tool(
+            "commerce_run_config",
+            "Read the qualified-commerce run config for an existing research_run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool_with_schema(
+            "commerce_candidate_add",
+            "Record one qualified-commerce candidate with an exact normalized item key and variant key. Availability is not proven until commerce_availability_proof_add records visible page evidence with artifact provenance.",
+            commerce_candidate_tool_properties(),
+            &[
+                "run_id",
+                "domain",
+                "source_url",
+                "retailer_or_provider",
+                "title",
+                "normalized_item_key",
+                "variant_key",
+            ],
+        ),
+        tool(
+            "commerce_candidates",
+            "List qualified-commerce candidates for one research run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool_with_schema(
+            "commerce_availability_proof_add",
+            "Record visible page evidence for one candidate's exact variant availability. This rejects wrong-run candidates, wrong variants, and available claims without visible evidence or artifact provenance.",
+            commerce_availability_proof_tool_properties(),
+            &[
+                "run_id",
+                "candidate_id",
+                "proof_method",
+                "variant_key",
+                "variant_label",
+                "availability_state",
+            ],
+        ),
+        tool(
+            "commerce_availability_proofs",
+            "List exact-variant availability proofs for one qualified-commerce run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool_with_schema(
+            "commerce_rendered_page_check",
+            "Record a host-supplied rendered page snapshot for one candidate and conservatively classify selector-backed exact-variant availability. Arcwell performs no browser or network fetch for this tool.",
+            commerce_rendered_page_check_tool_properties(),
+            &[
+                "run_id",
+                "candidate_id",
+                "variant_key",
+                "variant_label",
+                "requested_url",
+            ],
+        ),
+        tool_with_schema(
+            "commerce_context_fact_add",
+            "Record one redacted private-context fact used by qualified-commerce ranking, including source family and confidence.",
+            commerce_context_fact_tool_properties(),
+            &[
+                "run_id",
+                "fact_key",
+                "fact_kind",
+                "redacted_value",
+                "source_family",
+            ],
+        ),
+        tool(
+            "commerce_context_facts",
+            "List redacted private-context facts recorded for one qualified-commerce run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "commerce_context_packet_compile",
+            "Compile a redacted qualified-commerce context packet artifact from recorded private-context facts.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool_with_schema(
+            "commerce_verification_attempt_add",
+            "Record a browser/search verification attempt, including blocked/manual states. This is attempt evidence, not an availability proof by itself.",
+            commerce_verification_attempt_tool_properties(),
+            &["run_id", "candidate_id", "method", "result"],
+        ),
+        tool(
+            "commerce_verification_attempts",
+            "List verification attempts for one qualified-commerce run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool_with_schema(
+            "commerce_report_judgment_add",
+            "Record an acceptance/revision/rejection judgment for a qualified-commerce report. Accept is rejected while blocking findings remain.",
+            commerce_report_judgment_tool_properties(),
+            &["run_id", "decision"],
+        ),
+        tool(
+            "commerce_report_judgments",
+            "List report judgments for one qualified-commerce run.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
+            "commerce_report_compile",
+            "Compile a gated qualified-commerce report artifact and judgment from recorded candidates, exact-variant proofs, source cards, and context facts.",
+            [("run_id", "string", "Research run id.")],
+        ),
+        tool(
             "research_plan",
             "Create a research plan using local wiki context and suggested host-native searches.",
             [("query", "string", "Research question or topic.")],
@@ -11490,6 +12200,138 @@ fn mcp_tools() -> Vec<Value> {
     ]
 }
 
+fn commerce_run_config_tool_properties() -> Value {
+    json!({
+        "run_id": string_schema("Existing research run id."),
+        "domain_profile": string_schema("Domain profile, such as uk-fashion-retail."),
+        "target_qualified_count": integer_schema("Desired number of qualified final options. Defaults to 20."),
+        "geography": string_schema("Optional geography/market, such as UK."),
+        "freshness_window": string_schema("Freshness window for evidence, such as 24h."),
+        "allowed_private_context_sources": array_schema("Private context source families the user authorized for this run.", string_schema("Source family, such as memory, wardrobe, email, spreadsheet, browser_history, or screenshot.")),
+        "allowed_public_source_families": array_schema("Public source families allowed for discovery and corroboration.", string_schema("Source family, such as retailer, marketplace, review, brand, aggregator, rental_listing, or airline.")),
+        "allow_marketplaces": boolean_schema("Whether marketplaces such as eBay or Vinted are allowed."),
+        "allow_chrome_profile": boolean_schema("Whether the user's Chrome/cookie profile may be used when host browser access is needed."),
+        "max_provider_calls": integer_schema("Optional provider-call cap."),
+        "max_browser_pages": integer_schema("Optional rendered-browser page cap."),
+        "max_cost_usd": number_schema("Optional cost cap in USD."),
+        "stop_rules": object_schema("Structured stop rules. Do not put secrets here.", json!({}), &[]),
+        "stop_rules_json": string_schema("Optional JSON string equivalent for CLI compatibility.")
+    })
+}
+
+fn commerce_candidate_tool_properties() -> Value {
+    json!({
+        "run_id": string_schema("Existing research run id."),
+        "domain": string_schema("Domain, such as fashion, rental, or travel."),
+        "source_url": string_schema("Canonical candidate URL."),
+        "retailer_or_provider": string_schema("Retailer, marketplace seller, landlord/platform, airline, or provider name."),
+        "title": string_schema("Visible item/listing/offer title."),
+        "normalized_item_key": string_schema("Stable normalized item key without size/variant, used for duplicate control."),
+        "variant_key": string_schema("Exact desired variant key, such as shoe_size:UK 8.5 or shirt_size:XXL."),
+        "price": string_schema("Optional visible price text."),
+        "currency": string_schema("Optional currency code."),
+        "geography": string_schema("Optional market/geography."),
+        "candidate_status": enum_schema("Candidate status. Defaults to maybe.", &["maybe", "qualified", "disqualified", "blocked"]),
+        "score": number_schema("Optional fit score from 0.0 to 1.0."),
+        "score_reasons": object_schema("Structured score reasons.", json!({}), &[]),
+        "score_reasons_json": string_schema("Optional JSON string equivalent for CLI compatibility."),
+        "disqualification_reasons": array_schema("Structured disqualification reasons.", string_schema("Reason.")),
+        "disqualification_reasons_json": string_schema("Optional JSON string equivalent for CLI compatibility."),
+        "metadata": object_schema("Optional structured metadata. Do not include secrets.", json!({}), &[]),
+        "metadata_json": string_schema("Optional JSON string equivalent for CLI compatibility.")
+    })
+}
+
+fn commerce_availability_proof_tool_properties() -> Value {
+    json!({
+        "run_id": string_schema("Existing research run id."),
+        "candidate_id": string_schema("Commerce candidate id from commerce_candidate_add."),
+        "proof_method": enum_schema("Proof method.", &["static_fetch", "rendered_browser", "chrome_profile", "manual_user"]),
+        "variant_key": string_schema("Exact variant key checked. Must match the candidate variant_key."),
+        "variant_label": string_schema("Visible label for the checked variant, such as UK 8.5."),
+        "availability_state": enum_schema("Observed availability state.", &["available", "unavailable", "unknown", "blocked"]),
+        "visible_evidence": string_schema("Required for availability_state=available: short visible page evidence, not model inference."),
+        "selector_or_dom_hint": string_schema("Optional selector, DOM hint, or visible control description."),
+        "screenshot_artifact_id": string_schema("Optional research artifact id for a screenshot record from the same run."),
+        "page_snapshot_artifact_id": string_schema("Optional research artifact id for rendered page text/HTML from the same run."),
+        "confidence": number_schema("Confidence from 0.0 to 1.0. Defaults to 0.7."),
+        "caveats": array_schema("Caveats about the evidence.", string_schema("Caveat.")),
+        "caveats_json": string_schema("Optional JSON string equivalent for CLI compatibility."),
+        "checked_at": string_schema("Optional RFC3339 timestamp for when the page was checked.")
+    })
+}
+
+fn commerce_rendered_page_check_tool_properties() -> Value {
+    json!({
+        "run_id": string_schema("Existing research run id."),
+        "candidate_id": string_schema("Commerce candidate id from commerce_candidate_add."),
+        "variant_key": string_schema("Exact variant key checked. Must match the candidate variant_key."),
+        "variant_label": string_schema("Visible label to find in rendered text, such as UK 8.5 or XXL."),
+        "requested_url": string_schema("Public http(s) URL originally requested by the host/browser."),
+        "final_url": string_schema("Optional public http(s) URL after redirects."),
+        "title": string_schema("Optional visible page title."),
+        "rendered_html": string_schema("Optional rendered HTML captured by host/browser. Arcwell treats it as untrusted evidence."),
+        "rendered_text": string_schema("Optional visible rendered text captured by host/browser. Arcwell treats it as untrusted evidence."),
+        "captured_at": string_schema("Optional RFC3339 timestamp for capture time."),
+        "browser": string_schema("Optional browser/tool name that captured the page."),
+        "screenshot_path": string_schema("Optional local screenshot path recorded as provenance only."),
+        "selector_or_dom_hint": string_schema("Optional selector, DOM hint, or visible control description."),
+        "chrome_profile_required": boolean_schema("Whether this check depended on the user's Chrome/cookie profile.")
+    })
+}
+
+fn commerce_context_fact_tool_properties() -> Value {
+    json!({
+        "run_id": string_schema("Existing research run id."),
+        "fact_key": string_schema("Stable fact key, such as shoe_size_uk or shirt_size."),
+        "fact_kind": enum_schema("Evidence status for the fact.", &["explicit", "inferred", "uncertain", "missing"]),
+        "redacted_value": string_schema("Redacted value safe for reports/logs."),
+        "source_family": string_schema("Source family, such as memory, wardrobe, email, spreadsheet, browser_history, screenshot, or user_prompt."),
+        "source_ref": string_schema("Optional source reference id/path/locator."),
+        "confidence": number_schema("Confidence from 0.0 to 1.0. Defaults to 0.7."),
+        "user_confirmed": boolean_schema("Whether the user explicitly confirmed this fact."),
+        "may_persist_to_memory": boolean_schema("Whether this fact may be proposed for memory after the run."),
+        "metadata": object_schema("Optional structured metadata. Do not include secrets.", json!({}), &[]),
+        "metadata_json": string_schema("Optional JSON string equivalent for CLI compatibility.")
+    })
+}
+
+fn commerce_verification_attempt_tool_properties() -> Value {
+    json!({
+        "run_id": string_schema("Existing research run id."),
+        "candidate_id": string_schema("Commerce candidate id."),
+        "method": enum_schema("Attempt method.", &["static_fetch", "rendered_browser", "chrome_profile", "manual_user"]),
+        "result": enum_schema("Attempt result.", &["available", "unavailable", "unknown", "blocked", "error"]),
+        "error_kind": string_schema("Optional redacted failure/blocker kind."),
+        "final_url": string_schema("Optional final URL reached."),
+        "http_status": integer_schema("Optional HTTP status code."),
+        "browser_required": boolean_schema("Whether rendered browser access is required to continue."),
+        "chrome_profile_required": boolean_schema("Whether logged-in/cookie-backed Chrome is required to continue."),
+        "artifact_ids": array_schema("Research artifact ids created during the attempt. Each must belong to the same run.", string_schema("Research artifact id.")),
+        "next_action": string_schema("Required when result is blocked or error."),
+        "attempted_at": string_schema("Optional RFC3339 timestamp for the attempt.")
+    })
+}
+
+fn commerce_report_judgment_tool_properties() -> Value {
+    json!({
+        "run_id": string_schema("Existing research run id."),
+        "decision": enum_schema("Report decision.", &["accept", "hold", "block"]),
+        "blocking_findings": array_schema("Blocking findings. decision=accept is rejected when this is non-empty.", string_schema("Finding.")),
+        "blocking_findings_json": string_schema("Optional JSON string equivalent for CLI compatibility."),
+        "non_blocking_findings": array_schema("Non-blocking findings.", string_schema("Finding.")),
+        "non_blocking_findings_json": string_schema("Optional JSON string equivalent for CLI compatibility."),
+        "claims_checked": array_schema("Claims checked by the report/audit gate.", string_schema("Claim id or description.")),
+        "claims_checked_json": string_schema("Optional JSON string equivalent for CLI compatibility."),
+        "availability_proofs_checked": array_schema("Availability proof ids checked by the report/audit gate.", string_schema("Availability proof id.")),
+        "availability_proofs_checked_json": string_schema("Optional JSON string equivalent for CLI compatibility."),
+        "privacy_review": object_schema("Structured privacy review.", json!({}), &[]),
+        "privacy_review_json": string_schema("Optional JSON string equivalent for CLI compatibility."),
+        "remaining_risks": array_schema("Remaining risks that should be visible to the user.", string_schema("Risk.")),
+        "remaining_risks_json": string_schema("Optional JSON string equivalent for CLI compatibility.")
+    })
+}
+
 fn research_convergence_tool_properties() -> Value {
     json!({
         "run_id": string_schema("Research run id."),
@@ -11689,6 +12531,13 @@ fn integer_schema(description: &str) -> Value {
     })
 }
 
+fn number_schema(description: &str) -> Value {
+    json!({
+        "type": "number",
+        "description": description
+    })
+}
+
 fn boolean_schema(description: &str) -> Value {
     json!({
         "type": "boolean",
@@ -11727,6 +12576,10 @@ fn required_string(arguments: &Value, key: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .with_context(|| format!("missing string argument: {key}"))
+}
+
+fn parse_json_arg(raw: &str, label: &str) -> Result<Value> {
+    serde_json::from_str(raw).with_context(|| format!("parsing {label}"))
 }
 
 fn optional_string(arguments: &Value, key: &str, default: &str) -> String {
@@ -12022,6 +12875,253 @@ fn string_array_argument(arguments: &Value, key: &str) -> Result<Vec<String>> {
                 .collect()
         })
         .unwrap_or_else(|| Ok(Vec::new()))
+}
+
+fn json_argument(arguments: &Value, key: &str, json_key: &str, default: Value) -> Result<Value> {
+    if let Some(value) = arguments.get(key) {
+        return Ok(value.clone());
+    }
+    if let Some(raw) = arguments.get(json_key).and_then(Value::as_str) {
+        return serde_json::from_str(raw).with_context(|| format!("parsing {json_key}"));
+    }
+    Ok(default)
+}
+
+fn commerce_run_config_input_from_mcp(arguments: &Value) -> Result<CommerceRunConfigInput> {
+    Ok(CommerceRunConfigInput {
+        run_id: required_string(arguments, "run_id")?,
+        domain_profile: required_string(arguments, "domain_profile")?,
+        target_qualified_count: optional_usize(arguments, "target_qualified_count", 20),
+        geography: arguments
+            .get("geography")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        freshness_window: optional_string(arguments, "freshness_window", "24h"),
+        allowed_private_context_sources: string_array_argument(
+            arguments,
+            "allowed_private_context_sources",
+        )?,
+        allowed_public_source_families: string_array_argument(
+            arguments,
+            "allowed_public_source_families",
+        )?,
+        allow_marketplaces: optional_bool(arguments, "allow_marketplaces", false),
+        allow_chrome_profile: optional_bool(arguments, "allow_chrome_profile", false),
+        max_provider_calls: optional_usize_arg(arguments, "max_provider_calls"),
+        max_browser_pages: optional_usize_arg(arguments, "max_browser_pages"),
+        max_cost_usd: optional_f64_arg(arguments, "max_cost_usd"),
+        stop_rules: json_argument(arguments, "stop_rules", "stop_rules_json", json!({}))?,
+    })
+}
+
+fn commerce_candidate_input_from_mcp(arguments: &Value) -> Result<CommerceCandidateInput> {
+    Ok(CommerceCandidateInput {
+        run_id: required_string(arguments, "run_id")?,
+        domain: required_string(arguments, "domain")?,
+        source_url: required_string(arguments, "source_url")?,
+        retailer_or_provider: required_string(arguments, "retailer_or_provider")?,
+        title: required_string(arguments, "title")?,
+        normalized_item_key: required_string(arguments, "normalized_item_key")?,
+        variant_key: required_string(arguments, "variant_key")?,
+        price: arguments
+            .get("price")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        currency: arguments
+            .get("currency")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        geography: arguments
+            .get("geography")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        candidate_status: optional_string(arguments, "candidate_status", "maybe"),
+        score: optional_f64_arg(arguments, "score"),
+        score_reasons: json_argument(arguments, "score_reasons", "score_reasons_json", json!({}))?,
+        disqualification_reasons: json_argument(
+            arguments,
+            "disqualification_reasons",
+            "disqualification_reasons_json",
+            json!([]),
+        )?,
+        metadata: json_argument(arguments, "metadata", "metadata_json", json!({}))?,
+    })
+}
+
+fn commerce_availability_proof_input_from_mcp(
+    arguments: &Value,
+) -> Result<CommerceAvailabilityProofInput> {
+    Ok(CommerceAvailabilityProofInput {
+        run_id: required_string(arguments, "run_id")?,
+        candidate_id: required_string(arguments, "candidate_id")?,
+        proof_method: required_string(arguments, "proof_method")?,
+        variant_key: required_string(arguments, "variant_key")?,
+        variant_label: required_string(arguments, "variant_label")?,
+        availability_state: required_string(arguments, "availability_state")?,
+        visible_evidence: arguments
+            .get("visible_evidence")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        selector_or_dom_hint: arguments
+            .get("selector_or_dom_hint")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        screenshot_artifact_id: arguments
+            .get("screenshot_artifact_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        page_snapshot_artifact_id: arguments
+            .get("page_snapshot_artifact_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        confidence: optional_f64_arg(arguments, "confidence").unwrap_or(0.7),
+        caveats: json_argument(arguments, "caveats", "caveats_json", json!([]))?,
+        checked_at: arguments
+            .get("checked_at")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    })
+}
+
+fn commerce_rendered_page_check_input_from_mcp(
+    arguments: &Value,
+) -> Result<CommerceRenderedPageCheckInput> {
+    Ok(CommerceRenderedPageCheckInput {
+        run_id: required_string(arguments, "run_id")?,
+        candidate_id: required_string(arguments, "candidate_id")?,
+        variant_key: required_string(arguments, "variant_key")?,
+        variant_label: required_string(arguments, "variant_label")?,
+        snapshot: RenderedPageSnapshotInput {
+            requested_url: required_string(arguments, "requested_url")?,
+            final_url: arguments
+                .get("final_url")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            title: arguments
+                .get("title")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            rendered_html: arguments
+                .get("rendered_html")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            rendered_text: arguments
+                .get("rendered_text")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            captured_at: arguments
+                .get("captured_at")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            browser: arguments
+                .get("browser")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            screenshot_path: arguments
+                .get("screenshot_path")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+        },
+        selector_or_dom_hint: arguments
+            .get("selector_or_dom_hint")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        chrome_profile_required: optional_bool(arguments, "chrome_profile_required", false),
+    })
+}
+
+fn commerce_context_fact_input_from_mcp(arguments: &Value) -> Result<CommerceContextFactInput> {
+    Ok(CommerceContextFactInput {
+        run_id: required_string(arguments, "run_id")?,
+        fact_key: required_string(arguments, "fact_key")?,
+        fact_kind: required_string(arguments, "fact_kind")?,
+        redacted_value: required_string(arguments, "redacted_value")?,
+        source_family: required_string(arguments, "source_family")?,
+        source_ref: arguments
+            .get("source_ref")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        confidence: optional_f64_arg(arguments, "confidence").unwrap_or(0.7),
+        user_confirmed: optional_bool(arguments, "user_confirmed", false),
+        may_persist_to_memory: optional_bool(arguments, "may_persist_to_memory", false),
+        metadata: json_argument(arguments, "metadata", "metadata_json", json!({}))?,
+    })
+}
+
+fn commerce_verification_attempt_input_from_mcp(
+    arguments: &Value,
+) -> Result<CommerceVerificationAttemptInput> {
+    Ok(CommerceVerificationAttemptInput {
+        run_id: required_string(arguments, "run_id")?,
+        candidate_id: required_string(arguments, "candidate_id")?,
+        method: required_string(arguments, "method")?,
+        result: required_string(arguments, "result")?,
+        error_kind: arguments
+            .get("error_kind")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        final_url: arguments
+            .get("final_url")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        http_status: optional_i64_arg(arguments, "http_status"),
+        browser_required: optional_bool(arguments, "browser_required", false),
+        chrome_profile_required: optional_bool(arguments, "chrome_profile_required", false),
+        artifact_ids: string_array_argument(arguments, "artifact_ids")?,
+        next_action: arguments
+            .get("next_action")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        attempted_at: arguments
+            .get("attempted_at")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    })
+}
+
+fn commerce_report_judgment_input_from_mcp(
+    arguments: &Value,
+) -> Result<CommerceReportJudgmentInput> {
+    Ok(CommerceReportJudgmentInput {
+        run_id: required_string(arguments, "run_id")?,
+        decision: required_string(arguments, "decision")?,
+        blocking_findings: json_argument(
+            arguments,
+            "blocking_findings",
+            "blocking_findings_json",
+            json!([]),
+        )?,
+        non_blocking_findings: json_argument(
+            arguments,
+            "non_blocking_findings",
+            "non_blocking_findings_json",
+            json!([]),
+        )?,
+        claims_checked: json_argument(
+            arguments,
+            "claims_checked",
+            "claims_checked_json",
+            json!([]),
+        )?,
+        availability_proofs_checked: json_argument(
+            arguments,
+            "availability_proofs_checked",
+            "availability_proofs_checked_json",
+            json!([]),
+        )?,
+        privacy_review: json_argument(
+            arguments,
+            "privacy_review",
+            "privacy_review_json",
+            json!({}),
+        )?,
+        remaining_risks: json_argument(
+            arguments,
+            "remaining_risks",
+            "remaining_risks_json",
+            json!([]),
+        )?,
+    })
 }
 
 fn write_mcp(stdout: &mut impl Write, value: &Value) -> Result<()> {
@@ -13869,6 +14969,375 @@ reason = "MCP secret writes are denied for this token"
     }
 
     #[test]
+    fn severe_mcp_commerce_schemas_expose_local_only_boundaries() {
+        // CLAIM: MCP discovery exposes exact commerce evidence fields without implying live shopping works.
+        // ORACLE: capability and tool schemas include variant/proof/context/judgment fields plus false live-proof gates.
+        // SEVERITY: Severe because thin schemas make agents hallucinate availability and skip exact-size proof.
+        let tools = mcp_tools();
+        let find_tool = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+                .unwrap_or_else(|| panic!("missing tool {name}"))
+        };
+
+        let capabilities_tool = find_tool("commerce_research_capabilities");
+        assert!(
+            capabilities_tool["description"]
+                .as_str()
+                .unwrap()
+                .contains("bounded production-data proof")
+        );
+
+        let candidate = find_tool("commerce_candidate_add");
+        for property in [
+            "source_url",
+            "retailer_or_provider",
+            "normalized_item_key",
+            "variant_key",
+            "score_reasons",
+            "disqualification_reasons",
+        ] {
+            assert!(
+                candidate
+                    .pointer(&format!("/inputSchema/properties/{property}"))
+                    .is_some(),
+                "commerce_candidate_add missing {property}"
+            );
+        }
+
+        let proof = find_tool("commerce_availability_proof_add");
+        for property in [
+            "proof_method",
+            "variant_key",
+            "variant_label",
+            "availability_state",
+            "visible_evidence",
+            "screenshot_artifact_id",
+            "page_snapshot_artifact_id",
+        ] {
+            assert!(
+                proof
+                    .pointer(&format!("/inputSchema/properties/{property}"))
+                    .is_some(),
+                "commerce_availability_proof_add missing {property}"
+            );
+        }
+        assert!(
+            proof["description"]
+                .as_str()
+                .unwrap()
+                .contains("wrong variants")
+        );
+
+        let rendered_check = find_tool("commerce_rendered_page_check");
+        for property in [
+            "requested_url",
+            "rendered_html",
+            "rendered_text",
+            "variant_key",
+            "variant_label",
+            "chrome_profile_required",
+        ] {
+            assert!(
+                rendered_check
+                    .pointer(&format!("/inputSchema/properties/{property}"))
+                    .is_some(),
+                "commerce_rendered_page_check missing {property}"
+            );
+        }
+        assert!(
+            rendered_check["description"]
+                .as_str()
+                .unwrap()
+                .contains("performs no browser or network fetch")
+        );
+
+        let context_packet = find_tool("commerce_context_packet_compile");
+        assert!(
+            context_packet["description"]
+                .as_str()
+                .unwrap()
+                .contains("redacted")
+        );
+
+        let report_compile = find_tool("commerce_report_compile");
+        assert!(
+            report_compile["description"]
+                .as_str()
+                .unwrap()
+                .contains("gated")
+        );
+        let judgment = find_tool("commerce_report_judgment_add");
+        assert!(
+            judgment["description"]
+                .as_str()
+                .unwrap()
+                .contains("blocking findings")
+        );
+
+        let paths = test_paths("mcp-commerce-capabilities");
+        let capabilities =
+            call_mcp_tool(&paths, "commerce_research_capabilities", json!({})).unwrap();
+        assert_eq!(
+            capabilities["status"],
+            json!("partial_bounded_production_data_proof")
+        );
+        assert_eq!(
+            capabilities["proof_boundaries"]["browser_rendered_extraction"],
+            json!("host_supplied_local_check_proven_no_daemon_browse")
+        );
+        assert_eq!(
+            capabilities["proof_boundaries"]["source_card_linkage"],
+            json!("locally_proven_for_host_supplied_rendered_pages")
+        );
+        assert_eq!(
+            capabilities["proof_boundaries"]["bounded_live_uk_fashion_packet"],
+            json!("production_data_proven_for_two_mands_pages")
+        );
+        assert_eq!(
+            capabilities["proof_boundaries"]["broad_production_data_proof"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn severe_mcp_commerce_ledger_round_trips_and_rejects_fake_availability() {
+        // CLAIM: MCP writes/readbacks use the durable commerce ledger and reject common fake-proof shapes.
+        // ORACLE: exact variant availability succeeds once, wrong variant and accept-with-blockers fail.
+        // SEVERITY: Severe because unavailable sizes and overaccepted reports are the core user-harm path.
+        let paths = test_paths("mcp-commerce-ledger");
+        let run = call_mcp_tool(
+            &paths,
+            "research_run",
+            json!({ "query": "Find UK loafers with softer soles in UK 8.5" }),
+        )
+        .unwrap();
+        let run_id = run["run"]["id"].as_str().unwrap();
+
+        call_mcp_tool(
+            &paths,
+            "commerce_run_config_set",
+            json!({
+                "run_id": run_id,
+                "domain_profile": "uk-fashion-retail",
+                "target_qualified_count": 1,
+                "geography": "UK",
+                "freshness_window": "24h",
+                "allowed_private_context_sources": ["memory", "wardrobe"],
+                "allowed_public_source_families": ["retailer", "marketplace", "review"],
+                "allow_marketplaces": true,
+                "allow_chrome_profile": false,
+                "max_provider_calls": 12,
+                "max_browser_pages": 80,
+                "max_cost_usd": 4.5,
+                "stop_rules": { "min_available_exact_variant": 1 }
+            }),
+        )
+        .unwrap();
+
+        let context = call_mcp_tool(
+            &paths,
+            "commerce_context_fact_add",
+            json!({
+                "run_id": run_id,
+                "fact_key": "shoe_size_uk",
+                "fact_kind": "explicit",
+                "redacted_value": "UK 8.5",
+                "source_family": "memory",
+                "confidence": 0.95,
+                "user_confirmed": true,
+                "may_persist_to_memory": true,
+                "metadata": { "semantic_kind": "size", "raw_value": "[redacted]" }
+            }),
+        )
+        .unwrap();
+        assert_eq!(context["fact_key"], json!("shoe_size_uk"));
+
+        let candidate = call_mcp_tool(
+            &paths,
+            "commerce_candidate_add",
+            json!({
+                "run_id": run_id,
+                "domain": "fashion",
+                "source_url": "https://example.test/loafers/soft-sole",
+                "retailer_or_provider": "Example Shoes",
+                "title": "Soft Sole Penny Loafer",
+                "normalized_item_key": "example-shoes-soft-sole-penny-loafer",
+                "variant_key": "category=shoe;size_system=UK;size=8.5",
+                "price": "185.00",
+                "currency": "GBP",
+                "geography": "UK",
+                "candidate_status": "qualified",
+                "score": 0.84,
+                "score_reasons": { "comfort": "visible cushioned sole claim" },
+                "disqualification_reasons": [],
+                "metadata": { "source": "mcp-test" }
+            }),
+        )
+        .unwrap();
+        let candidate_id = candidate["id"].as_str().unwrap();
+
+        let rendered_check = call_mcp_tool(
+            &paths,
+            "commerce_rendered_page_check",
+            json!({
+                "run_id": run_id,
+                "candidate_id": candidate_id,
+                "variant_key": "category=shoe;size_system=UK;size=8.5",
+                "variant_label": "UK 8.5",
+                "requested_url": "https://example.test/loafers/soft-sole",
+                "final_url": "https://example.test/loafers/soft-sole?size=8.5",
+                "title": "Soft Sole Penny Loafer",
+                "rendered_text": "Soft Sole Penny Loafer\nPrice GBP 185\nSize UK 8.5 available - add to bag",
+                "captured_at": "2026-06-24T10:00:00Z",
+                "browser": "codex-in-app-browser",
+                "selector_or_dom_hint": "button[data-size='8.5']",
+                "chrome_profile_required": false
+            }),
+        )
+        .unwrap();
+        assert_eq!(rendered_check["availability_state"], json!("available"));
+        let proof_id = rendered_check["availability_proof"]["id"].as_str().unwrap();
+        assert_eq!(
+            rendered_check["source_card"]["metadata"]["commerce_availability_state"],
+            json!("available")
+        );
+        assert!(
+            rendered_check["research_source_link"]["link"]["id"]
+                .as_str()
+                .is_some()
+        );
+
+        let context_packet = call_mcp_tool(
+            &paths,
+            "commerce_context_packet_compile",
+            json!({ "run_id": run_id }),
+        )
+        .unwrap();
+        assert_eq!(context_packet["fact_count"], json!(1));
+        assert!(
+            context_packet["artifact"]["body"]
+                .as_str()
+                .unwrap()
+                .contains("shoe_size_uk")
+        );
+
+        let compiled_report = call_mcp_tool(
+            &paths,
+            "commerce_report_compile",
+            json!({ "run_id": run_id }),
+        )
+        .unwrap();
+        assert_eq!(compiled_report["judgment"]["decision"], json!("accept"));
+        assert_eq!(compiled_report["recommended_count"], json!(1));
+        assert_eq!(compiled_report["source_card_count"], json!(1));
+        assert!(
+            compiled_report["artifact"]["body"]
+                .as_str()
+                .unwrap()
+                .contains("Main Recommendations")
+        );
+
+        let wrong_variant = call_mcp_tool(
+            &paths,
+            "commerce_availability_proof_add",
+            json!({
+                "run_id": run_id,
+                "candidate_id": candidate_id,
+                "proof_method": "rendered_browser",
+                "variant_key": "category=shoe;size_system=UK;size=9",
+                "variant_label": "UK 9",
+                "availability_state": "available",
+                "visible_evidence": "Size UK 9 is available"
+            }),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(wrong_variant.contains("variant does not match"));
+
+        call_mcp_tool(
+            &paths,
+            "commerce_verification_attempt_add",
+            json!({
+                "run_id": run_id,
+                "candidate_id": candidate_id,
+                "method": "rendered_browser",
+                "result": "blocked",
+                "error_kind": "cookie_wall",
+                "browser_required": true,
+                "chrome_profile_required": true,
+                "next_action": "retry in user Chrome profile"
+            }),
+        )
+        .unwrap();
+
+        let blocked_accept = call_mcp_tool(
+            &paths,
+            "commerce_report_judgment_add",
+            json!({
+                "run_id": run_id,
+                "decision": "accept",
+                "blocking_findings": ["Only one exact-size proof exists."],
+                "availability_proofs_checked": [proof_id],
+                "privacy_review": { "redacted_context": true },
+                "remaining_risks": ["fixture-only proof"]
+            }),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(blocked_accept.contains("cannot include blocking findings"));
+
+        call_mcp_tool(
+            &paths,
+            "commerce_report_judgment_add",
+            json!({
+                "run_id": run_id,
+                "decision": "hold",
+                "blocking_findings": ["Need production-data browser proof."],
+                "claims_checked": ["availability is fixture-only"],
+                "availability_proofs_checked": [proof_id],
+                "privacy_review": { "redacted_context": true },
+                "remaining_risks": ["no live retailer page was checked"]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            call_mcp_tool(&paths, "commerce_candidates", json!({ "run_id": run_id }))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            call_mcp_tool(
+                &paths,
+                "commerce_availability_proofs",
+                json!({ "run_id": run_id })
+            )
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+            1
+        );
+        assert_eq!(
+            call_mcp_tool(
+                &paths,
+                "commerce_report_judgments",
+                json!({ "run_id": run_id })
+            )
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+            2
+        );
+    }
+
+    #[test]
     fn severe_mcp_research_capabilities_reports_runtime_boundaries() {
         // CLAIM: Agents can ask Arcwell what is actually available before
         // declaring richer extraction/editorial tools unavailable.
@@ -14234,11 +15703,14 @@ reason = "MCP secret writes are denied for this token"
             "source_card_add",
             json!({
                 "title": "MCP Digest Source",
-                "url": "https://example.com/mcp-digest-source",
+                "url": "https://x.com/example/status/123",
+                "source_type": "x",
+                "provider": "x-import",
                 "summary": "MCP digest source summary",
                 "claims": [
                     { "claim": "MCP digest source claim", "kind": "fact", "confidence": 0.8 }
-                ]
+                ],
+                "metadata": { "x_id": "123", "author": "example" }
             }),
         )
         .unwrap();

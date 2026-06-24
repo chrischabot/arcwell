@@ -371,6 +371,14 @@ function markdownProofPacket(summary) {
   const blockers = summary.blockers.length
     ? summary.blockers.map((item) => `- ${item}`).join("\n")
     : "- None recorded by the proof harness.";
+  const reportFiles = summary.files.reports
+    ? [
+        `- Final report: \`${summary.files.reports.final_report_markdown}\``,
+        `- Source/corpus report: \`${summary.files.reports.source_report_markdown}\``,
+        `- Convergence report: \`${summary.files.reports.convergence_report_markdown}\``,
+        `- Report judgments: \`${summary.files.reports.report_judgments_json}\``,
+      ].join("\n")
+    : "- Report exports were not recorded by this proof harness version.";
   return `# Deep Research Production Proof
 
 Generated: ${summary.generated_at}
@@ -412,6 +420,12 @@ The deep-research loop can run through live provider search, auditable host-sear
 
 ${blockers}
 
+## Human-Readable Reports
+
+Open the final report first:
+
+${reportFiles}
+
 ## Artifacts
 
 - Search JSONL: \`${summary.files.searches}\`
@@ -419,6 +433,116 @@ ${blockers}
 - Command log: \`${summary.files.commands}\`
 - Summary JSON: \`${summary.files.summary}\`
 `;
+}
+
+function markdownFromReport(report) {
+  if (typeof report?.markdown === "string" && report.markdown.trim()) {
+    return report.markdown;
+  }
+  if (typeof report?.artifact?.body === "string" && report.artifact.body.trim()) {
+    return report.artifact.body;
+  }
+  if (typeof report?.body === "string" && report.body.trim()) {
+    return report.body;
+  }
+  return "";
+}
+
+function writeJsonFile(file, value) {
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeMarkdownFile(file, markdown) {
+  const body = String(markdown || "").trim();
+  fs.writeFileSync(file, body ? `${body}\n` : "");
+}
+
+function finalReportMarkdown({ topic, closeLoop, sourceReport, convergenceReport, judgments }) {
+  const convergenceMarkdown = normalizeExportedMarkdown(
+    markdownFromReport(convergenceReport || closeLoop?.final_report)
+  );
+  const sourceMarkdown = normalizeExportedMarkdown(markdownFromReport(sourceReport));
+  const body = convergenceMarkdown || sourceMarkdown;
+  const latestJudgment = Array.isArray(judgments) && judgments.length
+    ? judgments[judgments.length - 1]
+    : null;
+  const blockers = Array.isArray(closeLoop?.blockers) && closeLoop.blockers.length
+    ? closeLoop.blockers.map((blocker) => `- ${blocker}`).join("\n")
+    : "- None recorded by close-loop.";
+  const decision = latestJudgment?.overall_decision || "not recorded";
+  const judgmentId = latestJudgment?.id || "not recorded";
+  const status = closeLoop?.closure_status || "not reported";
+  return `# Final Deep Research Report
+
+Topic: ${topic}
+
+Publication status: **${decision}**
+
+Close-loop status: \`${status}\`
+
+Latest judgment: \`${judgmentId}\`
+
+## Read This First
+
+This is the user-facing report export for the proof run. If the status is rejected or incomplete, the findings below are still useful as the considered research position, but they are not publication-grade until the blockers are resolved.
+
+## Blocking Findings
+
+${blockers}
+
+${body || "No report body was returned by the research report compiler."}
+`;
+}
+
+function normalizeExportedMarkdown(markdown) {
+  let text = String(markdown || "").trim();
+  if (!text) return "";
+  text = text.replace(/\r\n/g, "\n");
+  if (text.includes("\n\n## ") || text.includes("\n- ")) {
+    return text;
+  }
+  return text
+    .replace(/ (#{1,6} )/g, "\n\n$1")
+    .replace(/ - (?=(?:\*\*|`|[A-Z0-9]))/g, "\n- ")
+    .replace(/ (\| Iteration \|)/g, "\n\n$1")
+    .replace(/ (\\\| ---:)/g, "\n$1")
+    .replace(/ (\| \d+ \|)/g, "\n$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function writeProofReadme({ file, summary, reports }) {
+  const blockers = summary.blockers.length
+    ? summary.blockers.map((blocker) => `- ${blocker}`).join("\n")
+    : "- None recorded by the proof harness.";
+  fs.writeFileSync(
+    file,
+    `# Deep Research Proof Output
+
+Open this first:
+
+- \`${reports.finalReportFile}\`
+
+Supporting files:
+
+- Source/corpus report: \`${reports.sourceReportFile}\`
+- Convergence report: \`${reports.convergenceReportFile}\`
+- Report judgments: \`${reports.reportJudgmentsFile}\`
+- Close-loop JSON: \`${reports.closeLoopFile}\`
+- Proof packet: \`${summary.files.packet}\`
+
+Status:
+
+- Closure status: \`${summary.closure_status || "not reported"}\`
+- Model-backed accepted: ${summary.model_backed_accepted ? "yes" : "no"}
+- Source cards: ${summary.source_cards}
+- Linked sources: see \`${summary.files.sources}\`
+
+Blockers:
+
+${blockers}
+`
+  );
 }
 
 function extractReadableTextFromWikiPage(page) {
@@ -795,6 +919,14 @@ function main() {
   const sourcesFile = path.join(home, "sources.jsonl");
   const summaryFile = path.join(home, "summary.json");
   const packetFile = path.join(home, "proof-packet.md");
+  const finalReportFile = path.join(home, "final-report.md");
+  const sourceReportFile = path.join(home, "source-report.md");
+  const convergenceReportFile = path.join(home, "convergence-report.md");
+  const finalReportJsonFile = path.join(home, "final-report.json");
+  const sourceReportJsonFile = path.join(home, "source-report.json");
+  const closeLoopFile = path.join(home, "close-loop.json");
+  const reportJudgmentsFile = path.join(home, "report-judgments.json");
+  const readmeFile = path.join(home, "README.md");
   const bin = path.join(root, "target", "debug", "arcwell");
   if (!fs.existsSync(bin)) {
     throw new Error(`missing debug binary: ${bin}; run cargo build -p arcwell`);
@@ -990,7 +1122,7 @@ function main() {
     runJson(bin, env, logFile, ["research", "clusters", runId]);
     runJson(bin, env, logFile, ["research", "skeptic", runId]);
     const audit = runJson(bin, env, logFile, ["research", "audit-run", runId]);
-    runJson(bin, env, logFile, [
+    const sourceReport = runJson(bin, env, logFile, [
       "research",
       "report",
       runId,
@@ -1115,6 +1247,7 @@ function main() {
     if (postCloseChallengeStats.executed > 0) {
       closeLoop = runJson(bin, env, logFile, closeArgs);
     }
+    writeJsonFile(closeLoopFile, closeLoop);
     if (!args.noEditorial) {
       const prePostCloseJudgments = runJson(bin, env, logFile, ["research", "report-judgments", runId]);
       const alreadyHasModelBackedJudgment = Array.isArray(prePostCloseJudgments)
@@ -1143,6 +1276,23 @@ function main() {
     const hostSearches = runJson(bin, env, logFile, ["research", "host-searches", runId]);
     const status = runJson(bin, env, logFile, ["research", "convergence-status", runId]);
     const judgments = runJson(bin, env, logFile, ["research", "report-judgments", runId]);
+    const convergenceReport = closeLoop.final_report
+      || runJson(bin, env, logFile, ["research", "convergence-report", runId]);
+    writeJsonFile(sourceReportJsonFile, sourceReport);
+    writeMarkdownFile(sourceReportFile, markdownFromReport(sourceReport));
+    writeJsonFile(finalReportJsonFile, convergenceReport);
+    writeMarkdownFile(convergenceReportFile, markdownFromReport(convergenceReport));
+    writeJsonFile(reportJudgmentsFile, judgments);
+    writeMarkdownFile(
+      finalReportFile,
+      finalReportMarkdown({
+        topic,
+        closeLoop,
+        sourceReport,
+        convergenceReport,
+        judgments,
+      })
+    );
     const modelBackedEditorial = Array.isArray(judgments)
       ? judgments.some((judgment) => judgment.scores?.model_backed_convergence_editorial)
       : false;
@@ -1182,6 +1332,12 @@ function main() {
     if (Array.isArray(claims) && claims.length < Math.floor(minSourceCards * 0.8)) {
       blockers.push(`structured claim floor not met: ${claims.length} < ${Math.floor(minSourceCards * 0.8)}`);
     }
+    const exportedFinalReportLength = fs.existsSync(finalReportFile)
+      ? fs.readFileSync(finalReportFile, "utf8").trim().length
+      : 0;
+    if (exportedFinalReportLength < 1000) {
+      blockers.push(`user-visible final report export is missing or too short: ${exportedFinalReportLength} chars`);
+    }
     const summary = {
       generated_at: new Date().toISOString(),
       profile: args.profile,
@@ -1218,12 +1374,33 @@ function main() {
         commands: logFile,
         summary: summaryFile,
         packet: packetFile,
+        readme: readmeFile,
+        reports: {
+          final_report_markdown: finalReportFile,
+          source_report_markdown: sourceReportFile,
+          convergence_report_markdown: convergenceReportFile,
+          final_report_json: finalReportJsonFile,
+          source_report_json: sourceReportJsonFile,
+          close_loop_json: closeLoopFile,
+          report_judgments_json: reportJudgmentsFile,
+        },
       },
       run_id: runId,
       full_source_failure_sample: fullSourceFailures.slice(0, 20),
     };
     fs.writeFileSync(summaryFile, `${JSON.stringify(summary, null, 2)}\n`);
     fs.writeFileSync(packetFile, markdownProofPacket(summary));
+    writeProofReadme({
+      file: readmeFile,
+      summary,
+      reports: {
+        finalReportFile,
+        sourceReportFile,
+        convergenceReportFile,
+        reportJudgmentsFile,
+        closeLoopFile,
+      },
+    });
     console.log(JSON.stringify(summary, null, 2));
     success = true;
     if (blockers.length > 0) {

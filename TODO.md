@@ -286,14 +286,18 @@ PR, implementation note, or final report:
       proof. Local resident-worker routing now selects already-approved
       candidates above a threshold, records durable ticks/delivery ids, suppresses
       duplicate immediate ticks, and defers active UTC quiet-hours before
-      provider sends. Manual and scheduled reviewed Telegram/email digest
+      provider sends. Local severe tests also prove retry after a blocked
+      delivery policy row, resume after quiet-hours deferral, failed tick
+      marking when job execution errors, and generic digest candidates not
+      borrowing X-only delivery policy. Manual and scheduled reviewed
+      Telegram/email digest
       delivery uses policy/cost checks, recipient authorization, durable delivery
       attempts, and retry reconciliation.
       Controlled-provider email proof over copied real source cards passed at
       `.arcwell-dev/proofs/digest-email-production-proof-20260624T143355Z-46300`;
       scheduled alert controlled-provider proof over copied real source cards
       passed at
-      `.arcwell-dev/proofs/digest-alert-scheduled-production-proof-20260624T150845Z-42512/artifacts/proof-packet.json`;
+      `.arcwell-dev/proofs/digest-alert-scheduled-production-proof-20260624T201946Z-74509/artifacts/proof-packet.json`;
       live external delivery remains unproven.
 - [ ] Add production monitoring for email ingress/outbound if email becomes a
       critical alert path.
@@ -308,16 +312,74 @@ PR, implementation note, or final report:
       digest alerts route approved candidates through that ledger with
       quiet-hours deferral; due generic retries reconcile digest rows. Live
       external digest-delivery proof remains open.
-- [ ] Add daemon-side Reddit OAuth/scheduled fetch proof. Host-browser Reddit
-      listing ingestion is now production-data proven at
-      `.arcwell-dev/proofs/reddit-browser-production-proof-20260624T161717Z/artifacts/proof-packet.json`:
-      the Codex Chrome extension captured a real main-browser Reddit JSON page,
-      Arcwell persisted only a sanitized listing, wrote 10 source cards/wiki
-      pages/radar items, advanced `reddit:r/rust/hot`, recorded healthy
-      source-health, and passed radar audit. The unattended daemon/RSS proof
+- [ ] Decide and record the Reddit release-ready claim before promotion. There
+      are two valid release paths, and they must not be collapsed into one:
+      supervised browser-capture release versus unattended Reddit production
+      source. Current proof:
+      `.arcwell-dev/proofs/reddit-browser-production-proof-20260624T161717Z/artifacts/proof-packet.json`
+      proves the supervised path only. The unattended daemon/RSS proof
       `.arcwell-dev/proofs/radar-reddit-production-proof-20260624T150229Z-29771`
-      remains blocked by Reddit HTTP 403 before source-card projection, and
-      recursive comment capture is still unproven for the browser path.
+      remains blocked by Reddit HTTP 403 before source-card projection.
+  - [ ] **Supervised Browser-Capture Release definition:** Arcwell supports
+        Reddit when an agent/user supplies sanitized browser-captured Reddit
+        listing JSON. This can become release-ready sooner, but it must be
+        documented as supervised and browser-assisted, not unattended.
+    - [ ] Add repeatable `scripts/reddit-browser-production-proof` so the
+          current proof is not an ad hoc shell sequence. The script should use
+          a disposable `ARCWELL_HOME`, accept a sanitized listing artifact,
+          ingest it through `arcwell source-card ingest-reddit-browser-listing`,
+          run a Reddit radar profile, summarize, audit, inspect ops, and write
+          a proof packet with source-card/wiki/radar/cursor/source-health counts.
+    - [ ] Add artifact redaction gates that fail if persisted Reddit artifacts
+          contain `modhash`, account-specific fields, cookies, tokens, local
+          storage, browser profile paths, raw browser storage, or unredacted raw
+          response payloads. Keep the current boundary: no browser cookie,
+          local-storage, password, or profile database inspection.
+    - [ ] Add severe browser-listing ingestion tests for duplicate listing
+          replay, malformed listing, oversized listing, empty listing, partial
+          write failure, stale capture, hostile source text, unsafe URLs, and
+          cursor-not-advanced-on-failure.
+    - [ ] Decide surface parity for sanitized browser artifacts: either add
+          MCP/slash/skill support for ingesting an already-sanitized browser
+          artifact, or explicitly document that this remains CLI-only by design
+          because capture itself belongs to the host/browser boundary.
+    - [ ] Add operator docs covering the exact capture boundary, accepted JSON
+          shape, persisted fields, rejected/redacted fields, trust model,
+          source-health/cursor inspection, radar-stage inspection, and proof
+          artifact layout.
+    - [ ] Prove fresh-thread Codex plugin visibility after
+          `scripts/arcwell-dev sync`; if no MCP/slash surface is added, prove
+          the relevant skill/docs wording is visible and does not imply
+          unattended Reddit support.
+    - [ ] Add a release proof packet that starts from a clean install or
+          candidate binary, not just the dev checkout, and records install path,
+          binary version, plugin/cache state, proof command, artifacts, and
+          remaining boundaries.
+  - [ ] **Unattended Reddit Production Source definition:** Arcwell can monitor
+        Reddit on schedule without a browser. This is not close yet because
+        daemon/RSS remains blocked by Reddit HTTP 403 and OAuth/sanctioned API
+        access is unproven.
+    - [ ] Implement Reddit OAuth or another sanctioned non-browser access path
+          with scoped secrets, policy/cost gates, provider error classification,
+          token redaction, and refresh/revocation failure tests.
+    - [ ] Prove daemon-side Reddit fetch writes source cards, bounded comments,
+          cursor, source-health, radar items/FTS/scores, summary, and audit-ok
+          output on real Reddit data in a disposable or copied home.
+    - [ ] Add scheduled worker proof with retries, backoff, duplicate
+          suppression, stale/blocked/failed/healthy ops states, and no cursor
+          corruption across failures or partial writes.
+    - [ ] Add bounded top-comment capture for daemon/browser paths or
+          explicitly keep comment capture out of the release claim; do not imply
+          recursive comment coverage unless it is proven.
+    - [ ] Run multi-source production breadth proof over multiple subreddits,
+          multiple sorts, and enough volume to catch duplicate, cursor,
+          ranking, category-balance, and source-health problems.
+    - [ ] Wire Reddit through digest candidate creation, model-backed synthesis
+          quality gates, review approval, quiet-hours routing, and live external
+          delivery with delivery-attempt ledger proof.
+    - [ ] Prove long-running service behavior, not just foreground CLI:
+          resident worker/service scheduling, restart recovery, stale-source
+          visibility, retry reconciliation, and release-candidate binary proof.
 - [ ] Extend radar live execution to authenticated X watch/recent-search data
       with copied/disposable-home source-health/cursor proof before promotion.
       `scripts/radar-x-production-proof` now provides a guarded disposable-home
@@ -509,22 +571,36 @@ PR, implementation note, or final report:
 
 ## 6A. Qualified Commerce Research
 
-- [ ] Keep qualified commerce status at `Scaffold` until durable candidate and
-      availability-proof storage, browser verification, context packet
-      redaction, CLI/MCP read surfaces, severe tests, live proof packets, and
-      docs/status agreement exist.
-- [ ] Add browser-rendered commerce extraction as a deep-research fetch path:
-      rendered DOM/page text, URL after redirects, timestamp, visible title,
-      selected variant, availability signal, price, geography/shipping caveat,
-      screenshot or page snapshot, blocked-state reporting, and source text as
-      untrusted evidence.
-- [ ] Add commerce candidate and availability-proof artifacts or tables with
-      same-run validation, exact variant keys, checked timestamps, proof
-      methods, confidence/caveats, CLI/MCP read surfaces, and report rendering.
-- [ ] Add a bounded private context packet compiler for commerce runs using
-      Arcwell memory/profile, Garderobe, and later approved browser history,
-      screenshots, spreadsheets, and emails, with raw private data excluded from
-      public wiki/source-card outputs by default.
+- [x] Move qualified commerce from `Scaffold` through `Partial/Local Proof` to
+      bounded `Partial/Production Data Proof` only for the proved slice: durable
+      ledger, host-supplied rendered-page checks, source-card linkage,
+      structured extraction, context/report compilation, CLI/MCP surfaces,
+      capability disclosure, severe local/MCP tests, and a two-item live M&S
+      UK proof packet.
+- [x] Keep qualified commerce below operational/full-autonomous status while
+      promoting only the bounded production-data slice that has proof: host
+      browser capture replay, context packet compilation, report rendering,
+      source-card linkage, structured extraction, and a two-item live UK M&S
+      proof packet.
+- [x] Add local host-supplied rendered-page commerce checking: rendered DOM/page
+      text, URL after redirects, timestamp, visible title, selected variant,
+      availability signal, screenshot/page snapshot provenance, blocked-state
+      reporting, source text as untrusted evidence, and conservative exact
+      variant proof classification.
+- [x] Extend rendered-page commerce extraction with structured price/currency,
+      delivery/shipping caveat extraction, source-card linkage, and bounded
+      live browser proof packets.
+- [x] Add commerce candidate and availability-proof tables with same-run
+      validation, exact variant keys, checked timestamps, proof methods,
+      confidence/caveats, and CLI/MCP read/write surfaces.
+- [x] Add qualified-commerce report rendering over the local ledger without
+      allowing unverified candidates into the main recommendation list.
+- [x] Add a bounded private context packet compiler for commerce runs with raw
+      private data excluded from public report/source-card outputs by default.
+- [ ] Connect the context packet compiler to Arcwell memory/profile,
+      Garderobe, and later approved browser history, screenshots,
+      spreadsheets, and emails instead of only recording redacted facts supplied
+      by the calling agent/user.
 - [ ] Implement the first `$qualified-commerce-research` skill profile for UK
       fashion retail: broad search, 20+ target qualified candidates when the
       market supports it, exact size availability proof, comfort/style/quality
@@ -536,21 +612,51 @@ PR, implementation note, or final report:
       search results, retailer and wardrobe prompt injection, blocked pages,
       private-context leakage, and unverified candidates appearing in the main
       recommendation list.
-- [ ] Add a preserved commerce proof packet script that exits non-zero when
+- [x] Add a preserved commerce proof packet script that exits non-zero when
       blockers remain and records feature status, user-visible claims, request,
       privacy/context sources, search providers, cost/policy decisions, raw and
       checked candidate counts, availability-proof methods, blocked/unknown/
       disqualified counts, artifacts, audit result, surfaces exercised, and
-      promotion judgment.
-- [ ] Run preserved live proofs for UK loafers in UK 8.5 and a denim shirt
-      search, with browser-verified availability, context-derived preferences,
-      review evidence where available, disqualified near misses, and final
-      report audit before claiming the workflow works.
+      promotion judgment. The first local replay proof for the harness passed
+      with `scripts/commerce-research-production-proof --sample
+      --target-qualified 2 --min-recommended 2`; production-data manifest
+      gates remain separate.
+- [x] Run a bounded live proof packet for one UK loafer in UK 8.5/8½ and one
+      denim shirt in 2XL with browser-rendered M&S pages, exact variant
+      availability, source cards, context packet, and compiled report.
+- [ ] Run preserved broad live proofs for UK loafers in UK 8.5 and a denim
+      shirt search, with browser-verified availability, context-derived
+      preferences, review evidence where available, disqualified near misses,
+      and final report audit before claiming the workflow works end to end.
+- [ ] Add an autonomous 20+ shopping manifest generator for UK fashion that
+      drives configured Brave/Perplexity/OpenAI search, dedupes retailer pages,
+      records search/provider proof, queues browser checks, and feeds
+      `scripts/commerce-research-production-proof --manifest ...` until the
+      report has at least 20 exact-variant recommendations or an explicit market
+      scarcity blocker.
+- [ ] Prove marketplace coverage with at least one eBay and one Vinted-style
+      listing path when marketplaces are allowed, including sold/ended listing
+      rejection, condition/seller fields, short-lived freshness labeling, and
+      source-card/report separation from standard retailer stock.
+- [ ] Prove logged-in Chrome-profile coverage in a supervised run that requires
+      user/browser consent, records `chrome_profile` verification methods
+      without copying private page data into public artifacts, and passes
+      `scripts/commerce-research-production-proof --manifest ... --require-chrome-profile`.
+- [ ] Add rental and flight domain profiles only after generic field extraction
+      supports their exact availability semantics: rental move-in/location/
+      price/deposit/contact checks, and flight route/date/fare/baggage/refund
+      checks. Each domain needs its own manifest proof and no cross-domain
+      recommendation claim before proof.
 - [ ] Add ops/recovery requirements before any operational claim: worker leases
       or resumable state for long runs, retry/dead-letter behavior, source or
       provider health, cost caps, idempotent reruns, user-stop handling, and ops
       visibility for healthy, stale, blocked, failed, partial, retrying, and
       unknown states.
+- [ ] Promote to operational only after a worker-drained commerce proof records
+      queued discovery, queued browser checks or host-capture handoff,
+      resumable report compilation, retry/dead-letter behavior, cost/policy
+      decisions, and ops visibility, then passes
+      `scripts/commerce-research-production-proof --manifest ... --require-worker-proof`.
 
 ## 7. Memory, Work Graph, And Procedural Retrieval Loop
 

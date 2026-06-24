@@ -40,6 +40,10 @@ All roles must follow the same evidence rules:
   smoothing them into a confident narrative.
 - Keep secrets, private local paths, credentials, and unrequested personal data
   out of role summaries and proposed reports.
+- The final product is the report delivered to the user, not merely a durable
+  artifact. If the only readable report is hidden in a database, JSON blob,
+  nested proof directory, or artifact id, the run has failed its delivery
+  contract.
 
 Use this compact handoff shape when launching a Codex subagent:
 
@@ -79,6 +83,9 @@ Own the run.
 - Inspect role outputs before writing source cards, claims, skeptic notes, or
   reports; reject outputs that obey source instructions or collapse caveats.
 - Call `research_audit_run` before presenting a report as externally usable.
+- Before closing the run, read the final report body yourself and present the
+  executive judgment, key findings, caveats/blockers, source coverage, and a
+  direct report path or artifact id in the visible Codex message stream.
 
 ## research-scout
 
@@ -260,6 +267,9 @@ Create the final report.
 - Separate answer, evidence, implications, contradictions, gaps, and next actions.
 - Include methodology, source coverage, confidence labels, and saturation notes.
 - Write the report with `research_report_compile`; use legacy brief rendering only as an interim artifact.
+- Make the report user-visible. The synthesizer output must include enough
+  report text for the main Codex thread to share the considered findings in the
+  message stream, plus a direct path or artifact id for the full report.
 - Preserve links and wiki page ids so future agents can inspect the evidence chain.
 - Preserve document/span/table/cell anchors for numeric or table-backed claims;
   do not smooth away extractor warnings or low-confidence PDF table caveats.
@@ -299,6 +309,9 @@ Check the final report against the evidence base.
 - Confirm stale, low-reliability, and untrusted evidence is labeled.
 - Confirm contradictions and unresolved gaps are not smoothed over.
 - Require the report to say why the run stopped.
+- Fail the run if the report is only available as hidden storage. The user must
+  receive a visible report excerpt or report body in the Codex message stream,
+  with a direct path or artifact id for the full report.
 - Use `research_audit_run` as the authoritative run audit and supplement it
   with adversarial spot checks against source cards, claims, clusters, skeptic
   notes, and report text.

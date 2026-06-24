@@ -11,6 +11,11 @@ Product contract:
 - If research is invoked, assume broad source discovery, deep reading, source-card/claim extraction, skeptic/refutation passes, cited synthesis, audit, and durable writeback.
 - Do not treat this as a quick answer or surface-level brief workflow. A short summary can be part of the final report, but it is not a separate mode.
 - Do not auto-trigger Deep Research for every ordinary factual question; use it when the user explicitly asks to research, deeply investigate, survey, map, or produce a comprehensive report.
+- The product output is the report, not the hidden ledger. A deep-research run
+  is not complete until the user can see the considered findings in the message
+  stream and has a direct, obvious path to the report artifact. If the report is
+  only buried in SQLite, JSON, a proof folder, or an internal artifact id, the
+  run has failed its user-facing contract.
 
 Rules:
 
@@ -108,6 +113,13 @@ Rules:
   The normal `research_report_compile` remains the source/corpus report
   compiler.
 - Use `research_report_compile` for the final deep report. It marks the report incomplete when skeptic or audit checks fail.
+- After `research_report_compile`, `research_convergence_report_compile`, or
+  `research_convergence_close_loop`, read the returned report body/artifact
+  yourself and include the user-facing report content in the final Codex
+  message. At minimum, share the title, publication/closure status, executive
+  judgment, key findings, blockers/caveats, source coverage, and a direct path
+  or artifact id. Do not answer only with "stored in Arcwell", a run id, a proof
+  directory, or a database path.
 - Use `research_brief_from_wiki` only as a legacy report-draft artifact after source cards are in place; do not present it as a shallow mode.
 - Call `research_audit_run` before using a report externally or as project evidence.
 - Treat generated `Research Brief:`, report, digest, model-answer, and
@@ -257,3 +269,18 @@ Role prompts/config:
   disproofs, apply revisions, fact-check the revised position, inspect the
   convergence snapshot, and either reroute unresolved blockers to research
   roles or compile the convergence report and judgment.
+
+Minimum output discipline:
+
+- The final response must contain the report or a substantial report excerpt in
+  the message stream. For long reports, include the executive judgment, top
+  findings, blockers, methodology/source coverage, and direct report path or
+  artifact id, then say the full report continues in that file/artifact.
+- Never leave the only readable report in a deeply nested hidden folder,
+  database row, JSON blob, or artifact id. Hidden storage is backup/provenance;
+  the user-visible message is the delivery surface.
+- Answer with sourced claims.
+- Separate confirmed facts, interpretation, and open questions.
+- Include links for external sources and wiki page ids for local sources.
+- Report source coverage and why the run stopped.
+- Say plainly when the local wiki has no matching context.

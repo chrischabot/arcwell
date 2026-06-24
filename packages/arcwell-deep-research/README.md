@@ -17,6 +17,10 @@ Target product contract:
 - The normal assistant should not auto-trigger Deep Research for every question;
   it should run only when research is explicitly invoked or unmistakably
   requested.
+- The deliverable is the user-visible report. Durable storage, run ids, proof
+  directories, JSON, and SQLite are provenance; they are not a substitute for
+  sharing the report in the Codex message stream with a direct report path or
+  artifact id.
 
 Design reference: `docs/deep-research-system-design.md`.
 
@@ -143,6 +147,9 @@ Target host-agent loop:
 9. Run `research_clusters`, `research_skeptic_pass`, and `research_audit_run`.
 10. Build `research_evidence_pack`, run any explicit model-backed editorial/eval loop with `research_editorial_invoke` or an external provider, and record/import each stage.
 11. Compile the final report with `research_report_compile`.
+12. Read the returned report body and share the executive judgment, key
+    findings, blockers/caveats, source coverage, and direct report path or
+    artifact id in the visible Codex message stream before calling the run done.
 
 Future work:
 

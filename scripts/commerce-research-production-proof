@@ -1,0 +1,630 @@
+#!/usr/bin/env node
+/*
+ * Qualified commerce proof harness.
+ *
+ * This script drives the public Arcwell CLI in a disposable home. It can run a
+ * small local replay sample for regression coverage, or consume a manifest of
+ * host/browser-captured commerce pages for production-data proof. Release gates
+ * stay fail-closed: broad 20+ shopping, marketplaces, Chrome-profile, rental,
+ * travel, and worker claims only pass when the manifest proves them.
+ */
+
+const fs = require("fs");
+const path = require("path");
+const { spawnSync } = require("child_process");
+
+const root = path.resolve(__dirname, "..");
+
+function usage(exitCode = 0) {
+  console.log(`Usage: scripts/commerce-research-production-proof [options]
+
+Options:
+  --manifest <path>             JSON manifest of browser-captured candidates
+  --sample                      Run the built-in two-item local replay sample
+  --profile <name>              Profile label for the proof packet
+  --query <text>                Research query override
+  --target-qualified <n>        Target qualified count (default: manifest/sample or 20)
+  --min-recommended <n>         Required report recommendations (default: target)
+  --require-production-data     Block local replay/sample proof
+  --require-marketplace         Require at least one marketplace candidate proof
+  --require-chrome-profile      Require at least one Chrome-profile proof
+  --require-domain <name>       Require candidate proof for a domain; repeatable
+  --require-worker-proof        Require manifest worker proof metadata
+  --home <path>                 Use this ARCWELL_HOME instead of a new proof home
+  --proof-dir <path>            Preserve artifacts under this directory
+  --keep-home                   Keep generated home on failure
+  --help                        Show this help
+
+Manifest shape:
+  {
+    "query": "soft-soled loafers in the UK",
+    "domain_profile": "uk-fashion-retail",
+    "target_qualified_count": 20,
+    "geography": "UK",
+    "allow_marketplaces": true,
+    "allow_chrome_profile": true,
+    "context_facts": [{ "fact_key": "shoe_size", "fact_kind": "explicit", ... }],
+    "captures": [{
+      "domain": "fashion",
+      "source_url": "https://...",
+      "retailer_or_provider": "Retailer",
+      "title": "Product title",
+      "normalized_item_key": "retailer:item",
+      "variant_key": "shoe:UK:8.5",
+      "variant_label": "8.5",
+      "selector_or_dom_hint": "button[data-size='8.5']",
+      "requested_url": "https://...",
+      "rendered_text_file": "captures/product.txt"
+    }],
+    "worker_proof": { "status": "passed" }
+  }
+`);
+  process.exit(exitCode);
+}
+
+function parseArgs(argv) {
+  const args = {
+    sample: false,
+    targetQualified: undefined,
+    minRecommended: undefined,
+    requireProductionData: false,
+    requireMarketplace: false,
+    requireChromeProfile: false,
+    requireDomains: [],
+    requireWorkerProof: false,
+    keepHome: false,
+  };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = () => {
+      if (i + 1 >= argv.length) throw new Error(`${arg} requires a value`);
+      i += 1;
+      return argv[i];
+    };
+    switch (arg) {
+      case "--help":
+      case "-h":
+        usage(0);
+        break;
+      case "--manifest":
+        args.manifest = next();
+        break;
+      case "--sample":
+        args.sample = true;
+        break;
+      case "--profile":
+        args.profile = next();
+        break;
+      case "--query":
+        args.query = next();
+        break;
+      case "--target-qualified":
+        args.targetQualified = parsePositiveInt(arg, next());
+        break;
+      case "--min-recommended":
+        args.minRecommended = parsePositiveInt(arg, next());
+        break;
+      case "--require-production-data":
+        args.requireProductionData = true;
+        break;
+      case "--require-marketplace":
+        args.requireMarketplace = true;
+        break;
+      case "--require-chrome-profile":
+        args.requireChromeProfile = true;
+        break;
+      case "--require-domain":
+        args.requireDomains.push(next());
+        break;
+      case "--require-worker-proof":
+        args.requireWorkerProof = true;
+        break;
+      case "--home":
+        args.home = next();
+        break;
+      case "--proof-dir":
+        args.proofDir = next();
+        break;
+      case "--keep-home":
+        args.keepHome = true;
+        break;
+      default:
+        throw new Error(`unknown argument: ${arg}`);
+    }
+  }
+  if (args.manifest && args.sample) {
+    throw new Error("--manifest and --sample are mutually exclusive");
+  }
+  if (!args.manifest && !args.sample) {
+    throw new Error("provide --manifest for production-data proof or --sample for local replay");
+  }
+  return args;
+}
+
+function parsePositiveInt(flag, raw) {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${flag} must be a positive integer`);
+  }
+  return value;
+}
+
+function readManifest(args) {
+  if (args.sample) return sampleManifest(args);
+  const manifestPath = path.resolve(args.manifest);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  manifest.__manifestPath = manifestPath;
+  manifest.__manifestDir = path.dirname(manifestPath);
+  return manifest;
+}
+
+function sampleManifest(args) {
+  return {
+    __sample: true,
+    profile: args.profile || "bounded-mands-two-item-local-replay",
+    query:
+      args.query ||
+      "local replay of two UK fashion commerce captures with exact variant checks",
+    domain_profile: "uk-fashion-retail",
+    target_qualified_count: args.targetQualified || 2,
+    geography: "UK",
+    freshness_window: "sample-replay",
+    allow_marketplaces: false,
+    allow_chrome_profile: false,
+    public_source_families: ["retailer"],
+    private_context_sources: ["user_supplied_sample"],
+    context_facts: [
+      {
+        fact_key: "shoe_size",
+        fact_kind: "explicit",
+        redacted_value: "UK shoe size 8.5",
+        source_family: "user_supplied_sample",
+        source_ref: "sample",
+        confidence: 0.9,
+        user_confirmed: true,
+        may_persist_to_memory: false,
+      },
+      {
+        fact_key: "shirt_size",
+        fact_kind: "explicit",
+        redacted_value: "shirt size 2XL",
+        source_family: "user_supplied_sample",
+        source_ref: "sample",
+        confidence: 0.9,
+        user_confirmed: true,
+        may_persist_to_memory: false,
+      },
+    ],
+    captures: [
+      {
+        domain: "fashion",
+        source_url: "https://www.marksandspencer.com/white-sole-suede-loafers/p/clp60774630",
+        retailer_or_provider: "Marks and Spencer",
+        title: "Autograph White Sole Suede Loafers",
+        normalized_item_key: "marks-and-spencer:white-sole-suede-loafers",
+        variant_key: "shoe:UK:8.5",
+        variant_label: "8\u00bd",
+        price: "55",
+        currency: "GBP",
+        geography: "UK",
+        score: 0.78,
+        score_reasons: ["sample exact-size replay", "soft sole cue"],
+        metadata: { source_family: "retailer", sample_replay: true },
+        requested_url:
+          "https://www.marksandspencer.com/white-sole-suede-loafers/p/clp60774630",
+        final_url:
+          "https://www.marksandspencer.com/white-sole-suede-loafers/p/clp60774630",
+        rendered_text:
+          "Autograph White Sole Suede Loafers\n\u00a355\nSize\n8\u00bd\nAdd to bag\nFree standard delivery on orders over \u00a360",
+        selector_or_dom_hint: "button[data-testid='size-8.5']",
+        captured_at: "2026-06-24T12:00:00+00:00",
+        browser: "sample-replay",
+      },
+      {
+        domain: "fashion",
+        source_url: "https://www.marksandspencer.com/denim-shirt/p/clp60769832",
+        retailer_or_provider: "Marks and Spencer",
+        title: "Denim Shirt",
+        normalized_item_key: "marks-and-spencer:denim-shirt",
+        variant_key: "shirt:UK:2XL",
+        variant_label: "2XL",
+        price: "35",
+        currency: "GBP",
+        geography: "UK",
+        score: 0.74,
+        score_reasons: ["sample exact-size replay", "wardrobe staple cue"],
+        metadata: { source_family: "retailer", sample_replay: true },
+        requested_url: "https://www.marksandspencer.com/denim-shirt/p/clp60769832",
+        final_url: "https://www.marksandspencer.com/denim-shirt/p/clp60769832",
+        rendered_text: "Denim Shirt\n\u00a335\nSize\n2XL\nAdd to bag\nFree standard delivery",
+        selector_or_dom_hint: "button[data-testid='size-2xl']",
+        captured_at: "2026-06-24T12:05:00+00:00",
+        browser: "sample-replay",
+      },
+    ],
+  };
+}
+
+function resolveRelative(manifest, value) {
+  if (!value) return undefined;
+  if (path.isAbsolute(value)) return value;
+  return path.resolve(manifest.__manifestDir || process.cwd(), value);
+}
+
+function ensureArcwellBin() {
+  const envBin = process.env.ARCWELL_BIN;
+  const debugBin = path.join(root, "target", "debug", "arcwell");
+  const candidates = [envBin, debugBin, "arcwell"].filter(Boolean);
+  for (const candidate of candidates) {
+    const resolved = candidate === "arcwell" ? which("arcwell") : candidate;
+    if (resolved && fs.existsSync(resolved)) return resolved;
+  }
+  throw new Error("arcwell binary not found. Run: cargo build -p arcwell");
+}
+
+function which(binary) {
+  const result = spawnSync("bash", ["-lc", `command -v ${binary}`], {
+    encoding: "utf8",
+  });
+  return result.status === 0 ? result.stdout.trim() : "";
+}
+
+function runJson(bin, env, artifactDir, name, args) {
+  const result = spawnSync(bin, args, {
+    cwd: root,
+    env,
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  const artifactPath = path.join(artifactDir, `${name}.json`);
+  fs.writeFileSync(artifactPath, result.stdout || "");
+  if (result.stderr) fs.writeFileSync(path.join(artifactDir, `${name}.stderr.txt`), result.stderr);
+  if (result.status !== 0) {
+    throw new Error(`${name} failed (${result.status}): ${result.stderr || result.stdout}`);
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    throw new Error(`${name} did not return JSON: ${error.message}`);
+  }
+}
+
+function jsonArg(value) {
+  return JSON.stringify(value === undefined ? null : value);
+}
+
+function candidateSourceFamily(candidate) {
+  const metadataFamily = candidate.metadata?.source_family;
+  if (metadataFamily) return String(metadataFamily);
+  const provider = `${candidate.retailer_or_provider || ""} ${candidate.source_url || ""}`.toLowerCase();
+  if (provider.includes("vinted") || provider.includes("ebay")) return "marketplace";
+  return candidate.domain || "unknown";
+}
+
+function isMarketplace(candidate) {
+  return candidateSourceFamily(candidate) === "marketplace";
+}
+
+function domainOf(candidate) {
+  return String(candidate.domain || candidate.metadata?.domain || "unknown");
+}
+
+function writeRenderedText(manifest, proofRoot, index, capture) {
+  if (capture.rendered_text_file) return resolveRelative(manifest, capture.rendered_text_file);
+  if (capture.rendered_text) {
+    const file = path.join(proofRoot, "inputs", `capture-${index + 1}.txt`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, capture.rendered_text);
+    return file;
+  }
+  throw new Error(`capture ${index + 1} must include rendered_text or rendered_text_file`);
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const manifest = readManifest(args);
+  const stamp = new Date().toISOString().replace(/[-:.]/g, "").replace("T", "T").slice(0, 15);
+  const proofRoot = path.resolve(
+    args.proofDir ||
+      process.env.ARCWELL_COMMERCE_PROOF_DIR ||
+      path.join(root, ".arcwell-dev", "proofs", `commerce-research-production-proof-${stamp}-${process.pid}`)
+  );
+  const artifactDir = path.join(proofRoot, "artifacts");
+  const home = path.resolve(args.home || process.env.ARCWELL_COMMERCE_PROOF_HOME || path.join(proofRoot, "home"));
+  fs.mkdirSync(artifactDir, { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
+
+  const bin = ensureArcwellBin();
+  const env = { ...process.env, ARCWELL_HOME: home };
+  const captures = Array.isArray(manifest.captures) ? manifest.captures : [];
+  if (!captures.length) throw new Error("manifest must include at least one capture");
+
+  const profile = args.profile || manifest.profile || "commerce-proof";
+  const query = args.query || manifest.query || profile;
+  const targetQualified =
+    args.targetQualified || manifest.target_qualified_count || manifest.targetQualified || 20;
+  const minRecommended = args.minRecommended || manifest.min_recommended || targetQualified;
+  const productionData = Boolean(args.manifest) && !manifest.__sample;
+
+  const packet = {
+    feature: "qualified-commerce-research",
+    generated_at: new Date().toISOString(),
+    profile,
+    proof_level: productionData ? "Production Data Proof" : "Local Replay Proof",
+    user_visible_claim:
+      "Arcwell can recommend only exact-variant commerce candidates that have selector-backed rendered-page visible evidence, source-card linkage, redacted context, and a gated report.",
+    proof_root: proofRoot,
+    arcwell_home: home,
+    manifest_path: manifest.__manifestPath || null,
+    target_qualified_count: targetQualified,
+    min_recommended: minRecommended,
+    gates: {},
+    counts: {},
+    blockers: [],
+    artifacts: {},
+  };
+
+  try {
+    const run = runJson(bin, env, artifactDir, "research-run", ["research", "run", query]);
+    const runId = run.run?.id;
+    if (!runId) throw new Error("research run output had no run.run.id");
+    packet.run_id = runId;
+
+    runJson(bin, env, artifactDir, "commerce-config", [
+      "commerce",
+      "config-set",
+      runId,
+      "--domain-profile",
+      manifest.domain_profile || "uk-fashion-retail",
+      "--target-qualified-count",
+      String(targetQualified),
+      "--geography",
+      manifest.geography || "UK",
+      "--freshness-window",
+      manifest.freshness_window || (productionData ? "same-session" : "local-replay"),
+      ...arrayFlags("--private-source", manifest.private_context_sources || ["user_supplied"]),
+      ...arrayFlags("--public-source-family", manifest.public_source_families || ["retailer"]),
+      ...(manifest.allow_marketplaces ? ["--allow-marketplaces"] : []),
+      ...(manifest.allow_chrome_profile ? ["--allow-chrome-profile"] : []),
+      ...(manifest.max_provider_calls ? ["--max-provider-calls", String(manifest.max_provider_calls)] : []),
+      ...(manifest.max_browser_pages ? ["--max-browser-pages", String(manifest.max_browser_pages)] : []),
+      ...(manifest.max_cost_usd ? ["--max-cost-usd", String(manifest.max_cost_usd)] : []),
+      "--stop-rules-json",
+      jsonArg(manifest.stop_rules || {}),
+    ]);
+
+    for (const [index, fact] of (manifest.context_facts || []).entries()) {
+      runJson(bin, env, artifactDir, `context-fact-${index + 1}`, [
+        "commerce",
+        "context-fact-add",
+        runId,
+        "--fact-key",
+        fact.fact_key,
+        "--fact-kind",
+        fact.fact_kind || "preference",
+        "--redacted-value",
+        fact.redacted_value || "redacted",
+        "--source-family",
+        fact.source_family || "user_supplied",
+        ...(fact.source_ref ? ["--source-ref", fact.source_ref] : []),
+        "--confidence",
+        String(fact.confidence ?? 0.7),
+        ...(fact.user_confirmed ? ["--user-confirmed"] : []),
+        ...(fact.may_persist_to_memory ? ["--may-persist-to-memory"] : []),
+        "--metadata-json",
+        jsonArg(fact.metadata || {}),
+      ]);
+    }
+
+    const renderedChecks = [];
+    const recordedCandidates = [];
+    for (const [index, capture] of captures.entries()) {
+      const candidate = runJson(bin, env, artifactDir, `candidate-${index + 1}`, [
+        "commerce",
+        "candidate-add",
+        runId,
+        "--domain",
+        capture.domain || "fashion",
+        "--source-url",
+        capture.source_url || capture.requested_url,
+        "--retailer-or-provider",
+        capture.retailer_or_provider || "unknown",
+        "--title",
+        capture.title || `Candidate ${index + 1}`,
+        "--normalized-item-key",
+        capture.normalized_item_key || `candidate:${index + 1}`,
+        "--variant-key",
+        capture.variant_key,
+        ...(capture.price ? ["--price", String(capture.price)] : []),
+        ...(capture.currency ? ["--currency", String(capture.currency)] : []),
+        ...(capture.geography ? ["--geography", capture.geography] : []),
+        "--candidate-status",
+        capture.candidate_status || "maybe",
+        ...(capture.score !== undefined ? ["--score", String(capture.score)] : []),
+        "--score-reasons-json",
+        jsonArg(capture.score_reasons || []),
+        "--disqualification-reasons-json",
+        jsonArg(capture.disqualification_reasons || []),
+        "--metadata-json",
+        jsonArg(capture.metadata || {}),
+      ]);
+      recordedCandidates.push(candidate);
+      const renderedTextFile = writeRenderedText(manifest, proofRoot, index, capture);
+      const check = runJson(bin, env, artifactDir, `rendered-check-${index + 1}`, [
+        "commerce",
+        "rendered-page-check",
+        runId,
+        "--candidate-id",
+        candidate.id,
+        "--variant-key",
+        capture.variant_key,
+        "--variant-label",
+        capture.variant_label || capture.variant_key,
+        "--requested-url",
+        capture.requested_url || capture.source_url,
+        ...(capture.final_url ? ["--final-url", capture.final_url] : []),
+        ...(capture.title ? ["--title", capture.title] : []),
+        "--rendered-text-file",
+        renderedTextFile,
+        ...(capture.captured_at ? ["--captured-at", capture.captured_at] : []),
+        ...(capture.browser ? ["--browser", capture.browser] : []),
+        ...(capture.screenshot_path ? ["--screenshot-path", resolveRelative(manifest, capture.screenshot_path)] : []),
+        ...(capture.selector_or_dom_hint ? ["--selector-or-dom-hint", capture.selector_or_dom_hint] : []),
+        ...(capture.chrome_profile_required ? ["--chrome-profile-required"] : []),
+      ]);
+      renderedChecks.push(check);
+    }
+
+    const contextPacket = runJson(bin, env, artifactDir, "context-packet", [
+      "commerce",
+      "context-packet",
+      runId,
+    ]);
+    const report = runJson(bin, env, artifactDir, "commerce-report", ["commerce", "report", runId]);
+    const candidates = runJson(bin, env, artifactDir, "commerce-candidates", [
+      "commerce",
+      "candidates",
+      runId,
+    ]);
+    const proofs = runJson(bin, env, artifactDir, "commerce-proofs", [
+      "commerce",
+      "availability-proofs",
+      runId,
+    ]);
+    const attempts = runJson(bin, env, artifactDir, "commerce-attempts", [
+      "commerce",
+      "verification-attempts",
+      runId,
+    ]);
+    const judgments = runJson(bin, env, artifactDir, "commerce-judgments", [
+      "commerce",
+      "report-judgments",
+      runId,
+    ]);
+
+    const exactAvailable = proofs.filter((proof) => proof.availability_state === "available");
+    const sourceCards = renderedChecks.filter((check) => check.source_card?.id);
+    const marketplaceProofs = renderedChecks.filter((check) => {
+      const candidate = recordedCandidates.find((row) => row.id === check.candidate?.id) || check.candidate;
+      return candidate && isMarketplace(candidate) && check.availability_state === "available";
+    });
+    const chromeProfileProofs = attempts.filter(
+      (attempt) => attempt.chrome_profile_required && attempt.result === "available"
+    );
+    const domainProofs = new Set(
+      renderedChecks
+        .filter((check) => check.availability_state === "available")
+        .map((check) => domainOf(check.candidate))
+    );
+    const workerProofPassed = manifest.worker_proof?.status === "passed";
+
+    packet.counts = {
+      raw_capture_count: captures.length,
+      candidate_count: candidates.length,
+      availability_proof_count: proofs.length,
+      exact_available_count: exactAvailable.length,
+      source_card_count: sourceCards.length,
+      context_fact_count: contextPacket.fact_count || 0,
+      recommended_count: report.recommended_count || 0,
+      unavailable_count: report.unavailable_count || 0,
+      blocked_count: report.blocked_count || 0,
+      unknown_count: report.unknown_count || 0,
+      report_judgment_count: judgments.length,
+      marketplace_available_count: marketplaceProofs.length,
+      chrome_profile_available_count: chromeProfileProofs.length,
+    };
+
+    const requiredDomains = [...new Set(args.requireDomains.concat(manifest.required_domains || []))];
+    packet.gates = {
+      production_data: productionData,
+      target_qualified_met: packet.counts.candidate_count >= targetQualified,
+      min_recommended_met: packet.counts.recommended_count >= minRecommended,
+      all_recommendations_exact_available:
+        packet.counts.recommended_count > 0 &&
+        packet.counts.exact_available_count >= packet.counts.recommended_count,
+      source_card_linkage_complete:
+        packet.counts.source_card_count >= packet.counts.availability_proof_count,
+      context_packet_present: Boolean(contextPacket.artifact?.id),
+      report_accepted: report.judgment?.decision === "accept",
+      marketplace_required_met: !args.requireMarketplace || marketplaceProofs.length > 0,
+      chrome_profile_required_met: !args.requireChromeProfile || chromeProfileProofs.length > 0,
+      worker_required_met: !args.requireWorkerProof || workerProofPassed,
+      required_domains_met: requiredDomains.every((domain) => domainProofs.has(domain)),
+    };
+
+    if (args.requireProductionData && !packet.gates.production_data) {
+      packet.blockers.push("production-data proof required, but this run used local replay/sample evidence");
+    }
+    if (!packet.gates.target_qualified_met) {
+      packet.blockers.push(
+        `candidate count ${packet.counts.candidate_count} below target ${targetQualified}`
+      );
+    }
+    if (!packet.gates.min_recommended_met) {
+      packet.blockers.push(
+        `recommended count ${packet.counts.recommended_count} below required ${minRecommended}`
+      );
+    }
+    if (!packet.gates.all_recommendations_exact_available) {
+      packet.blockers.push("main recommendations are missing exact available proof");
+    }
+    if (!packet.gates.source_card_linkage_complete) {
+      packet.blockers.push("not every availability proof has a rendered-page source card");
+    }
+    if (!packet.gates.context_packet_present) {
+      packet.blockers.push("context packet artifact was not created");
+    }
+    if (!packet.gates.report_accepted) {
+      packet.blockers.push(`compiled report decision was ${report.judgment?.decision || "missing"}`);
+    }
+    if (!packet.gates.marketplace_required_met) {
+      packet.blockers.push("marketplace proof required but no available marketplace candidate was proven");
+    }
+    if (!packet.gates.chrome_profile_required_met) {
+      packet.blockers.push("Chrome-profile proof required but no available Chrome-profile candidate was proven");
+    }
+    if (!packet.gates.worker_required_met) {
+      packet.blockers.push("worker proof required but manifest.worker_proof.status was not passed");
+    }
+    for (const domain of requiredDomains) {
+      if (!domainProofs.has(domain)) {
+        packet.blockers.push(`required domain ${domain} has no available exact-variant proof`);
+      }
+    }
+
+    packet.status = packet.blockers.length ? "blocked" : "pass";
+    packet.artifacts = {
+      research_run: path.join(artifactDir, "research-run.json"),
+      context_packet: path.join(artifactDir, "context-packet.json"),
+      report: path.join(artifactDir, "commerce-report.json"),
+      proof_packet: path.join(artifactDir, "proof-packet.json"),
+    };
+    fs.writeFileSync(packet.artifacts.proof_packet, JSON.stringify(packet, null, 2));
+    console.log(JSON.stringify(packet, null, 2));
+    if (packet.blockers.length) process.exit(2);
+  } catch (error) {
+    packet.status = "error";
+    packet.blockers.push(error.message);
+    packet.artifacts.proof_packet = path.join(artifactDir, "proof-packet.json");
+    fs.writeFileSync(packet.artifacts.proof_packet, JSON.stringify(packet, null, 2));
+    console.error(JSON.stringify(packet, null, 2));
+    if (!args.keepHome && !args.home) {
+      // Keep the proof root and artifacts, but remove the generated database home.
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+    process.exit(2);
+  }
+}
+
+function arrayFlags(flag, values) {
+  const out = [];
+  for (const value of values || []) out.push(flag, String(value));
+  return out;
+}
+
+try {
+  main();
+} catch (error) {
+  console.error(`BLOCKED: ${error.message}`);
+  process.exit(2);
+}

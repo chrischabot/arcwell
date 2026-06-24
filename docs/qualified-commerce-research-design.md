@@ -29,11 +29,34 @@ fashion because it stresses the hardest parts: private style context, exact
 size variants, subjective quality, JS-heavy retailer pages, marketplaces,
 comfort claims, returns, and broad option sets.
 
-Current status: `Scaffold`.
+Current status: `Partial/Production Data Proof (bounded)`.
 
-Only the design/TODO track exists. Arcwell must not claim qualified commerce
-research works until the implementation, tests, live proofs, and status
-surfaces below agree.
+The durable local ledger exists for run config, exact-variant candidates,
+selector-backed availability proofs, redacted context facts, verification attempts, report
+judgments, host-supplied rendered-page checks, commerce source-card linkage,
+compiled context packets, structured price/currency and delivery-caveat
+extraction, gated commerce report artifacts, and a preserved proof harness.
+
+Bounded production-data proof: on 2026-06-24, a disposable `ARCWELL_HOME`
+recorded two Chrome DevTools rendered captures from live M&S UK pages:
+Autograph White Sole Suede Loafers in visible M&S size `8½` and M&S Denim
+Shirt in visible size `2XL`. Both were classified as selector-backed
+exact-variant available, linked to source cards, extracted prices (`£55` and
+`£35`), compiled a redacted
+context packet, and produced an accepted report. Proof artifacts are under
+`/tmp/arcwell-commerce-live-proof-20260624/*-final.json`.
+
+This does not prove broad autonomous market discovery, 20+ option shopping,
+marketplaces, rentals, flights, logged-in Chrome-profile paths, scheduled
+workers, recovery/ops, or cross-retailer quality. Arcwell must not claim
+qualified commerce research works end to end until those surfaces have their
+own proof packets and status agreement.
+
+Proof harness status: `scripts/commerce-research-production-proof --sample
+--target-qualified 2 --min-recommended 2` locally proves the preserved harness,
+report gate, source-card linkage, context packet, and fail-closed proof packet
+shape. It is not production-data proof unless run with a real browser-capture
+manifest.
 
 ## User-Visible Claim Ledger
 
@@ -217,7 +240,7 @@ No design, data model, or agent surface exists.
 Design/TODO/skill text exists. It may describe the intended workflow, but it
 cannot support a user-visible capability claim.
 
-Current state: `Scaffold`.
+Current state: `Partial/Local Proof`.
 
 ### Partial
 
@@ -823,65 +846,62 @@ Find available flats to rent that match my commute and accessibility needs.
 Find flights for this trip, but verify actual available fare options.
 ```
 
-## CLI, MCP, And Skill Surface Plan
+## CLI, MCP, And Skill Surface
 
-Implement surfaces in this order. Do not expose a confident skill before the
-underlying read/write surfaces can be inspected.
+Do not expose a confident skill before the underlying read/write surfaces can be
+inspected.
 
 ### CLI
 
-Initial local commands:
+Current local ledger commands are intentionally explicit:
 
 ```sh
-arcwell commerce run "soft-soled loafers in the UK" \
-  --profile uk-fashion-retail \
-  --target-qualified 20 \
-  --geography UK \
-  --allow-marketplaces \
-  --use-rendered-browser
-```
-
-```sh
-arcwell commerce status <run-id>
-arcwell commerce candidates <run-id>
-arcwell commerce proofs <run-id>
+arcwell commerce capabilities
+arcwell commerce config-set <run-id> --domain-profile uk-fashion-retail --target-qualified 20
+arcwell commerce candidate-add <run-id> --url <url> --title <title> --variant-key <key>
+arcwell commerce rendered-page-check <run-id> <candidate-id> --variant-key <key> --variant-label "UK 8.5"
+arcwell commerce context-fact-add <run-id> --fact-key shirt_size --redacted-value XXL
+arcwell commerce context-packet <run-id>
 arcwell commerce report <run-id>
-arcwell commerce audit <run-id>
-arcwell commerce stop <run-id>
 ```
 
-The first implementation may route through `arcwell research artifact` plumbing,
-but the user-facing command should not claim availability verification until the
-candidate/proof records can be read back.
+Higher-level wrappers such as `arcwell commerce run/status/proofs/audit/stop`
+remain future work. The current surface should claim only durable ledger writes,
+host-supplied rendered-page checks, source-card linkage, context packets, and
+gated reports.
 
 ### MCP
 
-Initial MCP tools:
+Current MCP tools mirror the ledger surface:
 
-- `commerce_research_run`
-- `commerce_research_status`
-- `commerce_research_candidates`
-- `commerce_research_proofs`
-- `commerce_research_report`
-- `commerce_research_audit`
-- `commerce_research_stop`
 - `commerce_research_capabilities`
+- `commerce_run_config_set`
+- `commerce_candidate_add`
+- `commerce_availability_proof_add`
+- `commerce_rendered_page_check`
+- `commerce_context_fact_add`
+- `commerce_context_packet_compile`
+- `commerce_research_report`
+
+Higher-level tools such as `commerce_research_run/status/proofs/audit/stop`
+remain future wrappers over the same ledger.
 
 Capabilities should report proof level per domain profile:
 
 ```json
 {
   "qualified_commerce": {
-    "status": "scaffold",
+    "status": "partial_bounded_production_data_proof",
     "profiles": {
-      "uk-fashion-retail": "scaffold",
+      "uk-fashion-retail": "bounded_two_item_mands_proof",
       "rental": "missing",
       "travel": "missing"
     },
-    "browser_rendered_extraction": false,
-    "exact_variant_availability_proof": false,
-    "private_context_packet": false,
-    "production_data_proof": false
+    "browser_rendered_extraction": "host_supplied_local_check_proven",
+    "exact_variant_availability_proof": "locally_proven",
+    "private_context_packet": "locally_proven_redacted_artifacts",
+    "bounded_live_uk_fashion_packet": "production_data_proven_for_two_mands_pages",
+    "broad_production_data_proof": false
   }
 }
 ```
@@ -1053,7 +1073,8 @@ Milestones:
    Add the general deep-research capability for browser-rendered JavaScript
    extraction, with proof artifacts and blocked-state reporting. The extractor
    must preserve source text as untrusted data and must not promote a static
-   page title or generic "in stock" label into exact-variant availability.
+   page title, generic "in stock" label, or selector-less flattened text into
+   recommendation-grade exact-variant availability.
 
 3. Commerce data model.
 
@@ -1080,12 +1101,18 @@ Milestones:
 
    Build static and rendered-page fixtures for the failures above.
 
-7. Live proof.
+7. Preserved proof harness.
+
+   Drive the public CLI through `scripts/commerce-research-production-proof`,
+   producing an inspectable proof packet and failing non-zero when release
+   gates are not met.
+
+8. Live proof.
 
    Run a preserved proof on UK loafers in UK 8.5 and a denim shirt search,
    with 20+ checked candidates where the market supports it.
 
-8. Generalize domains.
+9. Generalize domains.
 
    Add rental and travel domain profiles only after the fashion proof exposes
    the stable abstraction.
@@ -1119,36 +1146,76 @@ Required fields:
 - promotion judgment: promote, hold, or block;
 - remaining risks and exact next action.
 
-Possible proof script shape:
+Implemented local replay harness:
 
 ```sh
 scripts/commerce-research-production-proof \
-  --profile uk-fashion-loafers \
-  --query "soft-soled loafers in the UK" \
-  --variant "shoe:UK:8.5" \
-  --target-qualified 20 \
-  --use-rendered-browser \
-  --preserve-home
+  --sample \
+  --target-qualified 2 \
+  --min-recommended 2
 ```
+
+Production-data fashion release gate:
 
 ```sh
 scripts/commerce-research-production-proof \
-  --profile uk-fashion-denim-shirt \
-  --query "denim shirt that fits my wardrobe and quality preferences" \
+  --manifest .arcwell-dev/proofs/commerce-uk-fashion-20/manifest.json \
+  --profile uk-fashion-20 \
   --target-qualified 20 \
-  --use-rendered-browser \
-  --preserve-home
+  --min-recommended 20 \
+  --require-production-data
 ```
 
-The proof script should exit non-zero when blockers remain. A preserved proof
-with a blocking result is still valuable evidence, but it does not promote the
-feature.
+Marketplace gate:
+
+```sh
+scripts/commerce-research-production-proof \
+  --manifest .arcwell-dev/proofs/commerce-marketplaces/manifest.json \
+  --require-production-data \
+  --require-marketplace
+```
+
+Logged-in Chrome-profile gate:
+
+```sh
+scripts/commerce-research-production-proof \
+  --manifest .arcwell-dev/proofs/commerce-chrome-profile/manifest.json \
+  --require-production-data \
+  --require-chrome-profile
+```
+
+Rental and flight gates:
+
+```sh
+scripts/commerce-research-production-proof \
+  --manifest .arcwell-dev/proofs/commerce-rental/manifest.json \
+  --require-production-data \
+  --require-domain rental
+
+scripts/commerce-research-production-proof \
+  --manifest .arcwell-dev/proofs/commerce-flight/manifest.json \
+  --require-production-data \
+  --require-domain travel
+```
+
+Operational worker gate:
+
+```sh
+scripts/commerce-research-production-proof \
+  --manifest .arcwell-dev/proofs/commerce-worker/manifest.json \
+  --require-production-data \
+  --require-worker-proof
+```
+
+The proof script exits non-zero when blockers remain. A preserved proof with a
+blocking result is still valuable evidence, but it does not promote the feature.
 
 ## Report Acceptance Gate
 
 A final report is acceptable only when all of these are true:
 
-- every main recommendation has exact-variant availability proof;
+- every main recommendation has exact-variant availability proof with visible
+  evidence and artifact provenance;
 - unknown, blocked, wrong-size, stale, and unverified candidates are outside
   the main recommendation list;
 - each candidate has a checked timestamp and proof method;
@@ -1178,6 +1245,26 @@ requires:
   retrying, and completed runs;
 - idempotent reruns that do not duplicate candidates or overwrite proof history;
 - user-stop behavior before the next expensive or privacy-sensitive action.
+
+## Release Road
+
+Qualified commerce can move toward production in independent lanes, but public
+claims must name the lanes that have passed:
+
+1. `Partial/Production Data Proof (bounded)`: current two-item live browser
+   packet plus local replay proof harness.
+2. `UK fashion broad production proof`: at least 20 exact-variant main
+   recommendations from a real manifest, or an explicit market-scarcity blocker
+   with broad checked evidence.
+3. `Marketplace proof`: eBay/Vinted-style listing manifests prove sold/ended
+   rejection, condition/seller capture, and freshness caveats.
+4. `Chrome-profile proof`: supervised logged-in browser captures prove
+   `chrome_profile` verification without leaking private page data into public
+   artifacts.
+5. `Rental/travel proof`: domain profiles pass exact availability semantics for
+   rentals and flights before those domains are advertised.
+6. `Operational`: queued discovery/check/report work passes worker, retry,
+   dead-letter, idempotency, stop, cost, and ops visibility gates.
 
 ## Open Design Questions
 
