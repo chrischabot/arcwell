@@ -1,6 +1,6 @@
 # Arcwell Remaining Work
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 This file is intentionally only unfinished work. Completed historical checklist
 items were removed. Existing unchecked items from the prior `TODO.md` have been
@@ -393,8 +393,15 @@ PR, implementation note, or final report:
       delivery retry path: worker-driven successful retries now promote the
       original `radar_deliveries` row and radar run, and exhausted local retry
       chains become `dead_lettered` without continued sends.
-- [ ] Add model-backed synthesis, live production delivery proof, scheduled
-      delivery, production-data semantic dedupe breadth across more profiles,
+- [x] Add local scheduled Telegram delivery through the resident worker:
+      scheduled profiles write durable ticks, enqueue
+      `radar_scheduled_delivery`, run/summarize/audit, deliver through
+      configured authorized Telegram, record tick/run/summary/delivery lineage,
+      suppress duplicate ticks inside the interval, reject raw secrets in
+      profile policy, and block quiet-hours config until real deferral exists.
+- [ ] Add model-backed synthesis, live production delivery proof, production
+      scheduled delivery, cross-channel scheduled delivery, quiet-hours
+      deferral, production-data semantic dedupe breadth across more profiles,
       production-data balance review, seven-day source-quality trend/decay
       proof, broader ops controls, and status promotion only after real-data
       gates pass.

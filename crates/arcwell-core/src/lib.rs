@@ -967,6 +967,42 @@ pub struct WatchSourcePollEnqueueReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarScheduleEnqueueReport {
+    pub inspected: usize,
+    pub enqueued: usize,
+    pub skipped: usize,
+    pub jobs: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarScheduleTick {
+    pub id: String,
+    pub profile_id: String,
+    pub tick_key: String,
+    pub due_at: String,
+    pub status: String,
+    pub job_id: Option<String>,
+    pub run_id: Option<String>,
+    pub summary_id: Option<String>,
+    pub delivery_id: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+struct ScheduledRadarDeliveryPolicy {
+    interval_hours: i64,
+    channel: String,
+    recipient_ref: String,
+    language: String,
+    format: String,
+    fetch_live: bool,
+    quiet_hours_present: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WikiJob {
     pub id: String,
     pub kind: String,
@@ -992,6 +1028,7 @@ pub struct WorkerRunReport {
     pub dead_lettered: usize,
     pub jobs: Vec<WikiJob>,
     pub watch_poll: Option<WatchSourcePollEnqueueReport>,
+    pub radar_schedule: Option<RadarScheduleEnqueueReport>,
     pub telegram_retry: Option<TelegramRetryReport>,
     pub radar_delivery_reconcile: Option<RadarDeliveryReconcileReport>,
     pub warnings: Vec<String>,
@@ -12463,6 +12500,240 @@ impl Store {
         )
     }
 
+    pub fn enqueue_due_radar_schedule_jobs(
+        &self,
+        max_profiles: usize,
+    ) -> Result<RadarScheduleEnqueueReport> {
+        let mut report = RadarScheduleEnqueueReport {
+            inspected: 0,
+            enqueued: 0,
+            skipped: 0,
+            jobs: Vec::new(),
+            errors: Vec::new(),
+        };
+        for profile in self
+            .list_radar_profiles()?
+            .into_iter()
+            .take(max_profiles.clamp(1, 100))
+        {
+            report.inspected += 1;
+            let policy = match scheduled_radar_delivery_policy(&profile) {
+                Ok(Some(policy)) => policy,
+                Ok(None) => {
+                    report.skipped += 1;
+                    continue;
+                }
+                Err(error) => {
+                    report.skipped += 1;
+                    report.errors.push(format!("{}: {error}", profile.name));
+                    continue;
+                }
+            };
+            if self.radar_schedule_has_active_job(&profile.id)? {
+                report.skipped += 1;
+                continue;
+            }
+            if let Some(latest_due_at) = self.latest_radar_schedule_due_at(&profile.id)?
+                && !radar_schedule_interval_elapsed(&latest_due_at, policy.interval_hours)
+            {
+                report.skipped += 1;
+                continue;
+            }
+            let due_at = radar_schedule_due_slot(policy.interval_hours);
+            let tick_key = radar_schedule_tick_key(&profile.id, &due_at, &policy);
+            if self.get_radar_schedule_tick_by_key(&tick_key)?.is_some() {
+                report.skipped += 1;
+                continue;
+            }
+            match self.create_radar_schedule_tick(&profile.id, &tick_key, &due_at) {
+                Ok(tick) => match self
+                    .enqueue_wiki_job("radar_scheduled_delivery", json!({ "tick_id": tick.id }))
+                {
+                    Ok(job) => {
+                        self.attach_radar_schedule_job(&tick.id, &job.id)?;
+                        report.enqueued += 1;
+                        report.jobs.push(job.id);
+                    }
+                    Err(error) => {
+                        self.update_radar_schedule_tick(
+                            &tick.id,
+                            "blocked",
+                            None,
+                            None,
+                            None,
+                            Some(&error.to_string()),
+                        )?;
+                        report.skipped += 1;
+                        report.errors.push(format!("{}: {error}", profile.name));
+                    }
+                },
+                Err(error) => {
+                    report.skipped += 1;
+                    report.errors.push(format!("{}: {error}", profile.name));
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    fn radar_schedule_has_active_job(&self, profile_id: &str) -> Result<bool> {
+        validate_id(profile_id)?;
+        let count: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM radar_schedule_ticks t
+            JOIN wiki_jobs j ON j.id = t.job_id
+            WHERE t.profile_id = ?1
+              AND t.status IN ('pending', 'running')
+              AND j.status IN ('pending', 'running', 'failed')
+            "#,
+            params![profile_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    fn latest_radar_schedule_due_at(&self, profile_id: &str) -> Result<Option<String>> {
+        validate_id(profile_id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT due_at
+                FROM radar_schedule_ticks
+                WHERE profile_id = ?1
+                ORDER BY due_at DESC, created_at DESC
+                LIMIT 1
+                "#,
+                params![profile_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn get_radar_schedule_tick(&self, id: &str) -> Result<Option<RadarScheduleTick>> {
+        validate_id(id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, profile_id, tick_key, due_at, status, job_id, run_id,
+                       summary_id, delivery_id, error, created_at, updated_at
+                FROM radar_schedule_ticks
+                WHERE id = ?1
+                "#,
+                params![id],
+                radar_schedule_tick_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn get_radar_schedule_tick_by_key(&self, tick_key: &str) -> Result<Option<RadarScheduleTick>> {
+        validate_notes(tick_key)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, profile_id, tick_key, due_at, status, job_id, run_id,
+                       summary_id, delivery_id, error, created_at, updated_at
+                FROM radar_schedule_ticks
+                WHERE tick_key = ?1
+                "#,
+                params![tick_key],
+                radar_schedule_tick_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn create_radar_schedule_tick(
+        &self,
+        profile_id: &str,
+        tick_key: &str,
+        due_at: &str,
+    ) -> Result<RadarScheduleTick> {
+        validate_id(profile_id)?;
+        validate_notes(tick_key)?;
+        validate_timestamp(due_at)?;
+        let id = Uuid::new_v4().to_string();
+        let timestamp = now();
+        self.conn.execute(
+            r#"
+            INSERT INTO radar_schedule_ticks
+              (id, profile_id, tick_key, due_at, status, job_id, run_id,
+               summary_id, delivery_id, error, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, 'pending', NULL, NULL, NULL, NULL, NULL, ?5, ?5)
+            "#,
+            params![id, profile_id, tick_key, due_at, timestamp],
+        )?;
+        self.get_radar_schedule_tick(&id)?
+            .with_context(|| format!("radar schedule tick not found after insert: {id}"))
+    }
+
+    fn attach_radar_schedule_job(&self, tick_id: &str, job_id: &str) -> Result<RadarScheduleTick> {
+        validate_id(tick_id)?;
+        validate_id(job_id)?;
+        let updated_at = now();
+        self.conn.execute(
+            r#"
+            UPDATE radar_schedule_ticks
+            SET job_id = ?2,
+                status = 'pending',
+                updated_at = ?3
+            WHERE id = ?1
+            "#,
+            params![tick_id, job_id, updated_at],
+        )?;
+        self.get_radar_schedule_tick(tick_id)?
+            .with_context(|| format!("radar schedule tick not found after job attach: {tick_id}"))
+    }
+
+    fn update_radar_schedule_tick(
+        &self,
+        tick_id: &str,
+        status: &str,
+        run_id: Option<&str>,
+        summary_id: Option<&str>,
+        delivery_id: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<RadarScheduleTick> {
+        validate_id(tick_id)?;
+        validate_radar_schedule_status(status)?;
+        if let Some(run_id) = run_id {
+            validate_id(run_id)?;
+        }
+        if let Some(summary_id) = summary_id {
+            validate_notes(summary_id)?;
+        }
+        if let Some(delivery_id) = delivery_id {
+            validate_id(delivery_id)?;
+        }
+        let error = error.map(sanitize_radar_delivery_error).transpose()?;
+        let updated_at = now();
+        self.conn.execute(
+            r#"
+            UPDATE radar_schedule_ticks
+            SET status = ?2,
+                run_id = COALESCE(?3, run_id),
+                summary_id = COALESCE(?4, summary_id),
+                delivery_id = COALESCE(?5, delivery_id),
+                error = ?6,
+                updated_at = ?7
+            WHERE id = ?1
+            "#,
+            params![
+                tick_id,
+                status,
+                run_id,
+                summary_id,
+                delivery_id,
+                error.as_deref(),
+                updated_at
+            ],
+        )?;
+        self.get_radar_schedule_tick(tick_id)?
+            .with_context(|| format!("radar schedule tick not found after update: {tick_id}"))
+    }
+
     pub fn enqueue_research_convergence_job(
         &self,
         input: ResearchConvergenceStepInput,
@@ -12584,6 +12855,12 @@ impl Store {
         } else {
             None
         };
+        let radar_schedule = self.enqueue_due_radar_schedule_jobs(max_jobs)?;
+        let radar_schedule = if radar_schedule.inspected > 0 {
+            Some(radar_schedule)
+        } else {
+            None
+        };
         let mut jobs = Vec::new();
         for _ in 0..max_jobs {
             let Some(job) = self.claim_next_pending_job()? else {
@@ -12612,6 +12889,7 @@ impl Store {
             dead_lettered,
             jobs,
             watch_poll,
+            radar_schedule,
             telegram_retry,
             radar_delivery_reconcile,
             warnings,
@@ -19837,6 +20115,18 @@ impl Store {
         rows(stmt.query_map([], radar_delivery_from_row)?)
     }
 
+    pub fn list_radar_schedule_ticks(&self) -> Result<Vec<RadarScheduleTick>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, profile_id, tick_key, due_at, status, job_id, run_id,
+                   summary_id, delivery_id, error, created_at, updated_at
+            FROM radar_schedule_ticks
+            ORDER BY updated_at DESC
+            "#,
+        )?;
+        rows(stmt.query_map([], radar_schedule_tick_from_row)?)
+    }
+
     pub fn reconcile_radar_delivery_attempts(
         &self,
         max_attempts_per_message: i64,
@@ -22898,6 +23188,9 @@ impl Store {
                 "x_recent_search" => self.execute_x_recent_search(&job.input_json, Some(&job.id)),
                 "x_monitor_watch_source" => self.execute_x_monitor_watch_source(&job.input_json),
                 "radar_run" => self.execute_radar_run(&job.input_json),
+                "radar_scheduled_delivery" => {
+                    self.execute_radar_scheduled_delivery(&job.input_json)
+                }
                 "research_convergence_run" => {
                     self.execute_research_convergence_run(&job.input_json)
                 }
@@ -23071,6 +23364,149 @@ impl Store {
             "unsupported_selectors": report.unsupported_selectors,
             "warnings": report.warnings,
             "fetch_live": fetch_live
+        }))
+    }
+
+    fn execute_radar_scheduled_delivery(&self, input: &Value) -> Result<Value> {
+        let tick_id = input
+            .get("tick_id")
+            .and_then(Value::as_str)
+            .context("radar_scheduled_delivery missing tick_id")?;
+        let tick = self
+            .get_radar_schedule_tick(tick_id)?
+            .with_context(|| format!("radar schedule tick not found: {tick_id}"))?;
+        let profile = self
+            .read_radar_profile(&tick.profile_id)?
+            .with_context(|| format!("radar schedule profile not found: {}", tick.profile_id))?;
+        let policy = scheduled_radar_delivery_policy(&profile)?
+            .context("radar profile is not configured for scheduled delivery")?;
+        if policy.quiet_hours_present {
+            let error = "quiet-hours deferral is not implemented for scheduled radar delivery";
+            let updated = self.update_radar_schedule_tick(
+                &tick.id,
+                "blocked",
+                tick.run_id.as_deref(),
+                tick.summary_id.as_deref(),
+                tick.delivery_id.as_deref(),
+                Some(error),
+            )?;
+            return Ok(json!({
+                "tick": updated,
+                "status": "blocked",
+                "error": error,
+                "proof_level": "Local Proof boundary: quiet-hours policy is rejected, not silently ignored"
+            }));
+        }
+        self.update_radar_schedule_tick(
+            &tick.id,
+            "running",
+            tick.run_id.as_deref(),
+            tick.summary_id.as_deref(),
+            tick.delivery_id.as_deref(),
+            None,
+        )?;
+        let run = if let Some(run_id) = tick.run_id.as_deref() {
+            self.read_radar_run(run_id)?
+                .with_context(|| format!("radar schedule run not found: {run_id}"))?
+        } else {
+            let report = self.run_radar_profile_with_options(
+                &profile.id,
+                Some(profile.window_hours),
+                policy.fetch_live,
+            )?;
+            self.update_radar_schedule_tick(
+                &tick.id,
+                "running",
+                Some(&report.run.id),
+                None,
+                None,
+                None,
+            )?;
+            report.run
+        };
+        if run.status != "scored" {
+            let error = format!("scheduled radar run did not score cleanly: {}", run.status);
+            let updated = self.update_radar_schedule_tick(
+                &tick.id,
+                "blocked",
+                Some(&run.id),
+                tick.summary_id.as_deref(),
+                tick.delivery_id.as_deref(),
+                Some(&error),
+            )?;
+            return Ok(json!({ "tick": updated, "status": "blocked", "error": error }));
+        }
+        let audit = self.audit_radar_run(&run.id)?;
+        if !audit.ok {
+            let error = format!(
+                "scheduled radar delivery requires audit_ok run; finding_count={}",
+                audit.findings.len()
+            );
+            let updated = self.update_radar_schedule_tick(
+                &tick.id,
+                "blocked",
+                Some(&run.id),
+                tick.summary_id.as_deref(),
+                tick.delivery_id.as_deref(),
+                Some(&error),
+            )?;
+            return Ok(
+                json!({ "tick": updated, "status": "blocked", "audit": audit, "error": error }),
+            );
+        }
+        let summary = if let Some(existing) =
+            self.read_radar_summary(&run.id, &policy.language, &policy.format)?
+        {
+            existing
+        } else {
+            self.summarize_radar_run(&run.id, &policy.language, &policy.format)?
+        };
+        self.update_radar_schedule_tick(
+            &tick.id,
+            "running",
+            Some(&run.id),
+            Some(&summary.id),
+            tick.delivery_id.as_deref(),
+            None,
+        )?;
+        let bot_token = self
+            .configured_telegram_bot_token()?
+            .context("TELEGRAM_BOT_TOKEN is required for scheduled radar Telegram delivery")?;
+        let api_base = self.configured_telegram_api_base()?;
+        let delivery = self.deliver_radar_summary(RadarDeliveryInput {
+            run_id: run.id.clone(),
+            language: policy.language.clone(),
+            format: policy.format.clone(),
+            channel: policy.channel.clone(),
+            recipient_ref: policy.recipient_ref.clone(),
+            idempotency_key: Some(format!("radar-schedule-{}", tick.tick_key)),
+            telegram_bot_token: Some(bot_token),
+            email_account_id: None,
+            email_api_token: None,
+            email_from: None,
+            api_base,
+        })?;
+        let tick_status = match delivery.delivery.status.as_str() {
+            "sent" => "sent",
+            "blocked" => "blocked",
+            "failed" => "failed",
+            other => other,
+        };
+        let updated = self.update_radar_schedule_tick(
+            &tick.id,
+            tick_status,
+            Some(&run.id),
+            Some(&summary.id),
+            Some(&delivery.delivery.id),
+            delivery.delivery.error.as_deref(),
+        )?;
+        Ok(json!({
+            "tick": updated,
+            "run_id": run.id,
+            "summary_id": summary.id,
+            "delivery": delivery,
+            "status": tick_status,
+            "proof_level": "Local Proof: scheduled Telegram radar delivery through resident worker"
         }))
     }
 
@@ -26191,6 +26627,15 @@ fn wiki_job_policy_context(
                 .map(|value| excerpt(value, 240)),
             None,
         ),
+        "radar_scheduled_delivery" => (
+            "arcwell-radar",
+            None,
+            input
+                .get("tick_id")
+                .and_then(Value::as_str)
+                .map(|value| excerpt(value, 120)),
+            None,
+        ),
         "radar_run" => (
             "arcwell-radar",
             None,
@@ -27323,6 +27768,7 @@ fn validate_job_kind(kind: &str) -> Result<()> {
         | "x_recent_search"
         | "x_monitor_watch_source"
         | "radar_run"
+        | "radar_scheduled_delivery"
         | "research_convergence_run" => Ok(()),
         other => bail!("unsupported job kind: {other}"),
     }
@@ -29021,6 +29467,32 @@ fn ensure_radar_schema_on(conn: &Connection) -> Result<()> {
           FOREIGN KEY(summary_id) REFERENCES radar_summaries(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS radar_schedule_ticks (
+          id TEXT PRIMARY KEY,
+          profile_id TEXT NOT NULL,
+          tick_key TEXT NOT NULL UNIQUE,
+          due_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          job_id TEXT,
+          run_id TEXT,
+          summary_id TEXT,
+          delivery_id TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(profile_id) REFERENCES radar_profiles(id) ON DELETE CASCADE,
+          FOREIGN KEY(job_id) REFERENCES wiki_jobs(id) ON DELETE SET NULL,
+          FOREIGN KEY(run_id) REFERENCES radar_runs(id) ON DELETE SET NULL,
+          FOREIGN KEY(summary_id) REFERENCES radar_summaries(id) ON DELETE SET NULL,
+          FOREIGN KEY(delivery_id) REFERENCES radar_deliveries(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_radar_schedule_ticks_profile_due
+        ON radar_schedule_ticks(profile_id, due_at);
+
+        CREATE INDEX IF NOT EXISTS idx_radar_schedule_ticks_status
+        ON radar_schedule_ticks(status);
+
         CREATE TABLE IF NOT EXISTS radar_source_quality (
           id TEXT PRIMARY KEY,
           run_id TEXT NOT NULL DEFAULT '',
@@ -30351,6 +30823,23 @@ fn radar_delivery_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RadarDel
     })
 }
 
+fn radar_schedule_tick_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RadarScheduleTick> {
+    Ok(RadarScheduleTick {
+        id: row.get(0)?,
+        profile_id: row.get(1)?,
+        tick_key: row.get(2)?,
+        due_at: row.get(3)?,
+        status: row.get(4)?,
+        job_id: row.get(5)?,
+        run_id: row.get(6)?,
+        summary_id: row.get(7)?,
+        delivery_id: row.get(8)?,
+        error: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+
 fn normalize_radar_profile_input(mut input: RadarProfileInput) -> Result<RadarProfileInput> {
     validate_key(&input.name)?;
     input.name = input.name.trim().to_string();
@@ -30850,10 +31339,131 @@ fn normalize_radar_delivery_idempotency_key(
     ))
 }
 
+fn scheduled_radar_delivery_policy(
+    profile: &RadarProfile,
+) -> Result<Option<ScheduledRadarDeliveryPolicy>> {
+    let policy = profile
+        .delivery_policy
+        .as_object()
+        .context("delivery_policy must be an object")?;
+    let delivery = policy
+        .get("delivery")
+        .and_then(Value::as_str)
+        .unwrap_or("manual_only");
+    let enabled = policy
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(delivery == "scheduled");
+    if !enabled || delivery == "manual_only" {
+        return Ok(None);
+    }
+    if delivery != "scheduled" {
+        bail!("scheduled radar delivery requires delivery='scheduled'");
+    }
+    let channel = normalize_radar_delivery_channel(
+        policy
+            .get("channel")
+            .and_then(Value::as_str)
+            .unwrap_or("telegram"),
+    )?;
+    if channel != "telegram" {
+        bail!("scheduled radar delivery currently supports telegram only");
+    }
+    let recipient_raw = policy
+        .get("recipient_ref")
+        .or_else(|| policy.get("recipient"))
+        .and_then(Value::as_str)
+        .context("scheduled radar delivery requires recipient_ref")?;
+    let recipient_ref = normalize_radar_delivery_recipient(&channel, recipient_raw)?;
+    let interval_hours = policy
+        .get("interval_hours")
+        .or_else(|| policy.get("cadence_hours"))
+        .and_then(Value::as_i64)
+        .unwrap_or(24);
+    if !(1..=24 * 365).contains(&interval_hours) {
+        bail!("scheduled radar delivery interval_hours must be between 1 and 8760");
+    }
+    let language = normalize_radar_summary_language(
+        policy
+            .get("language")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| {
+                profile
+                    .languages
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or("en")
+            }),
+    )?;
+    let format = normalize_radar_summary_format(
+        policy
+            .get("format")
+            .and_then(Value::as_str)
+            .unwrap_or("markdown"),
+    )?;
+    if policy.get("bot_token").is_some()
+        || policy.get("telegram_bot_token").is_some()
+        || policy.get("api_token").is_some()
+    {
+        bail!("scheduled radar delivery policy must not contain raw secrets");
+    }
+    Ok(Some(ScheduledRadarDeliveryPolicy {
+        interval_hours,
+        channel,
+        recipient_ref,
+        language,
+        format,
+        fetch_live: policy
+            .get("fetch_live")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        quiet_hours_present: policy.get("quiet_hours").is_some(),
+    }))
+}
+
+fn radar_schedule_due_slot(interval_hours: i64) -> String {
+    let now = Utc::now();
+    let timestamp = now.timestamp();
+    let interval_seconds = interval_hours.max(1) * 3600;
+    let slot = timestamp - timestamp.rem_euclid(interval_seconds);
+    DateTime::<Utc>::from_timestamp(slot, 0)
+        .unwrap_or(now)
+        .to_rfc3339()
+}
+
+fn radar_schedule_interval_elapsed(latest_due_at: &str, interval_hours: i64) -> bool {
+    DateTime::parse_from_rfc3339(latest_due_at)
+        .map(|latest| {
+            latest.with_timezone(&Utc) + chrono::Duration::hours(interval_hours.max(1))
+                <= Utc::now()
+        })
+        .unwrap_or(true)
+}
+
+fn radar_schedule_tick_key(
+    profile_id: &str,
+    due_at: &str,
+    policy: &ScheduledRadarDeliveryPolicy,
+) -> String {
+    format!(
+        "{}:{}:{}:{}:{}",
+        profile_id, due_at, policy.language, policy.format, policy.recipient_ref
+    )
+}
+
 fn validate_radar_delivery_status(status: &str) -> Result<()> {
     match status {
         "pending" | "sent" | "failed" | "blocked" | "deferred" | "dead_lettered" => Ok(()),
         other => bail!("unsupported radar delivery status: {other}"),
+    }
+}
+
+fn validate_radar_schedule_status(status: &str) -> Result<()> {
+    match status {
+        "pending" | "running" | "sent" | "failed" | "blocked" | "deferred" | "dead_lettered" => {
+            Ok(())
+        }
+        other => bail!("unsupported radar schedule status: {other}"),
     }
 }
 
@@ -35750,6 +36360,12 @@ fn timestamp_is_due(timestamp: &str) -> bool {
     DateTime::parse_from_rfc3339(timestamp)
         .map(|parsed| parsed.with_timezone(&Utc) <= Utc::now())
         .unwrap_or(true)
+}
+
+fn validate_timestamp(timestamp: &str) -> Result<()> {
+    DateTime::parse_from_rfc3339(timestamp)
+        .with_context(|| format!("invalid RFC3339 timestamp: {timestamp}"))?;
+    Ok(())
 }
 
 fn canonical_json(value: &Value) -> Result<String> {
@@ -45693,6 +46309,344 @@ reason = "X OAuth disabled during policy test"
     }
 
     #[test]
+    fn severe_radar_scheduled_delivery_worker_delivers_once_and_records_tick() {
+        // CLAIM: scheduled radar delivery is resident worker behavior with
+        // durable tick/run/summary/delivery linkage, not just a schedule-shaped
+        // schema.
+        // ORACLE: one worker pass enqueues and completes exactly one scheduled
+        // Telegram delivery; the next pass within the interval does not enqueue
+        // a duplicate tick.
+        // SEVERITY: Severe because scheduled digests are high mirage risk: a
+        // profile, table, or worker job name can look operational while sending
+        // nothing or sending repeatedly.
+        let store = test_store("radar-scheduled-delivery-worker");
+        store
+            .authorize_channel_subject("telegram", "telegram:chat:123", false, false, true)
+            .unwrap();
+        store
+            .set_secret_value("TELEGRAM_BOT_TOKEN", "TOKEN", "telegram")
+            .unwrap();
+        let ok_base = mock_status_server("200 OK", "", r#"{"ok":true}"#, "application/json");
+        store
+            .set_secret_value("TELEGRAM_API_BASE", &ok_base, "telegram")
+            .unwrap();
+        store
+            .add_source_card(SourceCardInput {
+                title: "Scheduled radar agent release".to_string(),
+                url: "https://example.com/scheduled-radar-agent".to_string(),
+                source_type: "release".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Scheduled radar finds an agent reliability release.".to_string(),
+                claims: vec![SourceClaim {
+                    claim: "The scheduled release improves worker reliability.".to_string(),
+                    kind: "product".to_string(),
+                    confidence: 0.8,
+                }],
+                retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                metadata: json!({ "source_role": "primary", "trust_level": "medium" }),
+            })
+            .unwrap();
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "scheduled-delivery-radar".to_string(),
+                description: "Scheduled delivery radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(5),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "scheduled radar agent" }]),
+                delivery_policy: json!({
+                    "delivery": "scheduled",
+                    "channel": "telegram",
+                    "recipient_ref": "123",
+                    "interval_hours": 24,
+                    "language": "en",
+                    "format": "markdown"
+                }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let worker = store.run_worker_once(2).unwrap();
+        let schedule = worker.radar_schedule.expect("schedule report");
+        assert_eq!(schedule.inspected, 1);
+        assert_eq!(schedule.enqueued, 1);
+        assert_eq!(worker.processed, 1);
+        assert_eq!(worker.completed, 1);
+        assert_eq!(worker.jobs[0].kind, "radar_scheduled_delivery");
+        let result = worker.jobs[0]
+            .result_json
+            .as_ref()
+            .expect("scheduled delivery result");
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("sent"));
+        let ticks = store.list_radar_schedule_ticks().unwrap();
+        assert_eq!(ticks.len(), 1, "{ticks:?}");
+        assert_eq!(ticks[0].profile_id, profile.id);
+        assert_eq!(ticks[0].status, "sent");
+        assert!(ticks[0].run_id.is_some(), "{ticks:?}");
+        assert!(ticks[0].summary_id.is_some(), "{ticks:?}");
+        assert!(ticks[0].delivery_id.is_some(), "{ticks:?}");
+        let run_id = ticks[0].run_id.as_deref().unwrap();
+        assert_eq!(
+            store.read_radar_run(run_id).unwrap().unwrap().stage,
+            "delivered"
+        );
+        let deliveries = store.list_radar_deliveries(Some(run_id)).unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].status, "sent");
+        assert_eq!(deliveries[0].recipient_ref, "telegram:chat:123");
+        let channel_messages = store.list_channel_messages().unwrap();
+        assert_eq!(channel_messages.len(), 1);
+        assert_eq!(channel_messages[0].status, "sent");
+        assert!(channel_messages[0].body.contains("GENERATED_RADAR_SUMMARY"));
+        let attempts = store.list_channel_delivery_attempts(None).unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert!(attempts[0].ok);
+
+        let second = store.run_worker_once(2).unwrap();
+        let second_schedule = second.radar_schedule.expect("second schedule report");
+        assert_eq!(second_schedule.inspected, 1);
+        assert_eq!(second_schedule.enqueued, 0);
+        assert_eq!(second.processed, 0);
+        assert_eq!(store.list_radar_schedule_ticks().unwrap().len(), 1);
+        assert_eq!(store.list_radar_deliveries(Some(run_id)).unwrap().len(), 1);
+        assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn severe_radar_scheduled_delivery_blocks_quiet_hours_until_real_deferral_exists() {
+        // CLAIM: quiet-hours configuration is not silently ignored by scheduled
+        // radar delivery.
+        // ORACLE: a scheduled profile with quiet_hours records a blocked tick,
+        // creates no run/summary/delivery side effects, and completes the worker
+        // job with an explicit boundary result.
+        // SEVERITY: Severe because ignoring quiet hours would turn a safety
+        // policy into decorative JSON.
+        let store = test_store("radar-scheduled-delivery-quiet-hours");
+        store
+            .add_source_card(SourceCardInput {
+                title: "Quiet hours radar note".to_string(),
+                url: "https://example.com/quiet-hours-radar".to_string(),
+                source_type: "note".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Quiet-hours radar should not silently deliver.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                metadata: json!({}),
+            })
+            .unwrap();
+        store
+            .create_radar_profile(RadarProfileInput {
+                name: "scheduled-quiet-hours-radar".to_string(),
+                description: "Scheduled quiet hours radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(5),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "quiet-hours radar" }]),
+                delivery_policy: json!({
+                    "delivery": "scheduled",
+                    "channel": "telegram",
+                    "recipient_ref": "123",
+                    "interval_hours": 24,
+                    "quiet_hours": { "start": "22:00", "end": "08:00", "timezone": "UTC" }
+                }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let worker = store.run_worker_once(2).unwrap();
+        assert_eq!(worker.processed, 1);
+        assert_eq!(worker.completed, 1);
+        let result = worker.jobs[0].result_json.as_ref().unwrap();
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert!(
+            result
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .contains("quiet-hours deferral is not implemented")
+        );
+        let ticks = store.list_radar_schedule_ticks().unwrap();
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].status, "blocked");
+        assert!(ticks[0].run_id.is_none(), "{ticks:?}");
+        assert!(ticks[0].summary_id.is_none(), "{ticks:?}");
+        assert!(ticks[0].delivery_id.is_none(), "{ticks:?}");
+        assert!(store.list_radar_runs().unwrap().is_empty());
+        assert!(store.list_radar_deliveries(None).unwrap().is_empty());
+        assert!(store.list_channel_messages().unwrap().is_empty());
+        assert!(
+            store
+                .list_channel_delivery_attempts(None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn severe_radar_scheduled_delivery_blocks_unauthorized_recipient_without_provider_send() {
+        // CLAIM: scheduled Telegram delivery uses the same authorization boundary
+        // as manual radar delivery.
+        // ORACLE: an unauthorized recipient records a blocked schedule tick and
+        // radar delivery after run/summary proof, but never writes a channel
+        // message or provider attempt.
+        // SEVERITY: Severe because unattended schedules must not become a
+        // confused-deputy bypass of explicit channel authorization.
+        let store = test_store("radar-scheduled-delivery-unauthorized");
+        store
+            .set_secret_value("TELEGRAM_BOT_TOKEN", "TOKEN_SHOULD_NOT_LEAK", "telegram")
+            .unwrap();
+        store
+            .add_source_card(SourceCardInput {
+                title: "Scheduled unauthorized radar note".to_string(),
+                url: "https://example.com/scheduled-unauthorized-radar".to_string(),
+                source_type: "note".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Scheduled radar should block unauthorized Telegram recipients."
+                    .to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                metadata: json!({}),
+            })
+            .unwrap();
+        store
+            .create_radar_profile(RadarProfileInput {
+                name: "scheduled-unauthorized-radar".to_string(),
+                description: "Scheduled unauthorized radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(5),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "unauthorized radar" }]),
+                delivery_policy: json!({
+                    "delivery": "scheduled",
+                    "channel": "telegram",
+                    "recipient_ref": "123",
+                    "interval_hours": 24
+                }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let worker = store.run_worker_once(2).unwrap();
+        let schedule = worker.radar_schedule.expect("schedule report");
+        assert_eq!(schedule.inspected, 1);
+        assert_eq!(schedule.enqueued, 1);
+        assert_eq!(worker.processed, 1);
+        assert_eq!(worker.completed, 1);
+        let result = worker.jobs[0].result_json.as_ref().unwrap();
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert!(
+            !serde_json::to_string(result)
+                .unwrap()
+                .contains("TOKEN_SHOULD_NOT_LEAK")
+        );
+        let ticks = store.list_radar_schedule_ticks().unwrap();
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].status, "blocked");
+        assert!(
+            ticks[0]
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("not authorized")
+        );
+        let run_id = ticks[0].run_id.as_deref().expect("blocked run id");
+        let run = store.read_radar_run(run_id).unwrap().unwrap();
+        assert_eq!(run.stage, "summarized");
+        let deliveries = store.list_radar_deliveries(Some(run_id)).unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].status, "blocked");
+        assert!(
+            deliveries[0]
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("not authorized")
+        );
+        assert!(store.list_channel_messages().unwrap().is_empty());
+        assert!(
+            store
+                .list_channel_delivery_attempts(None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn severe_radar_scheduled_delivery_rejects_raw_secret_policy_before_enqueue() {
+        // CLAIM: scheduled delivery policy stores cadence/recipient intent, not
+        // provider credentials.
+        // ORACLE: token-shaped policy fields fail due-job enqueue and do not
+        // create schedule ticks or worker jobs.
+        // SEVERITY: Severe because durable schedule config is surfaced through
+        // status, jobs, reports, and backups.
+        let store = test_store("radar-scheduled-delivery-raw-secret");
+        store
+            .add_source_card(SourceCardInput {
+                title: "Scheduled raw secret radar note".to_string(),
+                url: "https://example.com/scheduled-raw-secret-radar".to_string(),
+                source_type: "note".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Scheduled radar should reject raw provider secrets.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                metadata: json!({}),
+            })
+            .unwrap();
+        store
+            .create_radar_profile(RadarProfileInput {
+                name: "scheduled-raw-secret-radar".to_string(),
+                description: "Scheduled raw secret radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(5),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "raw secret radar" }]),
+                delivery_policy: json!({
+                    "delivery": "scheduled",
+                    "channel": "telegram",
+                    "recipient_ref": "123",
+                    "interval_hours": 24,
+                    "telegram_bot_token": "SHOULD_NOT_BE_STORED_HERE"
+                }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let report = store.enqueue_due_radar_schedule_jobs(10).unwrap();
+        assert_eq!(report.inspected, 1);
+        assert_eq!(report.enqueued, 0);
+        assert_eq!(report.skipped, 1);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|error| error.contains("must not contain raw secrets")),
+            "{:?}",
+            report.errors
+        );
+        assert!(
+            !serde_json::to_string(&report)
+                .unwrap()
+                .contains("SHOULD_NOT_BE_STORED_HERE")
+        );
+        assert!(store.list_radar_schedule_ticks().unwrap().is_empty());
+        assert!(store.list_wiki_jobs().unwrap().is_empty());
+    }
+
+    #[test]
     fn severe_radar_worker_live_policy_denial_writes_blocked_run() {
         // CLAIM: queued live radar cannot hide provider denial behind a completed
         // worker job.
@@ -47541,6 +48495,158 @@ channel = "telegram"
             .retry_due_telegram_deliveries("TOKEN", Some(&ok_base), 10)
             .unwrap();
         assert_eq!(retry.attempted, 0);
+    }
+
+    #[test]
+    fn severe_radar_schedule_worker_delivers_once_and_records_tick_lineage() {
+        // CLAIM: scheduled radar delivery is a resident worker path, not just a
+        // profile flag or manual delivery helper.
+        // ORACLE: worker run-once enqueues and executes a scheduled tick, writes
+        // run/summary/delivery lineage onto the tick, reaches the local Telegram
+        // provider exactly once, and a second worker pass does not duplicate the
+        // interval slot.
+        // SEVERITY: Severe because unattended scheduled digests are where fake
+        // orchestration can hide behind a healthy-looking profile row.
+        let store = test_store("radar-schedule-worker-delivery");
+        store
+            .authorize_channel_subject("telegram", "telegram:chat:123", false, false, true)
+            .unwrap();
+        store
+            .add_source_card(SourceCardInput {
+                title: "Scheduled radar delivery launch".to_string(),
+                url: "https://example.com/scheduled-radar-delivery-launch".to_string(),
+                source_type: "web".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Scheduled radar delivery source supports a worker digest.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "manual" }),
+            })
+            .unwrap();
+        store
+            .create_radar_profile(RadarProfileInput {
+                name: "scheduled-delivery-radar".to_string(),
+                description: "Scheduled delivery radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "scheduled radar delivery" }]),
+                delivery_policy: json!({
+                    "delivery": "scheduled",
+                    "enabled": true,
+                    "interval_hours": 24,
+                    "channel": "telegram",
+                    "recipient_ref": "123",
+                    "language": "en",
+                    "format": "markdown"
+                }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+        let api = mock_status_server("200 OK", "", r#"{"ok":true}"#, "application/json");
+        store
+            .set_secret_value("TELEGRAM_BOT_TOKEN", "TOKEN", "telegram")
+            .unwrap();
+        store
+            .set_secret_value("TELEGRAM_API_BASE", &api, "telegram")
+            .unwrap();
+
+        let first = store.run_worker_once(5).unwrap();
+        let schedule = first.radar_schedule.expect("radar schedule report");
+        assert_eq!(schedule.inspected, 1);
+        assert_eq!(schedule.enqueued, 1);
+        assert_eq!(first.completed, 1);
+        assert_eq!(first.failed, 0);
+        let ticks = store.list_radar_schedule_ticks().unwrap();
+        assert_eq!(ticks.len(), 1);
+        let tick = &ticks[0];
+        assert_eq!(tick.status, "sent");
+        assert!(tick.job_id.is_some());
+        assert!(tick.run_id.is_some());
+        assert!(tick.summary_id.is_some());
+        assert!(tick.delivery_id.is_some());
+        assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
+        let run = store
+            .read_radar_run(tick.run_id.as_deref().expect("scheduled run id"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.stage, "delivered");
+        assert_eq!(run.delivery_count, 1);
+
+        let second = store.run_worker_once(5).unwrap();
+        let second_schedule = second.radar_schedule.expect("second schedule report");
+        assert_eq!(second_schedule.inspected, 1);
+        assert_eq!(second_schedule.enqueued, 0);
+        assert_eq!(second.completed, 0);
+        assert_eq!(store.list_radar_schedule_ticks().unwrap().len(), 1);
+        assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn severe_radar_schedule_rejects_raw_secret_policy_without_tick_or_job() {
+        // CLAIM: scheduled delivery policy is configuration, not a place to
+        // persist provider secrets or let malicious profile JSON create work.
+        // ORACLE: a profile containing a raw Telegram token is skipped with a
+        // sanitized scheduler error, and no tick, job, message, or attempt is
+        // created.
+        // SEVERITY: Severe because scheduled jobs are durable and unattended; a
+        // secret-bearing policy would persist sensitive material and amplify it.
+        let store = test_store("radar-schedule-secret-policy");
+        store
+            .add_source_card(SourceCardInput {
+                title: "Scheduled radar secret policy".to_string(),
+                url: "https://example.com/scheduled-radar-secret-policy".to_string(),
+                source_type: "web".to_string(),
+                provider: "fixture".to_string(),
+                summary: "Source card should not matter because policy is invalid.".to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "manual" }),
+            })
+            .unwrap();
+        store
+            .create_radar_profile(RadarProfileInput {
+                name: "scheduled-secret-policy-radar".to_string(),
+                description: "Invalid scheduled policy radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "scheduled radar secret" }]),
+                delivery_policy: json!({
+                    "delivery": "scheduled",
+                    "enabled": true,
+                    "interval_hours": 24,
+                    "channel": "telegram",
+                    "recipient_ref": "123",
+                    "telegram_bot_token": "TOKEN_SHOULD_NOT_BE_STORED_HERE"
+                }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let report = store.run_worker_once(5).unwrap();
+        let schedule = report.radar_schedule.expect("radar schedule report");
+        assert_eq!(schedule.inspected, 1);
+        assert_eq!(schedule.enqueued, 0);
+        assert_eq!(schedule.skipped, 1);
+        assert_eq!(report.completed, 0);
+        assert_eq!(report.failed, 0);
+        let serialized = serde_json::to_string(&schedule).unwrap();
+        assert!(serialized.contains("raw secrets"));
+        assert!(!serialized.contains("TOKEN_SHOULD_NOT_BE_STORED_HERE"));
+        assert!(store.list_radar_schedule_ticks().unwrap().is_empty());
+        assert!(store.list_wiki_jobs().unwrap().is_empty());
+        assert!(store.list_channel_messages().unwrap().is_empty());
+        assert!(
+            store
+                .list_channel_delivery_attempts(None)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

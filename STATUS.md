@@ -1,6 +1,6 @@
 # Arcwell Status Matrix
 
-Last audited: 2026-06-23
+Last audited: 2026-06-24
 
 This file is the project compass and todo list. It is intentionally blunt. A package
 directory, README, command prompt, or MCP tool does not mean the capability is

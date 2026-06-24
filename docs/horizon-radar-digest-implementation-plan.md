@@ -1128,8 +1128,8 @@ Delivery routes:
 Checklist:
 
 - [x] Add recipient authorization lookup.
-- [ ] Add delivery profile config for channel, recipient, quiet hours, max
-      frequency, and summary format.
+- [x] Add local scheduled-delivery profile config for channel, recipient,
+      interval, summary language, and summary format.
 - [x] Add policy check before delivery.
 - [x] Add cost check where provider delivery has cost.
 - [x] Add idempotency keys per run/summary/recipient.
@@ -1144,7 +1144,13 @@ Checklist:
 - [x] Add manual `radar deliver` confirmation path with CLI/MCP/slash surfaces,
       durable `radar_deliveries`, idempotency, authorization/policy gates,
       provider-failure recording, and local severe tests.
-- [ ] Add scheduled delivery only after manual delivery is proven.
+- [x] Add local scheduled Telegram delivery through the resident worker after
+      manual delivery proof: scheduled profiles write durable schedule ticks,
+      enqueue `radar_scheduled_delivery`, run/summarize/audit, deliver through
+      configured authorized Telegram, link tick/run/summary/delivery lineage,
+      and suppress duplicate ticks inside the configured interval.
+- [ ] Add production/live scheduled delivery proof, quiet-hours deferral, and
+      cross-channel scheduled delivery.
 
 Anti-mirage gate:
 
@@ -1166,6 +1172,12 @@ Production-data proof:
       route, without leaking secrets.
 - [x] Prove local Telegram retry/dead-letter behavior with controlled provider
       failures and no real provider send.
+- [x] Prove local scheduled Telegram delivery with controlled provider success:
+      resident worker enqueues one schedule tick, completes the
+      `radar_scheduled_delivery` job, records run/summary/delivery lineage,
+      reaches `sent`, avoids duplicate ticks inside the interval, rejects raw
+      secrets in profile policy, and blocks quiet-hours config until real
+      deferral exists.
 
 ### Stage 9: Source Quality And Recommendation Loop
 
@@ -1430,6 +1442,7 @@ Required:
 - [x] Duplicate delivery idempotency.
 - [x] Provider failure retry for local Telegram manual delivery.
 - [x] Retry exhaustion dead-letters local Telegram manual delivery.
+- [x] Local scheduled Telegram delivery through resident worker.
 - [x] Delivery error redacts tokens/addresses where required.
 - [x] Policy denial records decision.
 - [ ] Cost denial records decision.
@@ -1548,8 +1561,11 @@ Exit gate:
 - [x] Manual authorized delivery.
 - [ ] Quiet-hours deferral.
 - [x] Local Telegram retry reconciliation/dead-letter for manual deliveries.
+- [x] Local scheduled Telegram delivery through `worker run-once` with durable
+  ticks, authorized provider attempts, duplicate suppression, raw-secret
+  rejection, and explicit quiet-hours blocking.
 - [ ] Cross-channel/scheduled retry/dead-letter.
-- [ ] Scheduled worker runs.
+- [ ] Production scheduled worker/service runs.
 - [ ] Source-quality rollups.
 - [x] Ops snapshot/UI visibility for manual delivery attempts.
 - [ ] Doctor visibility and broader delivery controls.
