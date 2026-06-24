@@ -1028,7 +1028,9 @@ A model-backed report may be marked complete only when:
   through the existing policy and cost gates, records cost-linked proof when
   safe public results are selected, can enqueue bounded worker `ingest_url`
   jobs for selected safe results through `enqueue_selected_url_ingest` plus
-  `max_ingest_jobs`, and records blocked provider attempts as artifacts.
+  `max_ingest_jobs`, promotes completed research-scoped URL-ingest jobs into
+  run-linked full-text source cards plus conservative extracted claims, and
+  records blocked provider attempts as artifacts.
 - Done: live OpenAI editorial invocation reached the provider, parsed the nested
   Responses API output envelope, recorded a cost decision, and rejected an
   insufficient evidence pack instead of drafting unsupported prose.

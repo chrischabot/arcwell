@@ -590,9 +590,12 @@ PR, implementation note, or final report:
       Brave/OpenAI/Perplexity provider search through existing policy and cost
       gates, records safe selected provider results as auditable search proof,
       can optionally enqueue bounded worker `ingest_url` jobs for selected safe
-      results, stores blocked provider attempts as artifacts, and severe-tests
-      cost cap, budget denial, unsafe URL filtering, cost-decision linkage,
-      ingest enqueue caps, and task proof updates.
+      results, promotes completed research-scoped URL ingests into run-linked
+      full-text source cards and conservative extracted claims, stores blocked
+      provider attempts as artifacts, and severe-tests cost cap, budget denial,
+      unsafe URL filtering, cost-decision linkage, ingest enqueue caps, task
+      proof updates, same-run host-search validation, host-search-result
+      source-card backfill, and prompt-injection text as untrusted evidence.
 - [ ] Severe-test disproof retrieval with known contradiction discovery,
       duplicate source novelty suppression, blocked-search unresolved status,
       low-reliability contradictions, SSRF URLs, redirects to localhost or
@@ -769,7 +772,9 @@ PR, implementation note, or final report:
       confusion, active fact-check recursion over generated convergence report
       sections, a too-low convergence source cap, model-backed judgment
       overwrite, bodyless structured provider responses, pending-search prompt
-      scoring, and evaluator routing over synthesized score artifacts.
+      scoring, evaluator routing over synthesized score artifacts, and
+      provider-search URL-ingest jobs that wrote wiki pages without promoting
+      them into run-linked source-card/claim evidence.
 - [ ] Run live market/ecosystem proof on London AI startups with official,
       company, funding, job, news, and social source families, hype downgrades,
       currentness labels, contradiction handling, and report judgment average
