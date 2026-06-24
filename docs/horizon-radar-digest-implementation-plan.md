@@ -226,6 +226,18 @@ Evidence:
   four cursors with healthy source-health, passed both audits, and wrote two
   non-delivery summaries. This proves source-family category quotas, not
   arbitrary future topic taxonomies.
+- Production-data topical taxonomy balance proof now exists through
+  `scripts/radar-taxonomy-balance-production-proof`, preserved at
+  `.arcwell-dev/proofs/radar-taxonomy-balance-production-proof-20260624T111251Z-4350/artifacts/proof-packet.json`.
+  A worker-drained live public RSS/GitHub/arXiv/Hacker News profile used
+  non-source-family quotas `agent:1` and `ai:2`, wrote 62
+  normalized/indexed/scored radar items, selected 34, found raw live taxonomy
+  candidate counts of `agent:8` and `ai:10`, kept selected counts at
+  `agent:1` and `ai:2`, recorded 13 `category_quota` rows with
+  category-specific rejection tags/reasons, exposed matching run/ops
+  score-distribution counts, advanced healthy cursors/source-health, passed
+  audit, and wrote a non-delivery summary. This proves deterministic topical
+  quotas for existing heuristic tags, not model-generated taxonomy quality.
 - Production-data deterministic semantic/topic dedupe breadth proof now exists
   through `scripts/radar-semantic-dedupe-production-proof`, preserved at
   `.arcwell-dev/proofs/radar-semantic-dedupe-production-proof-20260624T105627Z-44256/artifacts/proof-packet.json`.
@@ -254,7 +266,7 @@ Still not proven by this slice:
 - Scheduled recurring radar service execution, retry/recovery, and ops UI
   controls.
 - Full recursive HN/Reddit community-thread capture.
-- Non-source-family taxonomy category-balance review and source-quality decay.
+- Arbitrary/model-generated taxonomy quality review and source-quality decay.
 - Model-backed interestingness, enrichment/synthesis, and delivery attempts.
 - Full production multi-source proof including authenticated/private sources.
 
@@ -1652,6 +1664,8 @@ Exit gate:
 - [x] Live-adapter production-data deterministic semantic/topic dedupe breadth
       over fresh public RSS/GitHub/arXiv/Hacker News sources.
 - [x] Local deterministic category/source balancing.
+- [x] Production-data deterministic topical taxonomy balancing for live public
+      RSS/GitHub/arXiv/Hacker News sources with `agent` and `ai` quotas.
 - [x] Optional local/mock model scoring overlays.
 - [ ] Optional model semantic dedupe.
 
@@ -1730,6 +1744,7 @@ cargo test -p arcwell severe_radar -- --nocapture
 scripts/radar-production-proof --profile agent-infrastructure --window-hours 168
 scripts/radar-production-proof --profile security-sandboxing --window-hours 168
 scripts/radar-production-proof --profile market-ecosystem --window-hours 168
+scripts/radar-taxonomy-balance-production-proof
 scripts/radar-delivery-proof --run-id <run-id> --channel telegram --recipient <authorized-test-subject>
 scripts/radar-delivery-proof --run-id <run-id> --channel email --recipient <authorized-test-recipient>
 scripts/arcwell-dev smoke

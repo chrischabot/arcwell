@@ -491,12 +491,21 @@ PR, implementation note, or final report:
       selected-by-category caps, score distribution counts, audit-ok summaries,
       cursor/source-health state, and ops visibility at
       `.arcwell-dev/proofs/radar-category-balance-production-proof-20260624T104401Z-30612`.
+- [x] Add repeatable production-data non-source-family taxonomy balance proof:
+      `scripts/radar-taxonomy-balance-production-proof` creates a disposable
+      live public RSS/GitHub/arXiv/Hacker News profile with topical `agent`
+      and `ai` quotas, drains the worker, verifies real taxonomy candidates
+      exceeded quota, selected counts respected `agent:1` and `ai:2`, 13
+      `category_quota` rows carried category-specific rejection tags/reasons,
+      score distribution counts matched ops, cursors/source-health were
+      healthy, audit passed, and a non-delivery summary was written at
+      `.arcwell-dev/proofs/radar-taxonomy-balance-production-proof-20260624T111251Z-4350`.
 - [ ] Add model-backed synthesis, live production delivery proof, live external
       scheduled delivery/service proof, production cross-channel delivery proof,
-      production quiet-hours deferral, non-source-family taxonomy
-      category-balance review, live model-scoring quality proof, seven-day
-      source-quality trend/decay proof, broader ops controls, and status
-      promotion only after real-data gates pass.
+      production quiet-hours deferral, arbitrary/model-generated taxonomy
+      quality review, live model-scoring quality proof, seven-day source-quality
+      trend/decay proof, broader ops controls, and status promotion only after
+      real-data gates pass.
 - [x] Preserve tracked email defaults as `agent@example.com` and
       `user@example.com`; `scripts/verify-tracked-email-placeholders` now scans
       git-tracked files and fails on non-placeholder email domains so real local
