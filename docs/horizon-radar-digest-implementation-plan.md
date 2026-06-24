@@ -198,6 +198,12 @@ Evidence:
   intermittently read RSS with the same declared User-Agent. Keep Reddit below
   `Production Data Proof` until OAuth or another sanctioned access path is
   implemented and passes the source-card/cursor/source-health/radar gates.
+- Local balance slice added explicit `metadata.balance.max_per_source` and
+  `metadata.balance.category_quotas` handling during deterministic scoring.
+  Severe tests prove malformed caps fail closed, one source cannot dominate when
+  capped, one category cannot exceed its quota, quota-rejected rows remain in
+  `radar_scores` as `source_quota` / `category_quota` with reasons/tags, and
+  rejected items retain source-card/wiki provenance.
 
 Still not proven by this slice:
 
@@ -205,7 +211,8 @@ Still not proven by this slice:
 - Scheduled recurring radar service execution, retry/recovery, and ops UI
   controls.
 - Full recursive HN/Reddit community-thread capture.
-- Semantic dedupe, category/source balancing, source-quality decay.
+- Semantic dedupe, production-data category/source balance review, source-quality
+  decay.
 - Model-backed interestingness, enrichment/synthesis, and delivery attempts.
 - Full production multi-source proof including authenticated/private sources.
 
@@ -938,8 +945,8 @@ Checklist:
 - [x] Add explanation fields that name positive and negative signals.
 - [ ] Add stale-score labels when source rows or profile config changed after
       scoring.
-- [ ] Add category quota and max-item selection after scoring.
-- [ ] Add per-source cap so one source cannot dominate unless profile says so.
+- [x] Add category quota and max-item selection after scoring.
+- [x] Add per-source cap so one source cannot dominate unless profile says so.
 - [ ] Add model-backed ranking only after deterministic score and stage
       inspection exist.
 - [ ] Add model output schema validation and malformed-output severe tests.
@@ -980,19 +987,21 @@ Outputs:
 
 Checklist:
 
-- [ ] Implement score threshold filter.
-- [ ] Implement per-category group quotas.
-- [ ] Implement global max item cap.
-- [ ] Implement per-source max cap.
+- [x] Implement score threshold filter.
+- [x] Implement per-category group quotas.
+- [x] Implement global max item cap.
+- [x] Implement per-source max cap.
 - [ ] Implement "must include if critical" override only with explicit profile
       config and audit note.
-- [ ] Store rejection reasons: `below_threshold`, `duplicate_topic`,
-      `category_quota`, `source_quota`, `unsafe_source`, `weak_evidence`,
-      `delivery_policy_denied`.
+- [x] Store rejection reasons for `below_threshold`, exact duplicate statuses,
+      `category_quota`, `source_quota`, and `over_profile_limit`.
+- [ ] Store later-stage rejection reasons for `duplicate_topic`,
+      `unsafe_source`, `weak_evidence`, and `delivery_policy_denied`.
 
 Anti-mirage gate:
 
-- [ ] Rejected items must remain inspectable.
+- [x] Rejected threshold/duplicate/quota/global-limit items remain inspectable
+      through `radar stage` item and score rows.
 - [ ] Empty digest must explain whether the day was quiet, sources failed,
       threshold was too high, or scoring failed.
 - [ ] A filtered run cannot be marked healthy if all source families failed.
@@ -1177,7 +1186,9 @@ Checklist:
       quality.
 - [ ] Flag overlapping sources where dedupe shows persistent duplication.
 - [ ] Add source removal feedback recording.
-- [ ] Add source-quality section in ops.
+- [x] Add source-quality section in ops snapshot and `/ops/ui`, with
+      non-healthy health warnings, summary scoring, filtered rows, and escaping
+      coverage for hostile source locators.
 
 Anti-mirage gate:
 
@@ -1190,6 +1201,9 @@ Production-data proof:
 - [x] Local single-run source-quality windows are materialized from scored
       `radar_items` / `radar_scores`, exposed through `radar stage` and
       `radar_source_quality`, and audited for missing/drifted rows.
+- [x] Local source-quality windows are exposed to operators through
+      `ops_snapshot` and `/ops/ui`; non-healthy windows affect health warnings
+      and UI health scoring.
 - [ ] Run at least seven days of real scheduled or manually repeated
       production radar runs before claiming decay/quality trend behavior.
 - [ ] Show at least one source-quality ranking generated from real local run
@@ -1480,13 +1494,15 @@ Exit gate:
 - [x] Heuristic scoring.
 - [x] Score explanations.
 - [x] Exact URL/native dedupe.
-- [ ] Category/source balancing.
+- [x] Local deterministic category/source balancing.
 - [ ] Optional model scoring.
 - [ ] Optional semantic dedupe.
 
 Exit gate:
 
 - [ ] Real production ranking review across at least three profiles.
+- [ ] Prove category/source balancing changes at least one real production-data
+      run where a source family would otherwise dominate.
 - [ ] Model scoring cannot promote if deterministic scoring/audit fails.
 
 ### Phase 5: Enrichment And Report Writing

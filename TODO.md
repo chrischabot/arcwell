@@ -356,9 +356,16 @@ PR, implementation note, or final report:
 - [x] Add local radar score freshness/source-health scoring adjustments and
       source-quality window records with audit coverage and direct severe-test
       assertions over source-card projection runs.
-- [ ] Add radar semantic dedupe, category/source balancing, model-backed
-      synthesis, delivery attempts, ops UI visibility, and status promotion only
-      after real-data gates pass.
+- [x] Add local deterministic radar source/category balance caps via explicit
+      profile metadata, with quota rejection statuses that keep source-card
+      evidence inspectable and severe tests for malformed caps, source
+      dominance, category dominance, and audit-clean readback.
+- [x] Add radar source-quality ops visibility in `ops_snapshot` and `/ops/ui`
+      with non-healthy health warnings, summary scoring, filtered rows, and
+      severe HTML escaping coverage.
+- [ ] Add radar semantic dedupe, model-backed synthesis, delivery attempts,
+      production-data balance review, source-quality trends, broader ops
+      controls, and status promotion only after real-data gates pass.
 - [ ] Preserve tracked email defaults as `agent@example.com` and
       `user@example.com`; keep real local agent/author addresses only in ignored
       env or secret config.

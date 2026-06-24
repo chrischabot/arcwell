@@ -2905,6 +2905,7 @@ pub struct ImportRunFinish {
 pub struct OpsSnapshot {
     pub health: HealthReport,
     pub x_stats: XStatsReport,
+    pub radar_source_quality: Vec<RadarSourceQuality>,
     pub jobs: Vec<WikiJob>,
     pub edge_events: Vec<EdgeEvent>,
     pub cursors: Vec<CursorState>,
@@ -5433,6 +5434,13 @@ impl Store {
         }
         let x_stats = self.x_stats()?;
         warnings.extend(Self::x_health_warnings(&x_stats));
+        let non_healthy_radar_source_quality = self
+            .count_query("SELECT COUNT(*) FROM radar_source_quality WHERE status != 'healthy'")?;
+        if non_healthy_radar_source_quality > 0 {
+            warnings.push(format!(
+                "Radar source quality: {non_healthy_radar_source_quality} non-healthy source-quality window(s)"
+            ));
+        }
         Ok(HealthReport {
             ok: warnings.is_empty(),
             home: self.paths.home.clone(),
@@ -19004,6 +19012,7 @@ impl Store {
         let profile = self
             .read_radar_profile(profile_id_or_name)?
             .with_context(|| format!("radar profile not found: {profile_id_or_name}"))?;
+        let balance_config = radar_balance_config_from_metadata(&profile.metadata)?;
         let window_hours = window_hours_override.unwrap_or(profile.window_hours);
         if window_hours <= 0 {
             bail!("window_hours must be greater than zero");
@@ -19024,6 +19033,9 @@ impl Store {
                 "This run projects existing Arcwell source cards only; live network adapters, enrichment, summaries, and delivery are not proven by this stage."
             }
         });
+        if balance_config.enabled() {
+            run_metadata["balance_config"] = balance_config.to_json();
+        }
         self.conn.execute(
             r#"
             INSERT INTO radar_runs
@@ -20124,14 +20136,62 @@ impl Store {
                 .then_with(|| left.0.title.cmp(&right.0.title))
         });
         let max_items = profile.max_items.unwrap_or(i64::MAX).max(0) as usize;
-        let selected_ids: BTreeSet<String> = scored
-            .iter()
-            .filter(|(item, score, _, _)| {
-                *score >= profile.min_score && !duplicate_status_by_item.contains_key(&item.id)
-            })
-            .take(max_items)
-            .map(|(item, _, _, _)| item.id.clone())
-            .collect();
+        let balance_config = radar_balance_config_from_metadata(&profile.metadata)?;
+        let mut selected_ids = BTreeSet::new();
+        let mut source_selected_counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut category_selected_counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut balance_rejections: BTreeMap<String, (String, String, String)> = BTreeMap::new();
+        for (item, score, _, tags) in &scored {
+            if *score < profile.min_score || duplicate_status_by_item.contains_key(&item.id) {
+                continue;
+            }
+            if selected_ids.len() >= max_items {
+                continue;
+            }
+            let source_key = radar_balance_source_key(item);
+            if let Some(max_per_source) = balance_config.max_per_source {
+                let selected_for_source = source_selected_counts
+                    .get(source_key.as_str())
+                    .copied()
+                    .unwrap_or(0);
+                if selected_for_source >= max_per_source {
+                    balance_rejections.insert(
+                        item.id.clone(),
+                        (
+                            "source_quota".to_string(),
+                            format!("source quota cap {max_per_source} reached for `{source_key}`"),
+                            "source-quota".to_string(),
+                        ),
+                    );
+                    continue;
+                }
+            }
+            let category = radar_balance_category_for_item(item, tags, &balance_config);
+            if let Some(category) = category.as_deref() {
+                if let Some(max_per_category) = balance_config.category_quotas.get(category) {
+                    let selected_for_category =
+                        category_selected_counts.get(category).copied().unwrap_or(0);
+                    if selected_for_category >= *max_per_category {
+                        balance_rejections.insert(
+                            item.id.clone(),
+                            (
+                                "category_quota".to_string(),
+                                format!(
+                                    "category quota cap {max_per_category} reached for `{category}`"
+                                ),
+                                format!("category-quota-{category}"),
+                            ),
+                        );
+                        continue;
+                    }
+                }
+            }
+            selected_ids.insert(item.id.clone());
+            *source_selected_counts.entry(source_key).or_default() += 1;
+            if let Some(category) = category {
+                *category_selected_counts.entry(category).or_default() += 1;
+            }
+        }
         let timestamp = now();
         let mut inserted = 0usize;
         for (item, score, mut reason, mut tags) in scored {
@@ -20146,6 +20206,17 @@ impl Store {
                 status.as_str()
             } else if selected_ids.contains(&item.id) {
                 "selected"
+            } else if let Some((status, rejection_reason, rejection_tag)) =
+                balance_rejections.get(&item.id)
+            {
+                tags.push(rejection_tag.clone());
+                if status == "source_quota" {
+                    tags.push("source-quota".to_string());
+                } else if status == "category_quota" {
+                    tags.push("category-quota".to_string());
+                }
+                reason = format!("{reason}; {rejection_reason}");
+                status.as_str()
             } else if score >= profile.min_score {
                 "over_profile_limit"
             } else {
@@ -20687,6 +20758,7 @@ impl Store {
         Ok(OpsSnapshot {
             health: self.health()?,
             x_stats: self.x_stats()?,
+            radar_source_quality: self.list_all_radar_source_quality()?,
             jobs: self.list_wiki_jobs()?,
             edge_events: self.list_edge_events()?,
             cursors: self.list_cursors()?,
@@ -29445,6 +29517,7 @@ fn normalize_radar_profile_input(mut input: RadarProfileInput) -> Result<RadarPr
     if !input.metadata.is_object() {
         bail!("metadata must be an object");
     }
+    radar_balance_config_from_metadata(&input.metadata)?;
     Ok(input)
 }
 
@@ -29924,6 +29997,139 @@ fn score_radar_item_heuristic_with_health(
     tags.sort();
     tags.dedup();
     (score.clamp(0.0, 10.0), reasons.join(", "), tags)
+}
+
+#[derive(Debug, Clone, Default)]
+struct RadarBalanceConfig {
+    max_per_source: Option<usize>,
+    category_quotas: BTreeMap<String, usize>,
+}
+
+impl RadarBalanceConfig {
+    fn enabled(&self) -> bool {
+        self.max_per_source.is_some() || !self.category_quotas.is_empty()
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "max_per_source": self.max_per_source,
+            "category_quotas": self.category_quotas,
+        })
+    }
+}
+
+fn radar_balance_config_from_metadata(metadata: &Value) -> Result<RadarBalanceConfig> {
+    let Some(balance) = metadata
+        .get("balance")
+        .or_else(|| metadata.get("radar_balance"))
+    else {
+        return Ok(RadarBalanceConfig::default());
+    };
+    if balance.is_null() {
+        return Ok(RadarBalanceConfig::default());
+    }
+    let Some(balance) = balance.as_object() else {
+        bail!("radar metadata balance must be an object");
+    };
+    let max_per_source = match balance
+        .get("max_per_source")
+        .or_else(|| balance.get("source_cap"))
+    {
+        Some(value) => Some(parse_radar_balance_cap(value, "max_per_source")?),
+        None => None,
+    };
+    let mut category_quotas = BTreeMap::new();
+    if let Some(value) = balance
+        .get("category_quotas")
+        .or_else(|| balance.get("categories"))
+    {
+        let Some(object) = value.as_object() else {
+            bail!("radar metadata balance.category_quotas must be an object");
+        };
+        for (raw_category, raw_cap) in object {
+            let category = normalize_radar_balance_key(raw_category, "category")?;
+            let cap = parse_radar_balance_cap(raw_cap, &format!("category_quotas.{category}"))?;
+            category_quotas.insert(category, cap);
+        }
+    }
+    Ok(RadarBalanceConfig {
+        max_per_source,
+        category_quotas,
+    })
+}
+
+fn parse_radar_balance_cap(value: &Value, field: &str) -> Result<usize> {
+    let Some(cap) = value.as_u64() else {
+        bail!("radar metadata balance.{field} must be a positive integer");
+    };
+    if !(1..=500).contains(&cap) {
+        bail!("radar metadata balance.{field} must be between 1 and 500");
+    }
+    Ok(cap as usize)
+}
+
+fn normalize_radar_balance_key(raw: &str, label: &str) -> Result<String> {
+    let key = raw.trim().to_ascii_lowercase();
+    if key.is_empty() {
+        bail!("radar balance {label} cannot be empty");
+    }
+    if key.len() > 80 {
+        bail!("radar balance {label} is too long");
+    }
+    if !key
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    {
+        bail!("radar balance {label} may only contain letters, numbers, hyphen, or underscore");
+    }
+    Ok(key)
+}
+
+fn radar_balance_source_key(item: &RadarItem) -> String {
+    let (source_kind, locator) = radar_source_quality_key_for_item(item);
+    format!("{source_kind}:{locator}")
+}
+
+fn radar_balance_category_for_item(
+    item: &RadarItem,
+    tags: &[String],
+    balance_config: &RadarBalanceConfig,
+) -> Option<String> {
+    if balance_config.category_quotas.is_empty() {
+        return None;
+    }
+    let candidates = radar_balance_category_candidates(item, tags);
+    balance_config
+        .category_quotas
+        .keys()
+        .find(|category| candidates.contains(*category))
+        .cloned()
+}
+
+fn radar_balance_category_candidates(item: &RadarItem, tags: &[String]) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for key in ["category", "category_group", "topic", "source_type"] {
+        if let Some(value) = item.metadata.get(key).and_then(Value::as_str)
+            && let Ok(category) = normalize_radar_balance_key(value, "category")
+        {
+            candidates.insert(category);
+        }
+    }
+    if let Some(values) = item.metadata.get("categories").and_then(Value::as_array) {
+        for value in values {
+            if let Some(value) = value.as_str()
+                && let Ok(category) = normalize_radar_balance_key(value, "category")
+            {
+                candidates.insert(category);
+            }
+        }
+    }
+    for tag in tags {
+        if let Ok(category) = normalize_radar_balance_key(tag, "category") {
+            candidates.insert(category);
+        }
+    }
+    candidates
 }
 
 fn radar_source_quality_key_for_item(item: &RadarItem) -> (String, String) {
@@ -41225,6 +41431,31 @@ mod tests {
             columns.iter().any(|column| column == "run_id"),
             "radar_source_quality must be run-scoped after migration"
         );
+        store
+            .conn
+            .execute(
+                r#"
+                INSERT INTO radar_source_quality
+                  (id, run_id, source_kind, locator, window_start, window_end,
+                   raw_count, accepted_count, status, created_at)
+                VALUES
+                  ('quality-a', 'run-a', 'rss', 'https://example.com/feed.xml',
+                   '2026-06-24T00:00:00Z', '2026-06-25T00:00:00Z',
+                   1, 1, 'healthy', '2026-06-24T00:00:00Z'),
+                  ('quality-b', 'run-b', 'rss', 'https://example.com/feed.xml',
+                   '2026-06-24T00:00:00Z', '2026-06-25T00:00:00Z',
+                   1, 1, 'healthy', '2026-06-24T00:00:00Z')
+                "#,
+                [],
+            )
+            .unwrap();
+        let source_quality_rows: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM radar_source_quality", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(source_quality_rows, 2);
         let migration_name: String = store
             .conn
             .query_row(
@@ -43413,6 +43644,33 @@ reason = "X OAuth disabled during policy test"
         let audit = store.audit_radar_run(&report.run.id).unwrap();
         assert!(audit.ok, "{audit:?}");
         assert_eq!(audit.source_quality_count, 2);
+        let ops = store.ops_snapshot().unwrap();
+        assert_eq!(ops.radar_source_quality.len(), 2);
+        assert!(
+            ops.health
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Radar source quality")),
+            "{:?}",
+            ops.health.warnings
+        );
+
+        store
+            .conn
+            .execute(
+                "UPDATE radar_source_quality SET raw_count = 99, signal_to_noise = 2.0 WHERE run_id = ?1 AND locator = ?2",
+                params![report.run.id, healthy_feed],
+            )
+            .unwrap();
+        let drift_audit = store.audit_radar_run(&report.run.id).unwrap();
+        assert!(!drift_audit.ok);
+        assert!(drift_audit.findings.iter().any(|finding| {
+            finding.code == "radar_source_quality_drift" && finding.severity == "high"
+        }));
+        store
+            .record_radar_source_quality_window(&report.run.id)
+            .unwrap();
+        assert!(store.audit_radar_run(&report.run.id).unwrap().ok);
 
         store
             .conn
@@ -43426,6 +43684,192 @@ reason = "X OAuth disabled during policy test"
         assert!(broken_audit.findings.iter().any(|finding| {
             finding.code == "radar_source_quality_missing" && finding.severity == "high"
         }));
+    }
+
+    #[test]
+    fn severe_radar_balance_caps_sources_and_categories_without_hiding_rejections() {
+        // CLAIM: explicit radar balance metadata can stop one source or category
+        // from dominating selected items while keeping rejected items inspectable.
+        // ORACLE: source/category quota rows remain in radar_scores with reasons,
+        // tags, and source-card provenance, and audit still passes.
+        // SEVERITY: Severe because balanced digests are easy to fake by silently
+        // dropping rows or by claiming balance while only applying a global limit.
+        let store = test_store("radar-balance-quotas");
+        for (title, url, source_kind, source_detail, summary) in [
+            (
+                "Alpha Agent MCP release from feed",
+                "https://example.com/feed-alpha-agent",
+                "rss",
+                "https://example.com/agent-feed.xml",
+                "Agent MCP release improves worker reliability.",
+            ),
+            (
+                "Beta Agent MCP release from same feed",
+                "https://example.com/feed-beta-agent",
+                "rss",
+                "https://example.com/agent-feed.xml",
+                "Agent MCP release improves queue reliability.",
+            ),
+            (
+                "Gamma Agent MCP release from GitHub",
+                "https://github.com/example/agent/releases/tag/v1",
+                "github_release",
+                "example/agent",
+                "Agent MCP release improves source-card reliability.",
+            ),
+            (
+                "Security MCP vulnerability incident",
+                "https://example.com/security-mcp-vulnerability",
+                "rss",
+                "https://example.com/security-feed.xml",
+                "MCP vulnerability incident with technical mitigation details.",
+            ),
+            (
+                "Zulu Agent MCP release from Hacker News",
+                "https://news.ycombinator.com/item?id=123",
+                "hackernews",
+                "frontpage",
+                "Agent MCP release discussion with detailed implementation notes.",
+            ),
+        ] {
+            store
+                .add_source_card(SourceCardInput {
+                    title: title.to_string(),
+                    url: url.to_string(),
+                    source_type: source_kind.to_string(),
+                    provider: source_kind.to_string(),
+                    summary: summary.to_string(),
+                    claims: vec![],
+                    retrieved_at: Some(now()),
+                    metadata: json!({
+                        "source_kind": source_kind,
+                        "source_detail": source_detail,
+                    }),
+                })
+                .unwrap();
+        }
+
+        let malformed = store
+            .create_radar_profile(RadarProfileInput {
+                name: "bad-balance-radar".to_string(),
+                description: "Bad balance config".to_string(),
+                window_hours: 24,
+                min_score: 2.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "MCP" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({ "balance": { "max_per_source": 0 } }),
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(
+            malformed.contains("max_per_source") && malformed.contains("between 1 and 500"),
+            "{malformed}"
+        );
+
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "balanced-radar".to_string(),
+                description: "Balanced radar".to_string(),
+                window_hours: 24,
+                min_score: 2.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "MCP" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({
+                    "balance": {
+                        "max_per_source": 1,
+                        "category_quotas": { "agent": 2 }
+                    }
+                }),
+            })
+            .unwrap();
+
+        let report = store.run_radar_profile(&profile.id, None).unwrap();
+        assert_eq!(report.items_inserted, 5);
+        assert_eq!(report.scores_inserted, 5);
+        assert_eq!(report.selected_items, 3);
+        assert_eq!(
+            report
+                .run
+                .metadata
+                .get("balance_config")
+                .and_then(|value| value.get("max_per_source"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let stage = store.read_radar_stage(&report.run.id).unwrap();
+        let item_by_id = stage
+            .items
+            .iter()
+            .map(|item| (item.id.clone(), item))
+            .collect::<BTreeMap<_, _>>();
+        let scores_by_title = stage
+            .scores
+            .iter()
+            .map(|score| {
+                let item = item_by_id.get(&score.item_id).unwrap();
+                (item.title.as_str(), (item, score))
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let (_, beta_score) = scores_by_title
+            .get("Beta Agent MCP release from same feed")
+            .expect("source-quota score");
+        assert_eq!(beta_score.status, "source_quota");
+        assert!(beta_score.reason.contains("source quota cap 1"));
+        assert!(beta_score.tags.contains(&"source-quota".to_string()));
+
+        let (_, zulu_score) = scores_by_title
+            .get("Zulu Agent MCP release from Hacker News")
+            .expect("category-quota score");
+        assert_eq!(zulu_score.status, "category_quota");
+        assert!(zulu_score.reason.contains("category quota cap 2"));
+        assert!(zulu_score.tags.contains(&"category-quota".to_string()));
+        assert!(
+            zulu_score
+                .tags
+                .contains(&"category-quota-agent".to_string())
+        );
+
+        let selected = stage
+            .scores
+            .iter()
+            .filter(|score| score.status == "selected")
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 3);
+        let selected_agent_count = selected
+            .iter()
+            .filter(|score| score.tags.contains(&"agent".to_string()))
+            .count();
+        assert_eq!(selected_agent_count, 2);
+        let selected_agent_feed_count = selected
+            .iter()
+            .filter(|score| {
+                let item = item_by_id.get(&score.item_id).unwrap();
+                item.metadata.get("source_detail").and_then(Value::as_str)
+                    == Some("https://example.com/agent-feed.xml")
+            })
+            .count();
+        assert_eq!(selected_agent_feed_count, 1);
+        for status in ["source_quota", "category_quota"] {
+            let score = stage
+                .scores
+                .iter()
+                .find(|score| score.status == status)
+                .expect("quota-rejected score");
+            let item = item_by_id.get(&score.item_id).unwrap();
+            assert!(item.source_card_id.is_some(), "{item:?}");
+            assert!(item.wiki_page_id.is_some(), "{item:?}");
+        }
+
+        let audit = store.audit_radar_run(&report.run.id).unwrap();
+        assert!(audit.ok, "{audit:?}");
     }
 
     #[test]

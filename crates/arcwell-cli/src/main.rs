@@ -5780,6 +5780,7 @@ code,pre{white-space:pre-wrap;word-break:break-word}
         ("Cursors", snapshot.cursors.len()),
         ("Sources", snapshot.watch_sources.len()),
         ("Source health", snapshot.source_health.len()),
+        ("Radar source quality", snapshot.radar_source_quality.len()),
         ("Source cards", snapshot.source_cards.len()),
         ("Projects", snapshot.projects.len()),
         ("Project statuses", snapshot.project_status_snapshots.len()),
@@ -5926,6 +5927,49 @@ code,pre{white-space:pre-wrap;word-break:break-word}
                     health.last_success_at.clone().unwrap_or_default(),
                     health.last_failure_at.clone().unwrap_or_default(),
                     health.last_error.clone().unwrap_or_default(),
+                ]
+            }),
+    ));
+    html.push_str(&ops_table(
+        "Radar Source Quality",
+        &[
+            "run",
+            "kind",
+            "locator",
+            "status",
+            "raw",
+            "accepted",
+            "avg score",
+            "signal/noise",
+            "duplicate rate",
+            "failures",
+            "window",
+        ],
+        filtered_radar_source_quality(snapshot, options)
+            .into_iter()
+            .take(100)
+            .map(|quality| {
+                vec![
+                    short_id(&quality.run_id),
+                    quality.source_kind.clone(),
+                    quality.locator.clone(),
+                    quality.status.clone(),
+                    quality.raw_count.to_string(),
+                    quality.accepted_count.to_string(),
+                    quality
+                        .average_score
+                        .map(|value| format!("{value:.2}"))
+                        .unwrap_or_default(),
+                    quality
+                        .signal_to_noise
+                        .map(|value| format!("{value:.2}"))
+                        .unwrap_or_default(),
+                    quality
+                        .duplicate_rate
+                        .map(|value| format!("{value:.2}"))
+                        .unwrap_or_default(),
+                    quality.failure_count.to_string(),
+                    format!("{} -> {}", quality.window_start, quality.window_end),
                 ]
             }),
     ));
@@ -6343,6 +6387,11 @@ fn ops_health_score(snapshot: &OpsSnapshot) -> OpsHealthScore {
         .iter()
         .filter(|source| source.status != "healthy")
         .count() as i64;
+    let non_healthy_radar_source_quality = snapshot
+        .radar_source_quality
+        .iter()
+        .filter(|quality| quality.status != "healthy")
+        .count() as i64;
     let bad_secrets = snapshot
         .secret_health
         .iter()
@@ -6378,6 +6427,11 @@ fn ops_health_score(snapshot: &OpsSnapshot) -> OpsHealthScore {
     if failed_sources > 0 {
         issues.push(format!("{failed_sources} non-healthy sources"));
     }
+    if non_healthy_radar_source_quality > 0 {
+        issues.push(format!(
+            "{non_healthy_radar_source_quality} non-healthy radar source-quality window(s)"
+        ));
+    }
     if bad_secrets > 0 {
         issues.push(format!("{bad_secrets} missing or unhealthy credentials"));
     }
@@ -6397,6 +6451,7 @@ fn ops_health_score(snapshot: &OpsSnapshot) -> OpsHealthScore {
         + (failed_jobs * 8)
         + (dead_edge * 8)
         + (failed_sources * 5)
+        + (non_healthy_radar_source_quality * 4)
         + (bad_secrets * 6)
         + (failed_deliveries * 4)
         + (x_drift * 6)
@@ -6488,6 +6543,15 @@ fn render_ops_summary(snapshot: &OpsSnapshot, score: &OpsHealthScore) -> String 
                     .source_health
                     .iter()
                     .map(|source| source.status.as_str()),
+            ),
+        ),
+        (
+            "Radar source quality",
+            summarize_counts(
+                snapshot
+                    .radar_source_quality
+                    .iter()
+                    .map(|quality| quality.status.as_str()),
             ),
         ),
         (
@@ -6693,6 +6757,41 @@ fn filtered_source_health<'a>(
                 )
         })
         .collect()
+}
+
+fn filtered_radar_source_quality<'a>(
+    snapshot: &'a OpsSnapshot,
+    options: &OpsUiOptions,
+) -> Vec<&'a arcwell_core::RadarSourceQuality> {
+    let mut rows = snapshot
+        .radar_source_quality
+        .iter()
+        .filter(|quality| {
+            matches_status(&quality.status, options)
+                && matches_query(
+                    options,
+                    [
+                        quality.run_id.as_str(),
+                        quality.source_kind.as_str(),
+                        quality.locator.as_str(),
+                        quality.status.as_str(),
+                    ],
+                )
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| match normalized_sort(options) {
+        "updated_asc" => left.created_at.cmp(&right.created_at),
+        "status" => left
+            .status
+            .cmp(&right.status)
+            .then(left.created_at.cmp(&right.created_at)),
+        "kind" => left
+            .source_kind
+            .cmp(&right.source_kind)
+            .then(left.locator.cmp(&right.locator)),
+        _ => right.created_at.cmp(&left.created_at),
+    });
+    rows
 }
 
 fn filtered_secret_health<'a>(
@@ -15068,6 +15167,84 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
         assert!(html.contains("stale since"));
         assert!(html.contains("changed tweet"));
         assert!(html.contains("X portable export is stale"));
+    }
+
+    #[test]
+    fn severe_ops_ui_surfaces_radar_source_quality_without_raw_html() {
+        // CLAIM: Radar source-quality windows are operator-visible in ops, affect
+        // health scoring, and preserve hostile source locator text as escaped data.
+        // ORACLE: A real radar run creates a low-signal source-quality row; the
+        // snapshot and filtered HTML expose it, but raw script markup never renders.
+        // SEVERITY: Severe because source-quality rows are misleading if hidden
+        // from ops, and locators are untrusted provider/user-controlled text.
+        let paths = test_paths("ops-ui-radar-source-quality");
+        let store = Store::open(paths).unwrap();
+        let hostile_locator = "https://example.com/low-signal-feed.xml?<script>alert(1)</script>";
+        store
+            .add_source_card(SourceCardInput {
+                title: "Quiet source note".to_string(),
+                url: "https://example.com/quiet-source-note".to_string(),
+                source_type: "rss".to_string(),
+                provider: "rss".to_string(),
+                summary: "A tiny ordinary update without strong launch or security signals."
+                    .to_string(),
+                claims: vec![],
+                retrieved_at: Some("2026-06-24T00:00:00Z".to_string()),
+                metadata: json!({
+                    "source_kind": "rss",
+                    "source_detail": hostile_locator,
+                    "id": "quiet-source-note"
+                }),
+            })
+            .unwrap();
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "ops-quality-radar".to_string(),
+                description: "Ops source-quality radar".to_string(),
+                window_hours: 24,
+                min_score: 9.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "Quiet source note" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({}),
+            })
+            .unwrap();
+        store.run_radar_profile(&profile.id, None).unwrap();
+
+        let snapshot = store.ops_snapshot().unwrap();
+        assert_eq!(snapshot.radar_source_quality.len(), 1);
+        assert_eq!(snapshot.radar_source_quality[0].status, "low_signal");
+        assert!(
+            snapshot
+                .health
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Radar source quality")
+                    && warning.contains("non-healthy")),
+            "{:?}",
+            snapshot.health.warnings
+        );
+
+        let html = render_ops_ui_with_options(
+            &snapshot,
+            &OpsUiOptions {
+                q: Some("low-signal-feed".to_string()),
+                status: Some("low_signal".to_string()),
+                sort: "status".to_string(),
+                detail: None,
+                notice: None,
+            },
+            None,
+            false,
+        );
+        assert!(html.contains("Radar source quality"));
+        assert!(html.contains("Radar Source Quality"));
+        assert!(html.contains("low_signal"));
+        assert!(html.contains("non-healthy radar source-quality window"));
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!html.contains("<script>alert(1)</script>"));
     }
 
     #[tokio::test]
