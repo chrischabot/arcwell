@@ -25,6 +25,9 @@ Current first-pass implementation:
 - `scripts/ops-ui-browser-smoke` runs browser-backed desktop, detail, and
   mobile validation against a seeded authenticated local `/ops/ui`, preserving
   screenshots and a proof packet under `.arcwell-dev/proofs/`.
+- `scripts/ops-ui-x-browser-smoke` runs browser-backed desktop, filtered, and
+  mobile validation for hostile X tweet/link/provider-error rows, including
+  token-like provider-error redaction, local dummy-secret non-rendering, row-focused screenshots, and no body overflow.
 - Broader mutating controls remain deferred until each action has explicit
   core support, auth, policy, CSRF/origin, idempotency/replay handling, and
   severe tests.
@@ -40,5 +43,5 @@ MCP resources:
 Remaining work:
 
 - Manual requeue/cancel controls with confirmation policy.
-- More browser fixtures for X-specific hostile rows and future mutating controls.
+- More browser fixtures for future mutating controls.
 - Error charts, watchdog summaries, and recent failures.

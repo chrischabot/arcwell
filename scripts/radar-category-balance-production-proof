@@ -1,0 +1,397 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "BLOCKED: node is required for JSON assertions." >&2
+  exit 2
+fi
+
+RUN_STAMP="${ARCWELL_RADAR_CATEGORY_BALANCE_PROOF_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_RADAR_CATEGORY_BALANCE_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/radar-category-balance-production-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_RADAR_CATEGORY_BALANCE_PROOF_HOME:-$PROOF_ROOT/home}"
+
+RSS_URL="${ARCWELL_RADAR_CATEGORY_BALANCE_RSS_URL:-https://hnrss.org/newest?points=100}"
+GITHUB_OWNER="${ARCWELL_RADAR_CATEGORY_BALANCE_GITHUB_OWNER:-Thysrael}"
+ARXIV_QUERY="${ARCWELL_RADAR_CATEGORY_BALANCE_ARXIV_QUERY:-cat:cs.AI}"
+HACKERNEWS_FEED="${ARCWELL_RADAR_CATEGORY_BALANCE_HACKERNEWS_FEED:-frontpage}"
+PROFILE_ONE_NAME="${ARCWELL_RADAR_CATEGORY_BALANCE_PROFILE_ONE_NAME:-category-balance-live-proof-$RUN_STAMP}"
+PROFILE_TWO_NAME="${ARCWELL_RADAR_CATEGORY_BALANCE_PROFILE_TWO_NAME:-category-balance-repeat-proof-$RUN_STAMP}"
+MIN_ITEMS_PER_RUN="${ARCWELL_RADAR_CATEGORY_BALANCE_MIN_ITEMS_PER_RUN:-10}"
+MIN_CATEGORY_QUOTA_TOTAL="${ARCWELL_RADAR_CATEGORY_BALANCE_MIN_CATEGORY_QUOTA_TOTAL:-4}"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[radar-category-balance-proof] %s\n' "$*"
+}
+
+PROFILE_ONE_METADATA_JSON="$(
+  node -e 'console.log(JSON.stringify({ balance: { category_quotas: { rss: 1, github: 1, arxiv: 1, hackernews: 1 } } }))'
+)"
+PROFILE_TWO_METADATA_JSON="$(
+  node -e 'console.log(JSON.stringify({ balance: { category_quotas: { rss: 2, github: 2, arxiv: 2, hackernews: 2 } } }))'
+)"
+
+create_profile() {
+  local name="$1"
+  local metadata_json="$2"
+  local output="$3"
+  "$ARCWELL_BIN" radar profile create "$name" \
+    --description "Production-data radar category-balance proof over public RSS, GitHub, arXiv, and Hacker News sources." \
+    --window-hours 168 \
+    --min-score 1 \
+    --max-items 40 \
+    --selector-json "{\"kind\":\"rss\",\"locator\":\"$RSS_URL\",\"limit\":14}" \
+    --selector-json "{\"kind\":\"github_owner\",\"locator\":\"$GITHUB_OWNER\",\"limit\":14}" \
+    --selector-json "{\"kind\":\"arxiv\",\"locator\":\"$ARXIV_QUERY\",\"limit\":14}" \
+    --selector-json "{\"kind\":\"hackernews\",\"locator\":\"$HACKERNEWS_FEED\",\"limit\":10}" \
+    --metadata-json "$metadata_json" \
+    >"$output"
+}
+
+log "proof root: $PROOF_ROOT"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+log "creating first live category-balanced radar profile: $PROFILE_ONE_NAME"
+create_profile "$PROFILE_ONE_NAME" "$PROFILE_ONE_METADATA_JSON" "$ARTIFACT_DIR/profile-one.json"
+
+log "creating second live category-balanced radar profile: $PROFILE_TWO_NAME"
+create_profile "$PROFILE_TWO_NAME" "$PROFILE_TWO_METADATA_JSON" "$ARTIFACT_DIR/profile-two.json"
+
+log "enqueueing live category-balance radar runs"
+"$ARCWELL_BIN" radar enqueue "$PROFILE_ONE_NAME" --window-hours 168 --fetch-live \
+  >"$ARTIFACT_DIR/enqueue-one.json"
+"$ARCWELL_BIN" radar enqueue "$PROFILE_TWO_NAME" --window-hours 168 --fetch-live \
+  >"$ARTIFACT_DIR/enqueue-two.json"
+
+log "draining local worker"
+"$ARCWELL_BIN" worker run-once --max-jobs 12 >"$ARTIFACT_DIR/worker.json"
+
+node - "$ARTIFACT_DIR/worker.json" "$ARTIFACT_DIR/run-ids.json" "$MIN_ITEMS_PER_RUN" <<'NODE'
+const fs = require("fs");
+const [workerPath, runIdsPath, minItemsRaw] = process.argv.slice(2);
+const minItems = Number(minItemsRaw);
+const worker = JSON.parse(fs.readFileSync(workerPath, "utf8"));
+
+function fail(message, detail) {
+  console.error(message);
+  if (detail !== undefined) console.error(JSON.stringify(detail, null, 2));
+  process.exit(1);
+}
+
+const jobs = Array.isArray(worker.jobs) ? worker.jobs : [];
+const radarJobs = jobs.filter((job) => job.kind === "radar_run");
+if (radarJobs.length !== 2) fail("worker should process exactly two radar_run jobs", worker);
+
+const runIds = [];
+for (const radarJob of radarJobs) {
+  if (radarJob.status !== "completed") fail("radar worker job did not complete", radarJob);
+  const result = radarJob.result_json || {};
+  if (result.fetch_live !== true) fail("radar worker result did not preserve fetch_live=true", result);
+  if (result.status !== "scored") fail("radar run did not reach scored status", result);
+  if (Number(result.items_inserted || 0) < minItems) fail("radar run inserted too few real items", result);
+  if (Number(result.scores_inserted || 0) < Number(result.items_inserted || 0)) {
+    fail("radar run did not score all inserted items", result);
+  }
+  const adapterJobs = Array.isArray(result.adapter_jobs) ? result.adapter_jobs : [];
+  const kinds = new Set(adapterJobs.map((job) => job.kind));
+  for (const expected of ["rss_fetch", "github_owner", "arxiv_search", "hackernews_fetch"]) {
+    if (!kinds.has(expected)) fail(`missing adapter job ${expected}`, adapterJobs);
+  }
+  const failed = adapterJobs.filter((job) => job.status !== "completed");
+  if (failed.length) fail("one or more adapter jobs failed", failed);
+  if (!result.run_id) fail("radar worker result has no run_id", result);
+  runIds.push(result.run_id);
+}
+
+fs.writeFileSync(runIdsPath, `${JSON.stringify({ run_ids: runIds }, null, 2)}\n`);
+NODE
+
+RUN_ONE_ID="$(node -e 'const fs=require("fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).run_ids[0])' "$ARTIFACT_DIR/run-ids.json")"
+RUN_TWO_ID="$(node -e 'const fs=require("fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).run_ids[1])' "$ARTIFACT_DIR/run-ids.json")"
+
+log "reading stage/audit/summary for first run: $RUN_ONE_ID"
+"$ARCWELL_BIN" radar stage "$RUN_ONE_ID" >"$ARTIFACT_DIR/stage-one.json"
+"$ARCWELL_BIN" radar audit "$RUN_ONE_ID" >"$ARTIFACT_DIR/audit-one.json"
+"$ARCWELL_BIN" radar summarize "$RUN_ONE_ID" >"$ARTIFACT_DIR/summary-write-one.json"
+"$ARCWELL_BIN" radar summary "$RUN_ONE_ID" >"$ARTIFACT_DIR/summary-read-one.json"
+
+log "reading stage/audit/summary for second run: $RUN_TWO_ID"
+"$ARCWELL_BIN" radar stage "$RUN_TWO_ID" >"$ARTIFACT_DIR/stage-two.json"
+"$ARCWELL_BIN" radar audit "$RUN_TWO_ID" >"$ARTIFACT_DIR/audit-two.json"
+"$ARCWELL_BIN" radar summarize "$RUN_TWO_ID" >"$ARTIFACT_DIR/summary-write-two.json"
+"$ARCWELL_BIN" radar summary "$RUN_TWO_ID" >"$ARTIFACT_DIR/summary-read-two.json"
+
+"$ARCWELL_BIN" cursors list >"$ARTIFACT_DIR/cursors.json"
+"$ARCWELL_BIN" ops >"$ARTIFACT_DIR/ops.json"
+
+log "validating category-balance proof artifacts"
+node - "$ARTIFACT_DIR" "$PROOF_ROOT" "$RSS_URL" "$GITHUB_OWNER" "$ARXIV_QUERY" "$HACKERNEWS_FEED" "$MIN_CATEGORY_QUOTA_TOTAL" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const [
+  artifactDir,
+  proofRoot,
+  rssUrl,
+  githubOwner,
+  arxivQuery,
+  hackernewsFeed,
+  minCategoryQuotaTotalRaw,
+] = process.argv.slice(2);
+const minCategoryQuotaTotal = Number(minCategoryQuotaTotalRaw);
+
+const read = (name) => JSON.parse(fs.readFileSync(path.join(artifactDir, name), "utf8"));
+const worker = read("worker.json");
+const cursors = read("cursors.json");
+const ops = read("ops.json");
+
+function assert(condition, message, detail) {
+  if (!condition) {
+    console.error(`FAIL: ${message}`);
+    if (detail !== undefined) console.error(JSON.stringify(detail, null, 2));
+    process.exit(1);
+  }
+}
+
+function normalize(value) {
+  if (typeof value !== "string") return null;
+  const key = value.trim().toLowerCase();
+  if (!key || key.length > 80) return null;
+  return /^[a-z0-9_-]+$/.test(key) ? key : null;
+}
+
+function categoryFor(item, score, quotaKeys) {
+  const candidates = new Set();
+  for (const value of [item.source_kind, item.provider]) {
+    const normalized = normalize(value);
+    if (normalized) candidates.add(normalized);
+  }
+  for (const key of ["category", "category_group", "topic", "source_type"]) {
+    const normalized = normalize(item.metadata?.[key]);
+    if (normalized) candidates.add(normalized);
+  }
+  for (const key of ["categories", "topics"]) {
+    const values = item.metadata?.[key];
+    if (Array.isArray(values)) {
+      for (const value of values) {
+        const normalized = normalize(value);
+        if (normalized) candidates.add(normalized);
+      }
+    }
+  }
+  for (const tag of score.tags || []) {
+    const normalized = normalize(tag);
+    if (normalized) candidates.add(normalized);
+  }
+  return quotaKeys.find((key) => candidates.has(key)) || null;
+}
+
+function validateRun(label, files) {
+  const profile = read(files.profile);
+  const enqueue = read(files.enqueue);
+  const stage = read(files.stage);
+  const audit = read(files.audit);
+  const summaryWrite = read(files.summaryWrite);
+  const summaryRead = read(files.summaryRead);
+
+  assert(profile.status === "local_proof_ready", `${label}: profile should be supported by local projection`, profile);
+  assert(enqueue.kind === "radar_run" && enqueue.status === "pending", `${label}: enqueue should create pending radar_run job`, enqueue);
+  assert(stage.run?.status === "scored", `${label}: run should be scored`, stage.run);
+  assert(Array.isArray(stage.items) && stage.items.length >= 10, `${label}: stage should contain real normalized items`, { count: stage.items?.length });
+  assert(Array.isArray(stage.scores) && stage.scores.length >= stage.items.length, `${label}: stage should contain score overlays`, { items: stage.items?.length, scores: stage.scores?.length });
+
+  const quotas = profile.metadata?.balance?.category_quotas || {};
+  const quotaKeys = Object.keys(quotas).sort();
+  assert(quotaKeys.length >= 4, `${label}: profile should preserve category quotas`, profile.metadata);
+  assert(JSON.stringify(stage.run.metadata?.balance_config?.category_quotas || {}) === JSON.stringify(quotas), `${label}: run metadata should record active category quotas`, stage.run.metadata);
+
+  const itemById = new Map(stage.items.map((item) => [item.id, item]));
+  const heuristicScores = stage.scores.filter((score) => score.score_kind === "heuristic_v1");
+  const selectedScores = heuristicScores.filter((score) => score.status === "selected");
+  const categoryQuotaScores = heuristicScores.filter((score) => score.status === "category_quota");
+  assert(selectedScores.length >= quotaKeys.length, `${label}: balanced run should still select at least one item per category`, { selected: selectedScores.length, quotaKeys });
+  assert(categoryQuotaScores.length >= 1, `${label}: run should produce category_quota rows on real data`, heuristicScores);
+
+  const selectedByCategory = new Map();
+  const quotaByCategory = new Map();
+  for (const score of selectedScores) {
+    const item = itemById.get(score.item_id);
+    assert(item, `${label}: selected score should reference an item`, score);
+    const category = categoryFor(item, score, quotaKeys);
+    if (category) selectedByCategory.set(category, (selectedByCategory.get(category) || 0) + 1);
+  }
+  for (const score of categoryQuotaScores) {
+    const item = itemById.get(score.item_id);
+    assert(item, `${label}: category_quota score should reference an item`, score);
+    assert(item.source_card_id, `${label}: category_quota item should preserve source-card provenance`, item);
+    assert(item.wiki_page_id, `${label}: category_quota item should preserve wiki provenance`, item);
+    assert(String(score.reason || "").includes("category quota cap"), `${label}: category_quota score should explain the cap`, score);
+    assert((score.tags || []).includes("category-quota"), `${label}: category_quota score should carry category-quota tag`, score);
+    const category = categoryFor(item, score, quotaKeys);
+    assert(category, `${label}: category_quota row should map to a configured category`, { item, score, quotaKeys });
+    assert((score.tags || []).includes(`category-quota-${category}`), `${label}: category_quota row should carry category-specific tag`, score);
+    quotaByCategory.set(category, (quotaByCategory.get(category) || 0) + 1);
+  }
+
+  for (const [category, count] of selectedByCategory.entries()) {
+    assert(count <= quotas[category], `${label}: selected rows should respect category quota`, { category, count, quota: quotas[category], selectedByCategory: Object.fromEntries(selectedByCategory) });
+  }
+  assert(quotaByCategory.size === quotaKeys.length, `${label}: proof should exercise every configured source-family category with quota rejections`, { quotaByCategory: Object.fromEntries(quotaByCategory), quotaKeys });
+
+  const distribution = stage.run.metadata?.score_distribution || {};
+  assert(distribution.score_kind === "heuristic_v1", `${label}: run metadata should record heuristic score distribution`, distribution);
+  assert(distribution.status_counts?.category_quota === categoryQuotaScores.length, `${label}: score distribution should count category_quota rows`, { distribution, categoryQuotaCount: categoryQuotaScores.length });
+  assert(Number(distribution.score_count || 0) === heuristicScores.length, `${label}: score distribution should cover heuristic rows`, { distribution, heuristic_score_count: heuristicScores.length });
+  assert(Number(distribution.selected_count || 0) === selectedScores.length, `${label}: score distribution selected_count should match scores`, { distribution, selected_count: selectedScores.length });
+
+  assert(audit.ok === true, `${label}: radar audit should pass`, audit);
+  assert(audit.item_count === stage.items.length, `${label}: audit item count should match stage`, audit);
+  assert(summaryWrite.audit_status === "audit_ok", `${label}: summary write should require audit_ok`, summaryWrite);
+  assert(summaryRead.id === summaryWrite.id, `${label}: summary read should return the written summary`, { summaryWrite, summaryRead });
+  assert(summaryRead.metadata?.not_delivery === true, `${label}: summary must remain non-delivery`, summaryRead.metadata);
+
+  const opsRun = (ops.radar_runs || []).find((run) => run.id === stage.run.id);
+  assert(opsRun, `${label}: ops snapshot should expose the radar run`, ops.radar_runs);
+  assert(JSON.stringify(opsRun.metadata?.balance_config?.category_quotas || {}) === JSON.stringify(quotas), `${label}: ops radar run should expose category balance config`, opsRun);
+  assert(opsRun.metadata?.score_distribution?.status_counts?.category_quota === categoryQuotaScores.length, `${label}: ops radar run should expose category_quota distribution`, opsRun);
+
+  return {
+    label,
+    run_id: stage.run.id,
+    profile_id: profile.id,
+    profile_name: profile.name,
+    quotas,
+    item_count: stage.items.length,
+    heuristic_score_count: heuristicScores.length,
+    selected_count: selectedScores.length,
+    category_quota_count: categoryQuotaScores.length,
+    selected_by_category: Object.fromEntries(selectedByCategory),
+    quota_rejections_by_category: Object.fromEntries(quotaByCategory),
+    score_distribution: {
+      score_kind: distribution.score_kind,
+      score_count: distribution.score_count,
+      selected_count: distribution.selected_count,
+      status_counts: distribution.status_counts,
+      min: distribution.min,
+      max: distribution.max,
+      average: distribution.average,
+      p50: distribution.p50,
+      p90: distribution.p90,
+    },
+    audit: {
+      ok: audit.ok,
+      item_count: audit.item_count,
+      fts_count: audit.fts_count,
+      scored_count: audit.scored_count,
+      findings: audit.findings,
+    },
+    summary: {
+      id: summaryRead.id,
+      audit_status: summaryRead.audit_status,
+      item_count: summaryRead.item_ids.length,
+      source_card_count: summaryRead.source_card_ids.length,
+      not_delivery: summaryRead.metadata.not_delivery,
+    },
+  };
+}
+
+assert(worker.processed >= 2 && worker.completed >= 2, "worker should process and complete both radar jobs", worker);
+
+const runs = [
+  validateRun("quota-one", {
+    profile: "profile-one.json",
+    enqueue: "enqueue-one.json",
+    stage: "stage-one.json",
+    audit: "audit-one.json",
+    summaryWrite: "summary-write-one.json",
+    summaryRead: "summary-read-one.json",
+  }),
+  validateRun("quota-two", {
+    profile: "profile-two.json",
+    enqueue: "enqueue-two.json",
+    stage: "stage-two.json",
+    audit: "audit-two.json",
+    summaryWrite: "summary-write-two.json",
+    summaryRead: "summary-read-two.json",
+  }),
+];
+
+const totalCategoryQuota = runs.reduce((sum, run) => sum + run.category_quota_count, 0);
+assert(totalCategoryQuota >= minCategoryQuotaTotal, "aggregate proof should produce enough category_quota rows", { totalCategoryQuota, minCategoryQuotaTotal, runs });
+
+const cursorKeys = new Set((cursors || []).map((cursor) => cursor.key));
+assert(cursorKeys.has(`rss:${rssUrl}`), "RSS cursor should advance after durable writes", cursors);
+assert(cursorKeys.has(`github-owner:${githubOwner}`), "GitHub cursor should advance after durable writes", cursors);
+assert(cursorKeys.has(`arxiv:${arxivQuery}`), "arXiv cursor should advance after durable writes", cursors);
+assert(cursorKeys.has("hackernews:topstories"), "Hacker News cursor should advance after durable writes", cursors);
+
+const health = Array.isArray(ops.source_health) ? ops.source_health : [];
+const hasHealthy = (provider, locatorNeedle) =>
+  health.some((row) =>
+    row.provider === provider &&
+    row.status === "healthy" &&
+    String(row.locator || row.key || "").includes(locatorNeedle)
+  );
+assert(hasHealthy("rss", rssUrl), "ops should show healthy RSS source", health);
+assert(hasHealthy("github", githubOwner), "ops should show healthy GitHub source", health);
+assert(hasHealthy("arxiv", arxivQuery), "ops should show healthy arXiv source", health);
+assert(hasHealthy("hackernews", "topstories"), "ops should show healthy Hacker News source", health);
+
+const proofPacket = {
+  proof_name: "radar-category-balance-production-proof",
+  proof_level: "Production Data Proof for category balance caps over two worker-drained live public radar profiles",
+  proof_root: proofRoot,
+  arcwell_home: process.env.ARCWELL_HOME,
+  source_families: [
+    { provider: "rss", locator: rssUrl },
+    { provider: "github", locator: githubOwner },
+    { provider: "arxiv", locator: arxivQuery },
+    { provider: "hackernews", locator: hackernewsFeed },
+  ],
+  worker: {
+    processed: worker.processed,
+    completed: worker.completed,
+    failed: worker.failed,
+    dead_lettered: worker.dead_lettered,
+  },
+  runs,
+  aggregate: {
+    run_count: runs.length,
+    item_count: runs.reduce((sum, run) => sum + run.item_count, 0),
+    heuristic_score_count: runs.reduce((sum, run) => sum + run.heuristic_score_count, 0),
+    selected_count: runs.reduce((sum, run) => sum + run.selected_count, 0),
+    category_quota_count: totalCategoryQuota,
+  },
+  cursor_keys: [...cursorKeys].filter((key) =>
+    key === `rss:${rssUrl}` ||
+    key === `github-owner:${githubOwner}` ||
+    key === `arxiv:${arxivQuery}` ||
+    key === "hackernews:topstories"
+  ),
+  remaining_risk: [
+    "This proves category quota caps over two worker-drained live public profiles using source-family category tags, not every future topic taxonomy.",
+    "It does not prove Reddit OAuth, authenticated X, model synthesis/enrichment, live external delivery, seven-day source-quality decay, or long-running scheduled service execution.",
+  ],
+};
+
+fs.writeFileSync(
+  path.join(artifactDir, "proof-packet.json"),
+  `${JSON.stringify(proofPacket, null, 2)}\n`
+);
+process.stdout.write(JSON.stringify(proofPacket, null, 2));
+NODE
+
+printf '\n'
+log "category-balance production-data proof passed"
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"

@@ -249,10 +249,12 @@ PR, implementation note, or final report:
       queues, credential scope/expiry detail, richer archive import run
       summaries, portable export freshness, monitor staleness, and future failed/superseded
       archive/export/scoring syncs.
-- [ ] Add X browser validation for ops UI: hostile tweet/profile/link/error
-      strings are escaped, token-like strings are redacted, dense tables do not
-      clip/overlap on desktop/mobile, empty states are clear, and POST controls
-      require auth/origin/CSRF/idempotency/policy.
+- [x] Add X browser validation for ops UI: `scripts/ops-ui-x-browser-smoke`
+      seeds hostile X tweet/link/provider-error data, proves X summary/source
+      health/source-card rows render as inert text, verifies token-like provider
+      errors are redacted, checks desktop/mobile overflow, and preserves
+      screenshots plus a proof packet at
+      `.arcwell-dev/proofs/ops-ui-x-browser-smoke-20260624T104008Z-90805`.
 - [x] Add X portable export/import/validate for canonical tweet rows with
       deterministic JSONL shards, manifest hashes, row counts, token-like
       content scan, malformed JSONL failure, idempotent import, unsafe shard
@@ -456,13 +458,20 @@ PR, implementation note, or final report:
       selected-by-source caps, score distribution counts, audit-ok summary,
       cursor/source-health state, and ops visibility at
       `.arcwell-dev/proofs/radar-balance-production-proof-20260624T102938Z-92096`.
+- [x] Add repeatable production-data source-family category-balance proof:
+      `scripts/radar-category-balance-production-proof` creates two disposable
+      live public RSS/GitHub/arXiv/Hacker News profiles with different
+      category quotas, drains the worker, verifies category-quota score rows,
+      selected-by-category caps, score distribution counts, audit-ok summaries,
+      cursor/source-health state, and ops visibility at
+      `.arcwell-dev/proofs/radar-category-balance-production-proof-20260624T104401Z-30612`.
 - [ ] Add model-backed synthesis, live production delivery proof, live external
       scheduled delivery/service proof, production cross-channel delivery proof,
       production quiet-hours deferral, production-data semantic dedupe breadth
-      across more profiles, broader category-quota/multi-profile balance
-      review, live model-scoring quality proof, seven-day source-quality
-      trend/decay proof, broader ops controls, and status promotion only after
-      real-data gates pass.
+      across more profiles, non-source-family taxonomy category-balance review,
+      live model-scoring quality proof, seven-day source-quality trend/decay
+      proof, broader ops controls, and status promotion only after real-data
+      gates pass.
 - [x] Preserve tracked email defaults as `agent@example.com` and
       `user@example.com`; `scripts/verify-tracked-email-placeholders` now scans
       git-tracked files and fails on non-placeholder email domains so real local

@@ -32940,6 +32940,11 @@ fn radar_balance_category_for_item(
 
 fn radar_balance_category_candidates(item: &RadarItem, tags: &[String]) -> BTreeSet<String> {
     let mut candidates = BTreeSet::new();
+    for value in [item.source_kind.as_str(), item.provider.as_str()] {
+        if let Ok(category) = normalize_radar_balance_key(value, "category") {
+            candidates.insert(category);
+        }
+    }
     for key in ["category", "category_group", "topic", "source_type"] {
         if let Some(value) = item.metadata.get(key).and_then(Value::as_str)
             && let Ok(category) = normalize_radar_balance_key(value, "category")
@@ -48441,6 +48446,151 @@ reason = "radar model score denied"
             assert!(item.source_card_id.is_some(), "{item:?}");
             assert!(item.wiki_page_id.is_some(), "{item:?}");
         }
+
+        let audit = store.audit_radar_run(&report.run.id).unwrap();
+        assert!(audit.ok, "{audit:?}");
+    }
+
+    #[test]
+    fn severe_radar_category_quota_matches_projected_source_card_provider_family() {
+        // CLAIM: category quotas can balance source-card projected items by
+        // their real provider/source family, not just the generic `source_card`
+        // item kind or hand-authored topic tags.
+        // ORACLE: two providers with two eligible items each produce exactly
+        // one selected item and one category_quota row per provider, with the
+        // provider-specific category tag preserved.
+        // SEVERITY: Severe because production-data balance proofs configure
+        // provider-family quotas; ignoring provider/source metadata makes the
+        // proof look broad while silently leaving families uncapped.
+        let store = test_store("radar-provider-category-quota");
+        for (title, url, source_type, provider, summary) in [
+            (
+                "Quartz provider balance launch",
+                "https://example.com/rss-quartz",
+                "article",
+                "rss",
+                "Quartz provider balance launch note for source-card quota proof.",
+            ),
+            (
+                "Maple provider balance funding",
+                "https://example.com/rss-maple",
+                "article",
+                "rss",
+                "Maple provider balance funding note for source-card quota proof.",
+            ),
+            (
+                "Lumen provider balance benchmark",
+                "https://news.ycombinator.com/item?id=456",
+                "discussion",
+                "hackernews",
+                "Lumen provider balance benchmark note for source-card quota proof.",
+            ),
+            (
+                "Nimbus provider balance incident",
+                "https://news.ycombinator.com/item?id=789",
+                "discussion",
+                "hackernews",
+                "Nimbus provider balance incident note for source-card quota proof.",
+            ),
+        ] {
+            store
+                .add_source_card(SourceCardInput {
+                    title: title.to_string(),
+                    url: url.to_string(),
+                    source_type: source_type.to_string(),
+                    provider: provider.to_string(),
+                    summary: summary.to_string(),
+                    claims: vec![],
+                    retrieved_at: Some(now()),
+                    metadata: json!({
+                        "source_detail": url,
+                    }),
+                })
+                .unwrap();
+        }
+
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "provider-family-balanced-radar".to_string(),
+                description: "Provider family balanced radar".to_string(),
+                window_hours: 24,
+                min_score: 1.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "provider balance" }]),
+                delivery_policy: json!({ "delivery": "manual_only" }),
+                model_policy: json!({ "model_scoring": "disabled" }),
+                metadata: json!({
+                    "balance": {
+                        "category_quotas": {
+                            "rss": 1,
+                            "hackernews": 1
+                        }
+                    }
+                }),
+            })
+            .unwrap();
+
+        let report = store.run_radar_profile(&profile.id, None).unwrap();
+        assert_eq!(report.items_inserted, 4);
+        assert_eq!(report.scores_inserted, 4);
+        assert_eq!(report.selected_items, 2);
+
+        let stage = store.read_radar_stage(&report.run.id).unwrap();
+        let item_by_id = stage
+            .items
+            .iter()
+            .map(|item| (item.id.clone(), item))
+            .collect::<BTreeMap<_, _>>();
+        let selected = stage
+            .scores
+            .iter()
+            .filter(|score| score.status == "selected")
+            .collect::<Vec<_>>();
+        let category_quota = stage
+            .scores
+            .iter()
+            .filter(|score| score.status == "category_quota")
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 2);
+        assert_eq!(category_quota.len(), 2);
+        assert!(
+            stage
+                .scores
+                .iter()
+                .all(|score| score.status != "source_quota"),
+            "{:?}",
+            stage.scores
+        );
+
+        let mut selected_by_provider = BTreeMap::<String, usize>::new();
+        for score in &selected {
+            let item = item_by_id.get(&score.item_id).unwrap();
+            *selected_by_provider
+                .entry(item.provider.clone())
+                .or_default() += 1;
+        }
+        assert_eq!(selected_by_provider.get("rss"), Some(&1));
+        assert_eq!(selected_by_provider.get("hackernews"), Some(&1));
+
+        let mut rejected_by_provider = BTreeMap::<String, usize>::new();
+        for score in &category_quota {
+            let item = item_by_id.get(&score.item_id).unwrap();
+            *rejected_by_provider
+                .entry(item.provider.clone())
+                .or_default() += 1;
+            assert!(item.source_card_id.is_some(), "{item:?}");
+            assert!(item.wiki_page_id.is_some(), "{item:?}");
+            assert!(score.reason.contains("category quota cap 1"));
+            assert!(score.tags.contains(&"category-quota".to_string()));
+            assert!(
+                score
+                    .tags
+                    .contains(&format!("category-quota-{}", item.provider))
+            );
+        }
+        assert_eq!(rejected_by_provider.get("rss"), Some(&1));
+        assert_eq!(rejected_by_provider.get("hackernews"), Some(&1));
 
         let audit = store.audit_radar_run(&report.run.id).unwrap();
         assert!(audit.ok, "{audit:?}");

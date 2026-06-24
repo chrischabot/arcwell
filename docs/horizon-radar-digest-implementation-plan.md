@@ -214,8 +214,18 @@ Evidence:
   normalized/indexed/scored radar items, selected 4 items with at most one per
   source, kept 36 `source_quota` rows inspectable with source-card/wiki
   provenance, passed `radar audit`, recorded healthy source-health/cursors, and
-  wrote a non-delivery summary. Category balance remains locally proven only
-  because live category tags are source-dependent.
+  wrote a non-delivery summary.
+- Production-data source-family category-balance proof now exists through
+  `scripts/radar-category-balance-production-proof`, preserved at
+  `.arcwell-dev/proofs/radar-category-balance-production-proof-20260624T104401Z-30612/artifacts/proof-packet.json`.
+  Two worker-drained live public RSS/GitHub/arXiv/Hacker News profiles wrote
+  116 normalized/indexed/scored radar items, selected 12 items while respecting
+  per-family quotas, kept 76 `category_quota` rows inspectable with
+  source-card/wiki provenance across all four configured source-family
+  categories, exposed matching run/ops score-distribution counts, advanced all
+  four cursors with healthy source-health, passed both audits, and wrote two
+  non-delivery summaries. This proves source-family category quotas, not
+  arbitrary future topic taxonomies.
 
 Still not proven by this slice:
 
@@ -224,7 +234,7 @@ Still not proven by this slice:
   controls.
 - Full recursive HN/Reddit community-thread capture.
 - Production-data semantic/topic dedupe breadth across more profiles,
-  broader category-quota/multi-profile balance review, source-quality decay.
+  non-source-family taxonomy category-balance review, source-quality decay.
 - Model-backed interestingness, enrichment/synthesis, and delivery attempts.
 - Full production multi-source proof including authenticated/private sources.
 
@@ -1434,7 +1444,11 @@ Required:
       `scripts/radar-balance-production-proof` selected 4 live items from 52
       scored rows and produced 36 inspectable `source_quota` rows.
 - [ ] Show source-quality table.
-- [ ] Show category quota effects.
+- [x] Show source-family category quota effects:
+      `scripts/radar-category-balance-production-proof` selected 12 live items
+      from 116 scored rows and produced 76 inspectable `category_quota` rows
+      across all four configured source-family categories in two quota
+      configurations.
 - [ ] Show overlap/dedupe groups.
 - [ ] Show at least one stale/failing source or controlled disabled source
       surfaced honestly.

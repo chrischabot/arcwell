@@ -1,0 +1,408 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+if ! command -v agent-browser >/dev/null 2>&1; then
+  echo "BLOCKED: agent-browser is required for X /ops/ui browser smoke." >&2
+  exit 2
+fi
+
+for required in node curl; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for X /ops/ui browser smoke." >&2
+    exit 2
+  fi
+done
+
+RUN_STAMP="${ARCWELL_OPS_UI_X_BROWSER_SMOKE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_OPS_UI_X_BROWSER_SMOKE_DIR:-$REPO_ROOT/.arcwell-dev/proofs/ops-ui-x-browser-smoke-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_OPS_UI_X_BROWSER_SMOKE_HOME:-$PROOF_ROOT/home}"
+AUTH_TOKEN="${ARCWELL_OPS_UI_X_BROWSER_SMOKE_TOKEN:-ops-ui-x-browser-smoke-token-$RUN_STAMP}"
+SESSION="arcwell-ops-ui-x-smoke-$RUN_STAMP"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[ops-ui-x-browser-smoke] %s\n' "$*"
+}
+
+cleanup() {
+  if [ -n "${OPS_SERVER_PID:-}" ] && kill -0 "$OPS_SERVER_PID" >/dev/null 2>&1; then
+    kill "$OPS_SERVER_PID" >/dev/null 2>&1 || true
+    wait "$OPS_SERVER_PID" >/dev/null 2>&1 || true
+  fi
+  if [ -n "${X_FIXTURE_PID:-}" ] && kill -0 "$X_FIXTURE_PID" >/dev/null 2>&1; then
+    kill "$X_FIXTURE_PID" >/dev/null 2>&1 || true
+    wait "$X_FIXTURE_PID" >/dev/null 2>&1 || true
+  fi
+  agent-browser --session "$SESSION" close >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+free_port() {
+  node -e 'const net=require("net"); const server=net.createServer(); server.listen(0,"127.0.0.1",()=>{ const {port}=server.address(); console.log(port); server.close(); });'
+}
+
+OPS_PORT="$(free_port)"
+X_FIXTURE_PORT="$(free_port)"
+BASE_URL="http://127.0.0.1:$OPS_PORT"
+X_FIXTURE_URL="http://127.0.0.1:$X_FIXTURE_PORT"
+
+log "proof root: $PROOF_ROOT"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+
+cat >"$ARTIFACT_DIR/x-provider-error-fixture.js" <<'JS'
+const http = require("http");
+const port = Number(process.argv[2]);
+const body = JSON.stringify({
+  errors: [
+    {
+      title: "X hostile <b>error</b>",
+      detail: "provider detail <img src=x onerror=alert(1)> token=sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+});
+const server = http.createServer((req, res) => {
+  res.writeHead(200, {
+    "content-type": "application/json",
+    "cache-control": "no-store"
+  });
+  res.end(body);
+});
+server.listen(port, "127.0.0.1", () => {
+  console.log(`x fixture listening on ${port}`);
+});
+JS
+
+log "starting loopback X provider-error fixture on $X_FIXTURE_URL"
+node "$ARTIFACT_DIR/x-provider-error-fixture.js" "$X_FIXTURE_PORT" \
+  >"$ARTIFACT_DIR/x-provider-error-fixture.log" 2>&1 &
+X_FIXTURE_PID="$!"
+for _ in $(seq 1 80); do
+  if curl -fsS "$X_FIXTURE_URL/health" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$X_FIXTURE_PID" >/dev/null 2>&1; then
+    echo "BLOCKED: X fixture exited before readiness. See $ARTIFACT_DIR/x-provider-error-fixture.log" >&2
+    exit 2
+  fi
+  sleep 0.1
+done
+if ! curl -fsS "$X_FIXTURE_URL/health" >/dev/null 2>&1; then
+  echo "BLOCKED: X fixture did not become ready. See $ARTIFACT_DIR/x-provider-error-fixture.log" >&2
+  exit 2
+fi
+
+cat >"$ARTIFACT_DIR/x-hostile-import.json" <<'JSON'
+[
+  {
+    "id": "x-hostile-browser-1",
+    "author": "opsbrowser",
+    "text": "X hostile browser payload <script>alert(1)</script> and <img src=x onerror=alert(1)> plus https://example.com/x-hostile?tag=<svg>",
+    "url": "https://x.com/opsbrowser/status/x-hostile-browser-1",
+    "created_at": "2026-06-24T00:00:00Z",
+    "source_kind": "recent_search",
+    "source_detail": "x ops browser <b>detail</b>",
+    "source_metadata": {
+      "x_author_id": "ops-user-1",
+      "author_name": "Ops <b>Browser</b>",
+      "entities": {
+        "urls": [
+          {
+            "url": "https://t.co/hostile",
+            "expanded_url": "https://example.com/x-hostile?tag=<svg>",
+            "display_url": "example.com/<svg>"
+          }
+        ]
+      }
+    }
+  }
+]
+JSON
+
+log "seeding hostile X import and failed provider rows"
+"$ARCWELL_BIN" x import-json "$ARTIFACT_DIR/x-hostile-import.json" \
+  >"$ARTIFACT_DIR/x-import.json"
+"$ARCWELL_BIN" secrets set-value X_BEARER_TOKEN "dummy-x-token-for-local-fixture" \
+  --scope x \
+  --provider x \
+  >"$ARTIFACT_DIR/x-secret.json"
+if ARCWELL_X_API_BASE="$X_FIXTURE_URL" "$ARCWELL_BIN" x recent-search "x ops <script>alert(1)</script>" --max-results 10 \
+  >"$ARTIFACT_DIR/x-recent-search.out" 2>"$ARTIFACT_DIR/x-recent-search.err"; then
+  echo "BLOCKED: hostile X recent-search fixture unexpectedly succeeded" >&2
+  exit 2
+fi
+"$ARCWELL_BIN" x stats >"$ARTIFACT_DIR/x-stats.json"
+"$ARCWELL_BIN" ops >"$ARTIFACT_DIR/ops.json"
+
+node - "$ARTIFACT_DIR/ops.json" <<'NODE'
+const fs = require("fs");
+const ops = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+function assert(condition, message, detail) {
+  if (!condition) {
+    console.error(message);
+    if (detail !== undefined) console.error(JSON.stringify(detail, null, 2));
+    process.exit(1);
+  }
+}
+assert((ops.source_cards || []).some((card) =>
+  String(card.summary || "").includes("<script>alert(1)</script>") &&
+  String(card.summary || "").includes("<img src=x onerror=alert(1)>")
+), "hostile X source-card projection was not present", ops.source_cards);
+assert((ops.source_health || []).some((health) =>
+  health.provider === "x" &&
+  health.status === "failed" &&
+  String(health.locator || "").includes("<script>alert(1)</script>") &&
+  String(health.last_error || "").includes("<img src=x onerror=alert(1)>")
+), "hostile X source-health failure was not present", ops.source_health);
+const opsJson = JSON.stringify(ops);
+assert(!opsJson.includes("sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "raw sk token leaked into ops JSON");
+assert(!opsJson.includes("ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), "raw ghp token leaked into ops JSON");
+assert(opsJson.includes("[REDACTED]"), "ops JSON should include redaction marker for hostile provider token text");
+assert(ops.x_stats?.sync_runs_by_status?.failed === 1, "failed X sync status count missing", ops.x_stats);
+assert(ops.x_stats?.sync_runs_by_status?.completed === 1, "completed X import sync count missing", ops.x_stats);
+NODE
+
+log "starting authenticated local HTTP server on $BASE_URL"
+"$ARCWELL_BIN" serve --addr "127.0.0.1:$OPS_PORT" --auth-token "$AUTH_TOKEN" \
+  >"$ARTIFACT_DIR/server.log" 2>&1 &
+OPS_SERVER_PID="$!"
+
+for _ in $(seq 1 80); do
+  if curl -fsS -H "x-arcwell-http-token: $AUTH_TOKEN" "$BASE_URL/health" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$OPS_SERVER_PID" >/dev/null 2>&1; then
+    echo "BLOCKED: HTTP server exited before readiness. See $ARTIFACT_DIR/server.log" >&2
+    exit 2
+  fi
+  sleep 0.1
+done
+
+if ! curl -fsS -H "x-arcwell-http-token: $AUTH_TOKEN" "$BASE_URL/health" >/dev/null 2>&1; then
+  echo "BLOCKED: HTTP server did not become ready. See $ARTIFACT_DIR/server.log" >&2
+  exit 2
+fi
+
+curl -fsS -H "x-arcwell-http-token: $AUTH_TOKEN" "$BASE_URL/ops/ui" >"$ARTIFACT_DIR/ops-ui.html"
+node - "$ARTIFACT_DIR/ops-ui.html" <<'NODE'
+const fs = require("fs");
+const html = fs.readFileSync(process.argv[2], "utf8");
+function assert(condition, message) {
+  if (!condition) {
+    console.error(message);
+    process.exit(1);
+  }
+}
+for (const forbidden of [
+  "sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "<script>alert(1)</script>",
+  "<img src=x onerror=alert(1)>"
+]) {
+  assert(!html.includes(forbidden), `raw hostile or token-like string leaked into ops UI HTML: ${forbidden}`);
+}
+assert(html.includes("[REDACTED]"), "ops UI HTML should include redaction marker for provider token text");
+assert(html.includes("&lt;script&gt;alert(1)&lt;/script&gt;"), "escaped hostile script text missing from ops UI HTML");
+assert(html.includes("&lt;img src=x onerror=alert(1)&gt;"), "escaped hostile image text missing from ops UI HTML");
+NODE
+
+agent-browser --session "$SESSION" set headers "{\"x-arcwell-http-token\":\"$AUTH_TOKEN\"}" >/dev/null
+
+log "checking desktop X ops rendering"
+agent-browser --session "$SESSION" set viewport 1440 900 >/dev/null
+agent-browser --session "$SESSION" open "$BASE_URL/ops/ui" >/dev/null
+agent-browser --session "$SESSION" wait --load networkidle >/dev/null
+agent-browser --session "$SESSION" screenshot "$ARTIFACT_DIR/desktop.png" >/dev/null
+agent-browser --session "$SESSION" snapshot -i >"$ARTIFACT_DIR/desktop.snapshot.txt"
+agent-browser --session "$SESSION" eval "$(cat <<'JS'
+(() => {
+  const text = document.body.innerText;
+  const must = [
+    "Arcwell Ops",
+    "X drift",
+    "X sync statuses",
+    "X source statuses",
+    "X portable export",
+    "failed:1",
+    "completed:1",
+    "X: opsbrowser x-hostile-browser-1",
+	    "X hostile browser payload <script>alert(1)</script>",
+	    "<img src=x onerror=alert(1)>",
+	    "X hostile <b>error</b>",
+	    "provider detail <img src=x onerror=alert(1)>",
+	    "[REDACTED]"
+	  ];
+  for (const needle of must) {
+    if (!text.includes(needle)) throw new Error(`missing desktop text: ${needle}`);
+  }
+  if (document.querySelectorAll("script, img, svg, iframe").length !== 0) {
+    throw new Error("hostile X payload became executable or embedded DOM");
+  }
+	  if (document.querySelector("td b") || document.querySelector("td [onerror]")) {
+	    throw new Error("hostile X table cell markup became DOM");
+	  }
+	  for (const forbidden of ["dummy-x-token-for-local-fixture", "sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]) {
+	    if (text.includes(forbidden)) throw new Error(`raw token-like string leaked into desktop UI: ${forbidden}`);
+	  }
+	  if (!document.querySelector('input[name="q"]')) throw new Error("missing search input");
+  if (document.documentElement.scrollWidth > window.innerWidth + 4) {
+    throw new Error(`desktop horizontal overflow: ${document.documentElement.scrollWidth} > ${window.innerWidth}`);
+  }
+  return {
+    title: document.title,
+    width: window.innerWidth,
+    sections: document.querySelectorAll("section").length,
+    metrics: document.querySelectorAll(".metric").length,
+    sourceHealthRows: Array.from(document.querySelectorAll("tr")).filter((row) => row.innerText.includes("x_recent_search")).length,
+    hostileSourceCards: Array.from(document.querySelectorAll("tr")).filter((row) => row.innerText.includes("x-hostile-browser-1")).length
+  };
+})()
+JS
+)" >"$ARTIFACT_DIR/desktop.assertion.json"
+agent-browser --session "$SESSION" eval '(() => { Array.from(document.querySelectorAll("h2")).find((h) => h.textContent.trim() === "Source Health")?.scrollIntoView({ block: "start" }); return { scrolled: "Source Health" }; })()' >/dev/null
+agent-browser --session "$SESSION" screenshot "$ARTIFACT_DIR/desktop-source-health.png" >/dev/null
+agent-browser --session "$SESSION" eval '(() => { Array.from(document.querySelectorAll("h2")).find((h) => h.textContent.trim() === "Source Cards")?.scrollIntoView({ block: "start" }); return { scrolled: "Source Cards" }; })()' >/dev/null
+agent-browser --session "$SESSION" screenshot "$ARTIFACT_DIR/desktop-source-cards.png" >/dev/null
+
+log "checking failed-X filtered view"
+FILTERED_URL="$BASE_URL/ops/ui?q=$(node -e 'process.stdout.write(encodeURIComponent("x ops <script>alert(1)</script>"))')&status=failed"
+agent-browser --session "$SESSION" open "$FILTERED_URL" >/dev/null
+agent-browser --session "$SESSION" wait --load networkidle >/dev/null
+agent-browser --session "$SESSION" eval "$(cat <<'JS'
+(() => {
+  const text = document.body.innerText;
+  if (!text.includes("Source Health")) throw new Error("missing source health table");
+	  if (!text.includes("x_recent_search")) throw new Error("missing filtered X source health row");
+	  if (!text.includes("X hostile <b>error</b>")) throw new Error("missing hostile X provider error text");
+	  if (!text.includes("[REDACTED]")) throw new Error("missing redaction marker in filtered view");
+	  for (const forbidden of ["dummy-x-token-for-local-fixture", "sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]) {
+	    if (text.includes(forbidden)) throw new Error(`raw token-like string leaked into filtered UI: ${forbidden}`);
+	  }
+	  if (document.querySelectorAll("script, img, svg, iframe").length !== 0) {
+    throw new Error("filtered hostile X payload became executable or embedded DOM");
+  }
+  if (document.documentElement.scrollWidth > window.innerWidth + 4) {
+    throw new Error(`filtered horizontal overflow: ${document.documentElement.scrollWidth} > ${window.innerWidth}`);
+  }
+  return { url: location.href, filtered: true };
+})()
+JS
+)" >"$ARTIFACT_DIR/filtered.assertion.json"
+agent-browser --session "$SESSION" eval '(() => { Array.from(document.querySelectorAll("h2")).find((h) => h.textContent.trim() === "Source Health")?.scrollIntoView({ block: "start" }); return { scrolled: "Source Health" }; })()' >/dev/null
+agent-browser --session "$SESSION" screenshot "$ARTIFACT_DIR/filtered-source-health.png" >/dev/null
+
+log "checking mobile X ops rendering"
+agent-browser --session "$SESSION" set viewport 390 844 >/dev/null
+agent-browser --session "$SESSION" open "$BASE_URL/ops/ui" >/dev/null
+agent-browser --session "$SESSION" wait --load networkidle >/dev/null
+agent-browser --session "$SESSION" screenshot "$ARTIFACT_DIR/mobile.png" >/dev/null
+agent-browser --session "$SESSION" snapshot -i >"$ARTIFACT_DIR/mobile.snapshot.txt"
+agent-browser --session "$SESSION" eval "$(cat <<'JS'
+(() => {
+  const text = document.body.innerText;
+	  for (const needle of ["Arcwell Ops", "X sync statuses", "failed:1", "X hostile browser payload <script>alert(1)</script>", "[REDACTED]"]) {
+	    if (!text.includes(needle)) throw new Error(`missing mobile text: ${needle}`);
+	  }
+	  for (const forbidden of ["dummy-x-token-for-local-fixture", "sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]) {
+	    if (text.includes(forbidden)) throw new Error(`raw token-like string leaked into mobile UI: ${forbidden}`);
+	  }
+  if (document.querySelectorAll("script, img, svg, iframe").length !== 0) {
+    throw new Error("mobile hostile X payload became executable or embedded DOM");
+  }
+  if (document.documentElement.scrollWidth > window.innerWidth + 4) {
+    throw new Error(`mobile horizontal overflow: ${document.documentElement.scrollWidth} > ${window.innerWidth}`);
+  }
+  return {
+    title: document.title,
+    width: window.innerWidth,
+    sections: document.querySelectorAll("section").length,
+    metrics: document.querySelectorAll(".metric").length
+  };
+})()
+JS
+)" >"$ARTIFACT_DIR/mobile.assertion.json"
+agent-browser --session "$SESSION" eval '(() => { Array.from(document.querySelectorAll("h2")).find((h) => h.textContent.trim() === "Source Health")?.scrollIntoView({ block: "start" }); return { scrolled: "Source Health" }; })()' >/dev/null
+agent-browser --session "$SESSION" screenshot "$ARTIFACT_DIR/mobile-source-health.png" >/dev/null
+agent-browser --session "$SESSION" eval '(() => { const heading = Array.from(document.querySelectorAll("h2")).find((h) => h.textContent.trim() === "Source Health"); const scroll = heading?.closest("section")?.querySelector(".scroll"); if (scroll) scroll.scrollLeft = scroll.scrollWidth; return { scrolled: "Source Health error columns" }; })()' >/dev/null
+agent-browser --session "$SESSION" screenshot "$ARTIFACT_DIR/mobile-source-health-error.png" >/dev/null
+
+agent-browser --session "$SESSION" errors >"$ARTIFACT_DIR/browser-errors.txt" || true
+
+node - "$PROOF_ROOT" "$BASE_URL" "$X_FIXTURE_URL" "$ARTIFACT_DIR" <<'NODE' >"$ARTIFACT_DIR/proof-packet.json"
+const fs = require("fs");
+const [proofRoot, baseUrl, xFixtureUrl, artifactDir] = process.argv.slice(2);
+const readJson = (name) => JSON.parse(fs.readFileSync(`${artifactDir}/${name}`, "utf8"));
+const stats = readJson("x-stats.json");
+const ops = readJson("ops.json");
+const proof = {
+  proof_name: "ops-ui-x-browser-smoke",
+  proof_level: "Browser-backed local HTTP proof for X-specific hostile rows in /ops/ui",
+  proof_root: proofRoot,
+  base_url: baseUrl,
+  x_fixture_url: xFixtureUrl,
+  arcwell_home: process.env.ARCWELL_HOME,
+  artifacts: {
+    desktop_screenshot: `${artifactDir}/desktop.png`,
+    desktop_source_health_screenshot: `${artifactDir}/desktop-source-health.png`,
+    desktop_source_cards_screenshot: `${artifactDir}/desktop-source-cards.png`,
+    filtered_source_health_screenshot: `${artifactDir}/filtered-source-health.png`,
+    mobile_screenshot: `${artifactDir}/mobile.png`,
+    mobile_source_health_screenshot: `${artifactDir}/mobile-source-health.png`,
+    mobile_source_health_error_screenshot: `${artifactDir}/mobile-source-health-error.png`,
+    ops_ui_html: `${artifactDir}/ops-ui.html`,
+    desktop_snapshot: `${artifactDir}/desktop.snapshot.txt`,
+    mobile_snapshot: `${artifactDir}/mobile.snapshot.txt`,
+    browser_errors: `${artifactDir}/browser-errors.txt`
+  },
+  x_stats: {
+    compatibility: stats.compatibility,
+    canonical: stats.canonical,
+    sync_runs_by_status: stats.sync_runs_by_status,
+    source_health_by_status: stats.source_health_by_status,
+    portable_export: stats.portable_export
+  },
+  source_health: (ops.source_health || []).map((row) => ({
+    key: row.key,
+    provider: row.provider,
+    source_kind: row.source_kind,
+    locator: row.locator,
+    status: row.status,
+    last_error: row.last_error
+  })),
+  browser_assertions: {
+    desktop: readJson("desktop.assertion.json"),
+    filtered: readJson("filtered.assertion.json"),
+    mobile: readJson("mobile.assertion.json")
+  },
+  checked: [
+    "X JSON import creates source-card projection with hostile tweet/link text",
+    "loopback X provider error records failed X sync/source-health rows with hostile error text",
+    "raw /ops/ui HTML contains escaped hostile X text and redacted token-like provider text",
+    "authenticated /ops/ui renders X drift/sync/source summaries",
+    "desktop viewport renders hostile X rows as inert text",
+	    "failed-X filtered view renders source-health failure as inert text",
+	    "token-like X provider errors are redacted in ops JSON and browser UI, and the local dummy X secret is not rendered",
+	    "mobile viewport renders X summaries/rows without horizontal overflow",
+    "no script/img/svg/iframe/onerror DOM is created from X payloads"
+  ],
+  remaining_risk: [
+    "This is browser-backed local smoke over a seeded disposable home, not a live X provider proof.",
+    "It does not prove future ops repair controls for X because those controls are not implemented."
+  ]
+};
+process.stdout.write(JSON.stringify(proof, null, 2));
+NODE
+
+cat "$ARTIFACT_DIR/proof-packet.json"
