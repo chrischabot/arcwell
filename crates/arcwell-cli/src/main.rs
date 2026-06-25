@@ -3066,6 +3066,14 @@ enum XSubcommand {
         #[arg(long, default_value_t = 100)]
         max_bookmarks: usize,
     },
+    ClusterRadarRun {
+        run_id: String,
+        #[arg(long, default_value_t = 20)]
+        max_source_cards: usize,
+    },
+    EditorialDecide {
+        cluster_id: String,
+    },
     ImportFollowingWatchSources {
         #[arg(long, default_value_t = 1000)]
         max_users: usize,
@@ -4450,6 +4458,15 @@ fn x_command(store: Store, args: XCommand) -> Result<()> {
             bookmark_days,
             max_bookmarks,
         } => print_json(&store.x_import_bookmarks(bookmark_days, max_bookmarks)?),
+        XSubcommand::ClusterRadarRun {
+            run_id,
+            max_source_cards,
+        } => print_json(
+            &store.create_x_knowledge_clusters_from_radar_run(&run_id, max_source_cards)?,
+        ),
+        XSubcommand::EditorialDecide { cluster_id } => {
+            print_json(&store.run_x_editorial_decision_for_cluster(&cluster_id)?)
+        }
         XSubcommand::ImportFollowingWatchSources { max_users } => {
             print_json(&store.x_import_following_watch_sources(max_users)?)
         }

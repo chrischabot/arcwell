@@ -155,95 +155,34 @@ RUN_ID="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(pr
 "$ARCWELL_BIN" radar stage "$RUN_ID" >"$ARTIFACT_DIR/radar-stage.json"
 "$ARCWELL_BIN" radar model-score "$RUN_ID" --provider mock --max-items 10 >"$ARTIFACT_DIR/radar-model-score.json"
 
-log "rendering source-card-backed writer page from selected radar items"
-node - "$ARTIFACT_DIR" "$TOPIC" "$TOP_SOURCE_CARDS" <<'NODE'
+log "creating durable X knowledge cluster and editorial decision"
+"$ARCWELL_BIN" x cluster-radar-run "$RUN_ID" --max-source-cards "$TOP_SOURCE_CARDS" >"$ARTIFACT_DIR/x-knowledge-clusters.json"
+CLUSTER_ID="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(j[0]?.id || "")' "$ARTIFACT_DIR/x-knowledge-clusters.json")"
+[ -n "$CLUSTER_ID" ] || fail "x cluster-radar-run did not return a cluster id"
+"$ARCWELL_BIN" x editorial-decide "$CLUSTER_ID" >"$ARTIFACT_DIR/x-editorial-decision.json"
+
+log "reading editorial wiki page and selecting editorial digest candidate"
+WRITER_PAGE_ID="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(j.wiki_page_id || "")' "$ARTIFACT_DIR/x-editorial-decision.json")"
+CANDIDATE_ID="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(j.digest_candidate_id || "")' "$ARTIFACT_DIR/x-editorial-decision.json")"
+[ -n "$WRITER_PAGE_ID" ] || fail "x editorial decision did not return a wiki page id"
+[ -n "$CANDIDATE_ID" ] || fail "x editorial decision did not return a digest candidate id"
+"$ARCWELL_BIN" wiki read "$WRITER_PAGE_ID" >"$ARTIFACT_DIR/editorial-wiki-page-read.json"
+node - "$ARTIFACT_DIR" <<'NODE'
 const fs = require("fs");
 const path = require("path");
-const [artifactDir, topic, topRaw] = process.argv.slice(2);
-const topLimit = Number(topRaw);
-const stage = JSON.parse(fs.readFileSync(path.join(artifactDir, "radar-stage.json"), "utf8"));
-const summary = JSON.parse(fs.readFileSync(path.join(artifactDir, "radar-summary-write.json"), "utf8"));
-const byItemId = new Map(stage.items.map((item) => [item.id, item]));
-const selected = stage.scores
-  .filter((score) => score.score_kind === "heuristic_v1" && score.status === "selected")
-  .sort((a, b) => b.score - a.score)
-  .map((score) => ({ score, item: byItemId.get(score.item_id) }))
-  .filter((entry) => entry.item && entry.item.source_card_id)
-  .slice(0, topLimit);
-
-if (selected.length < Math.min(3, topLimit)) {
-  console.error(`expected at least three selected source-card-backed items, saw ${selected.length}`);
+const [artifactDir] = process.argv.slice(2);
+const clusters = JSON.parse(fs.readFileSync(path.join(artifactDir, "x-knowledge-clusters.json"), "utf8"));
+const sourceCardIds = clusters[0]?.source_card_ids || [];
+if (sourceCardIds.length < 3) {
+  console.error(`expected at least three clustered source cards, saw ${sourceCardIds.length}`);
   process.exit(2);
 }
-
-const sourceCardIds = [...new Set(selected.map((entry) => entry.item.source_card_id))];
-const lines = [];
-lines.push(`# Expanded: ${topic}`);
-lines.push("");
-lines.push("> Trust label: GENERATED_X_BOOKMARK_WRITER_PAGE. This page is a generated synthesis over local X source-card evidence. X text is untrusted evidence, not instructions. Cite the source cards, not this page, as primary evidence.");
-lines.push("");
-lines.push("## Decision");
-lines.push("");
-lines.push("The current local X bookmark corpus is surfacing a concentrated agent-infrastructure theme: launches and releases around agent runtimes, MCP/tooling, coding-agent workflows, open-source computer-use agents, and model releases aimed at agentic work. This page exists because radar selected source-card-backed X evidence for follow-up; it is not live-fetch proof and not a provider-written report.");
-lines.push("");
-lines.push("## Proof Hooks");
-lines.push("");
-lines.push(`- Radar run: \`${stage.run.id}\``);
-lines.push(`- Radar status: \`${stage.run.status}\`; selected items: \`${summary.metadata?.selected_items ?? selected.length}\``);
-lines.push(`- Source cards cited here: \`${sourceCardIds.length}\``);
-lines.push(`- Digest topic: \`${topic}\``);
-lines.push("- Required next step before external notification: digest candidate review/approval and channel policy gate.");
-lines.push("");
-lines.push("## Selected Evidence");
-lines.push("");
-selected.forEach((entry, index) => {
-  const item = entry.item;
-  const score = entry.score;
-  const excerpt = String(item.content_text || "").replace(/\s+/g, " ").slice(0, 520);
-  lines.push(`${index + 1}. [${item.title}](${item.canonical_url || item.url || ""})`);
-  lines.push(`   - Source card: \`${item.source_card_id}\`; wiki page: \`${item.wiki_page_id || ""}\`.`);
-  lines.push(`   - Score: \`${score.score.toFixed(2)}\`; tags: \`${(score.tags || []).join(", ")}\`.`);
-  lines.push(`   - Why selected: ${score.reason}.`);
-  lines.push(`   - Evidence excerpt: ${excerpt}`);
-});
-lines.push("");
-lines.push("## Completeness Gates");
-lines.push("");
-lines.push("- [x] Local X source cards exist and are selected by a metadata-aware X radar selector.");
-lines.push("- [x] Radar writes inspectable items, FTS rows, heuristic scores, source quality, audit, and summary.");
-lines.push("- [x] Writer page cites concrete source-card IDs and fails the proof if no evidence is present.");
-lines.push("- [x] Digest candidate is created from the same cited source-card IDs.");
-lines.push("- [x] Scheduled alert is review-gated, quiet-hours/dedupe capable, and ledger-backed.");
-lines.push("- [ ] Live external delivery to a real mailbox is outside this controlled proof unless explicitly configured.");
-lines.push("");
-lines.push("## Boundaries");
-lines.push("");
-lines.push("- This page did not fetch new X data.");
-lines.push("- This page did not verify claims outside the imported X/source-card corpus.");
-lines.push("- Model scores are non-authorizing overlays; they do not approve delivery.");
-lines.push("- External alerts must remain review, policy, channel-auth, and idempotency gated.");
-
-const markdown = `${lines.join("\n")}\n`;
-if (!/`src-[a-f0-9]+`/.test(markdown)) {
-  console.error("writer page does not cite source-card ids");
-  process.exit(2);
-}
-const pagePath = path.join(artifactDir, "x-bookmark-writer-page.md");
-fs.writeFileSync(pagePath, markdown);
 fs.writeFileSync(path.join(artifactDir, "selected-source-card-ids.json"), `${JSON.stringify(sourceCardIds, null, 2)}\n`);
-console.log(JSON.stringify({ pagePath, sourceCardIds, selected: selected.length }, null, 2));
+console.log(JSON.stringify({ sourceCardIds, selected: sourceCardIds.length }, null, 2));
 NODE
 
-"$ARCWELL_BIN" wiki ingest-file "$ARTIFACT_DIR/x-bookmark-writer-page.md" >"$ARTIFACT_DIR/writer-page-ingest.json"
-WRITER_PAGE_ID="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(j.id || j.result_json?.page_id || "")' "$ARTIFACT_DIR/writer-page-ingest.json")"
-[ -n "$WRITER_PAGE_ID" ] || fail "writer page ingest did not return a page id"
-"$ARCWELL_BIN" wiki read "$WRITER_PAGE_ID" >"$ARTIFACT_DIR/writer-page-read.json"
-
-SOURCE_JSON="$(cat "$ARTIFACT_DIR/selected-source-card-ids.json")"
-log "creating and approving digest candidate from writer-selected source cards"
-"$ARCWELL_BIN" digest-candidate-create --json "{\"topic\":\"$TOPIC\",\"source_card_ids\":$SOURCE_JSON}" >"$ARTIFACT_DIR/digest-candidate.json"
-CANDIDATE_ID="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(j.id)' "$ARTIFACT_DIR/digest-candidate.json")"
-"$ARCWELL_BIN" digest-candidate-approve --json "{\"id\":\"$CANDIDATE_ID\",\"reviewed_by\":\"x-knowledge-system-proof\",\"note\":\"approved in disposable proof after source-card-backed writer gate\"}" >"$ARTIFACT_DIR/digest-candidate-approved.json"
+log "approving editorial digest candidate from clustered source cards"
+"$ARCWELL_BIN" digest-candidate-approve --json "{\"id\":\"$CANDIDATE_ID\",\"reviewed_by\":\"x-knowledge-system-proof\",\"note\":\"approved in disposable proof after editorial cluster quality gate\"}" >"$ARTIFACT_DIR/digest-candidate-approved.json"
 
 cat >"$ARCWELL_HOME/arcwell-policy.toml" <<POLICY
 [[rules]]
@@ -364,9 +303,10 @@ const run = read("radar-run.json");
 const audit = read("radar-audit.json");
 const summary = read("radar-summary-write.json");
 const model = read("radar-model-score.json");
-const writerIngest = read("writer-page-ingest.json");
-const writerRead = read("writer-page-read.json");
-const writerMarkdown = readText("x-bookmark-writer-page.md");
+const clusters = read("x-knowledge-clusters.json");
+const editorialDecision = read("x-editorial-decision.json");
+const writerRead = read("editorial-wiki-page-read.json");
+const writerMarkdown = writerRead.content || writerRead.markdown || JSON.stringify(writerRead);
 const selectedSourceCards = read("selected-source-card-ids.json");
 const candidate = read("digest-candidate-approved.json");
 const schedule = read("digest-schedule.json");
@@ -389,13 +329,30 @@ assert(audit.ok === true && audit.findings.length === 0, "radar audit should pas
 assert(summary.audit_status === "audit_ok", "radar summary should be audit-ok", summary);
 assert(model.score_kind === "model_interestingness_v1" && model.scored > 0, "model overlay should run", model);
 assert(model.proof_level.includes("mock"), "model overlay proof must be local/mock in this script", model);
-assert((writerIngest.ok === true && writerIngest.id === writerPageId) || (writerIngest.status === "completed" && writerIngest.result_json?.page_id === writerPageId), "writer page ingest should complete", writerIngest);
+assert(Array.isArray(clusters) && clusters.length >= 1, "durable X knowledge cluster should be created", clusters);
+const cluster = clusters[0];
+assert(cluster.radar_run_id === runId, "cluster should link back to radar run", cluster);
+assert((cluster.source_card_ids || []).length >= 3, "cluster should be backed by multiple source cards", cluster);
+assert((cluster.radar_item_ids || []).length >= 3, "cluster should preserve radar item evidence ids", cluster);
+assert(typeof cluster.novelty_score === "number" && cluster.novelty_score > 0, "cluster should record novelty score", cluster);
+assert(typeof cluster.momentum_score === "number" && cluster.momentum_score > 0, "cluster should record momentum score", cluster);
+assert(typeof cluster.stale_score === "number" && cluster.stale_score >= 0 && cluster.stale_score <= 1, "cluster should record stale score", cluster);
+assert(editorialDecision.cluster_id === cluster.id, "editorial decision should link to cluster", editorialDecision);
+assert(editorialDecision.status === "completed", "editorial decision should complete after quality gate", editorialDecision);
+assert(editorialDecision.decision === "expand_and_digest_candidate", "editorial decision should name the action taken", editorialDecision);
+assert(editorialDecision.wiki_page_id, "editorial decision should create/update a wiki page", editorialDecision);
+assert(editorialDecision.digest_candidate_id, "editorial decision should create a digest candidate", editorialDecision);
+assert((editorialDecision.quality_findings || []).length === 0, "editorial decision should pass wiki quality gate", editorialDecision);
+assert(JSON.stringify(editorialDecision.source_card_ids || []) === JSON.stringify(cluster.source_card_ids || []), "editorial decision should use cluster source cards", { editorialDecision, cluster });
 assert(writerRead.id === writerPageId, "writer page should be readable from wiki", writerRead);
 assert((writerMarkdown.match(/`src-[a-f0-9]+`/g) || []).length >= selectedSourceCards.length, "writer page must cite source-card ids", writerMarkdown.slice(0, 1000));
+assert(writerMarkdown.includes(`Cluster: \`${cluster.id}\``), "writer page must link back to cluster", writerMarkdown.slice(0, 1000));
+assert(writerMarkdown.includes("## Uncertainty And Caveats"), "writer page must name uncertainty", writerMarkdown.slice(0, 1000));
 assert(!writerMarkdown.includes("source_cards: 0"), "writer page must not be zero-evidence expansion");
 assert(selectedSourceCards.length >= 3, "digest should be backed by multiple selected source cards", selectedSourceCards);
 assert(candidate.id === candidateId && candidate.review_status === "approved", "digest candidate should be approved for controlled proof", candidate);
 assert(candidate.source_card_ids.length === selectedSourceCards.length, "digest candidate should use writer-selected source cards", candidate);
+assert(candidate.id === editorialDecision.digest_candidate_id, "scheduled digest candidate should come from editorial decision", { candidate, editorialDecision });
 assert(schedule.id === scheduleId && schedule.status === "active", "digest schedule should be active", schedule);
 assert(first.digest_alert_schedule?.enqueued === 1, "first worker pass should enqueue scheduled digest alert", first);
 assert(first.processed === 1 && first.completed === 1, "first worker pass should process scheduled digest job", first);
@@ -404,10 +361,21 @@ assert(ticks[0].candidate_ids.includes(candidateId), "tick should record selecte
 assert(deliveries.length === 1 && deliveries[0].status === "sent", "digest delivery ledger should be sent", deliveries);
 assert(deliveries[0].id === ticks[0].delivery_ids[0], "delivery should link to tick", { deliveries, ticks });
 assert(providerRequests.length === 1, "controlled provider should receive exactly one request", providerRequests);
+const providerBody = JSON.parse(providerRequests[0].body);
+const emailText = providerBody.text || "";
+assert((providerBody.subject || "").startsWith("X bookmark report:"), "delivered digest subject should be human-facing", providerBody.subject);
+assert(!(providerBody.subject || "").includes("digest candidate"), "delivered digest subject must not expose internal candidate jargon", providerBody.subject);
+for (const required of ["X bookmark report:", "Bottom line", "What changed", "Why it matters", "Suggested follow-up", "Evidence quality", "Sources", "Audit trail"]) {
+  assert(emailText.includes(required), `delivered digest email missing ${required}`, emailText);
+}
+assert(!emailText.startsWith("Arcwell digest candidate\nTopic:"), "delivered digest must not be the old metadata/link dump", emailText);
+assert(emailText.indexOf("https://x.com/") > emailText.indexOf("Sources"), "X links should be citations after the report body, not the report itself", emailText);
 assert(second.processed === 0, "second worker pass should suppress duplicate schedule within interval", second);
 assert(ticksSecond.length === 1, "second worker pass should not create duplicate tick", ticksSecond);
 assert((ops.digest_candidates || []).some((item) => item.id === candidateId), "ops should expose digest candidate", ops.digest_candidates);
 assert((ops.digest_deliveries || []).some((item) => item.id === deliveries[0].id), "ops should expose digest delivery", ops.digest_deliveries);
+assert((ops.x_knowledge_clusters || []).some((item) => item.id === cluster.id), "ops should expose X knowledge cluster", ops.x_knowledge_clusters);
+assert((ops.x_editorial_decisions || []).some((item) => item.id === editorialDecision.id), "ops should expose X editorial decision", ops.x_editorial_decisions);
 
 const artifactText = fs.readdirSync(artifactDir)
   .filter((name) => /\.(json|jsonl|md|txt)$/.test(name))
@@ -421,6 +389,10 @@ const proofPacket = {
   proof_root: proofRoot,
   arcwell_home: process.env.ARCWELL_HOME,
   run_id: runId,
+  x_knowledge_cluster_id: cluster.id,
+  x_editorial_decision_id: editorialDecision.id,
+  x_editorial_wiki_page_id: editorialDecision.wiki_page_id,
+  x_editorial_digest_candidate_id: editorialDecision.digest_candidate_id,
   writer_page_id: writerPageId,
   digest_candidate_id: candidateId,
   digest_schedule_id: scheduleId,
@@ -437,6 +409,10 @@ const proofPacket = {
     local_db_has_x_bookmarks: true,
     x_source_cards_projected_to_radar: true,
     trend_scores_written: true,
+    durable_trend_cluster_persisted: true,
+    editorial_decision_recorded: true,
+    quality_gated_wiki_expansion: true,
+    automated_editorial_digest_candidate_created: true,
     model_overlay_written_non_authorizing: true,
     writer_page_cites_source_cards: true,
     digest_candidate_reviewed: true,
@@ -444,12 +420,14 @@ const proofPacket = {
     worker_delivery_ledger_sent: true,
     duplicate_suppression: true,
     ops_visibility: true,
+    ops_x_knowledge_visibility: true,
     artifact_secret_scan: true,
   },
   remaining_risk: [
     "This proof copies production local data into a disposable home and uses a controlled email endpoint, not a real external mailbox.",
     "This proof does not fetch fresh X data; live X API watch polling remains provider/quota dependent.",
-    "Generic wiki expand can still create empty pages for synthetic topics; this proof uses a source-card-backed writer gate instead.",
+    "Trend clustering is currently one deterministic source-card-backed cluster per radar run; richer multi-cluster splitting is still pending.",
+    "Generic wiki expand can still create empty pages for synthetic topics; X editorial expansion now has a source-card-backed quality gate and drives the delivered candidate in this proof.",
   ],
 };
 fs.writeFileSync(path.join(artifactDir, "proof-packet.json"), `${JSON.stringify(proofPacket, null, 2)}\n`);

@@ -144,24 +144,28 @@ PR, implementation note, or final report:
       it is only local proof, copied-home live proof, real-home live proof, or
       operational scheduled proof.
 - [ ] Treat the 2026-06-25 X knowledge-system proof as the current baseline, not
-      the finish line. Real home now has 1,010 bookmark collections, 5,164 X
-      source cards, X radar run `2883b4ef-4b44-4c3c-8056-258bb7d3009a`, active
-      source-card-backed writer page
-      `expanded-x-bookmark-trend-agent-infrastructure-launches-and-mcp-07387362`,
-      approved digest candidate `7cfec561-3827-417a-8e93-957ee84ff69a`, active
-      alert schedule `cdfe2160-cbce-4f23-a5ff-167e393d0b8e`, live Cloudflare
-      email delivery `2c326108-e43e-45f0-b0fb-dc10058a955d`, and a running
-      resident worker heartbeat. Repeatable proof
+      the finish line. Latest repeatable proof saw 1,010 bookmark collections,
+      5,228 X source cards, durable X knowledge cluster
+      `xkc-30ee66c7e992e64b`, editorial decision
+      `xed-2dc0a54a2d44977c`, editorial wiki page
+      `x-knowledge-x-bookmark-trend-agent-infrastructure-and-mcp-and-coding-tools-and-m-0e2c2d7a`,
+      editorial-created digest candidate
+      `f7b47a41-3920-44a7-8f8e-4f3443923f08`, active alert schedule
+      `c011e26f-7723-4801-877f-14b544de2ee2`, controlled-provider delivery
+      `8fbc3a73-ea9e-4c94-b176-50bff262e77d`, and readable email report text
+      instead of the old internal metadata/link dump. Real home also has a
+      prior live Cloudflare email delivery and a running resident worker
+      heartbeat. Repeatable proof
       `scripts/x-knowledge-system-proof` passed at
-      `.arcwell-dev/proofs/x-knowledge-system-proof-20260625T102438Z-56355/artifacts/proof-packet.json`,
+      `.arcwell-dev/proofs/x-knowledge-system-proof-20260625T110318Z-31478/artifacts/proof-packet.json`,
       proving copied real X corpus -> radar scoring -> non-authorizing model
-      overlay -> source-card-cited writer page -> reviewed digest candidate ->
-      scheduled controlled-provider worker delivery -> duplicate suppression
-      and ops visibility. Remaining work before calling this operationally done:
-      fresh live X provider fetch over the full intended scope, generic
-      `wiki expand` empty-page hardening, richer autonomous multi-cluster
-      writer/editor decisions, scheduled real external recurrence proof, and
-      multi-day monitoring.
+      overlay -> durable cluster -> editorial wiki quality gate ->
+      editorial-created digest candidate -> reviewed scheduled delivery ->
+      duplicate suppression and ops visibility. Remaining work before calling
+      this operationally done: fresh live X provider fetch over the full
+      intended scope, richer autonomous multi-cluster writer/editor decisions,
+      autonomous scheduled bookmark ingestion, scheduled real external
+      recurrence proof, and multi-day monitoring.
 - [ ] Expand canonical X storage beyond the first local-search stage. Local
       JSON/X API imports now write conversation/reply/quote/retweet fields and
       `x_tweet_refs`; local archive import now records an `import_archive`
