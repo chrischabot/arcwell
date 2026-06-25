@@ -25,6 +25,12 @@ artifact, runs `arcwell source-card ingest-reddit-browser-listing`, runs a Reddi
 radar profile, writes a summary, runs audit, inspects ops, and emits a
 `proof-packet.json`.
 
+Current release-candidate packet:
+
+```text
+.arcwell-dev/proofs/reddit-browser-production-proof-20260625T064407Z-87932/artifacts/proof-packet.json
+```
+
 ## Boundary
 
 This path is supervised. A user or agent supplies the browser-rendered Reddit

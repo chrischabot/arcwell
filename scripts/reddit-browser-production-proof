@@ -99,6 +99,35 @@ function sha256File(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+function commandPreview(args) {
+  const result = spawnSync(arcwellBin, args, {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    env: {
+      ...process.env,
+      ARCWELL_HOME: proofHome,
+    },
+  });
+  return {
+    status: result.status,
+    stdout_excerpt: (result.stdout || "").slice(0, 2000),
+    stderr_excerpt: (result.stderr || "").slice(0, 2000),
+  };
+}
+
+function pluginCacheState() {
+  const codexHome = process.env.CODEX_HOME || path.join(process.env.HOME || "", ".codex");
+  const stableCache = path.join(codexHome, "plugins", "cache", "arcwell-local", "arc", "0.1.0");
+  const devCache = path.join(codexHome, "plugins", "cache", "arcwell-local", "arcwell-dev", "0.1.0");
+  return {
+    codex_home: codexHome,
+    stable_cache_present: fs.existsSync(stableCache),
+    dev_cache_present: fs.existsSync(devCache),
+    stable_cache: stableCache,
+    dev_cache: devCache,
+  };
+}
+
 const persistedPostKeys = [
   "id",
   "subreddit",
@@ -360,7 +389,15 @@ const binaryInfo = {
   path: arcwellBin,
   sha256: sha256File(arcwellBin),
   dev_checkout_binary: arcwellBin.includes(`${path.sep}target${path.sep}debug${path.sep}`),
+  help: commandPreview(["--help"]),
 };
+const remainingBoundaries = [
+  "This proves supervised host-browser listing ingestion, not unattended daemon Reddit OAuth or scheduled fetch.",
+  "This proof does not claim Reddit comment capture.",
+];
+if (binaryInfo.dev_checkout_binary) {
+  remainingBoundaries.push("A release-ready proof should set ARCWELL_BIN to an installed candidate binary rather than target/debug.");
+}
 const proofPacket = {
   proof_name: "reddit-browser-production-proof",
   status: "passed",
@@ -368,6 +405,7 @@ const proofPacket = {
   proof_root: proofRoot,
   arcwell_home: proofHome,
   binary: binaryInfo,
+  plugin_cache: pluginCacheState(),
   locator,
   limit,
   min_cards: minCards,
@@ -403,11 +441,7 @@ const proofPacket = {
     cursor_visible: true,
     stale_capture_gate_passed: true,
   },
-  remaining_boundaries: [
-    "This proves supervised host-browser listing ingestion, not unattended daemon Reddit OAuth or scheduled fetch.",
-    "This proof does not claim Reddit comment capture.",
-    "A release-ready proof should set ARCWELL_BIN to an installed candidate binary rather than target/debug.",
-  ],
+  remaining_boundaries: remainingBoundaries,
   artifacts: fs.readdirSync(artifactDir).sort(),
 };
 writeJson("proof-packet.json", proofPacket);

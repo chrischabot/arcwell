@@ -143,6 +143,25 @@ PR, implementation note, or final report:
 - [ ] Keep `arcwell-x` status honest: every checked X item must state whether
       it is only local proof, copied-home live proof, real-home live proof, or
       operational scheduled proof.
+- [ ] Treat the 2026-06-25 X knowledge-system proof as the current baseline, not
+      the finish line. Real home now has 1,010 bookmark collections, 5,164 X
+      source cards, X radar run `2883b4ef-4b44-4c3c-8056-258bb7d3009a`, active
+      source-card-backed writer page
+      `expanded-x-bookmark-trend-agent-infrastructure-launches-and-mcp-07387362`,
+      approved digest candidate `7cfec561-3827-417a-8e93-957ee84ff69a`, active
+      alert schedule `cdfe2160-cbce-4f23-a5ff-167e393d0b8e`, live Cloudflare
+      email delivery `2c326108-e43e-45f0-b0fb-dc10058a955d`, and a running
+      resident worker heartbeat. Repeatable proof
+      `scripts/x-knowledge-system-proof` passed at
+      `.arcwell-dev/proofs/x-knowledge-system-proof-20260625T102438Z-56355/artifacts/proof-packet.json`,
+      proving copied real X corpus -> radar scoring -> non-authorizing model
+      overlay -> source-card-cited writer page -> reviewed digest candidate ->
+      scheduled controlled-provider worker delivery -> duplicate suppression
+      and ops visibility. Remaining work before calling this operationally done:
+      fresh live X provider fetch over the full intended scope, generic
+      `wiki expand` empty-page hardening, richer autonomous multi-cluster
+      writer/editor decisions, scheduled real external recurrence proof, and
+      multi-day monitoring.
 - [ ] Expand canonical X storage beyond the first local-search stage. Local
       JSON/X API imports now write conversation/reply/quote/retweet fields and
       `x_tweet_refs`; local archive import now records an `import_archive`
@@ -298,7 +317,9 @@ PR, implementation note, or final report:
       scheduled alert controlled-provider proof over copied real source cards
       passed at
       `.arcwell-dev/proofs/digest-alert-scheduled-production-proof-20260624T201946Z-74509/artifacts/proof-packet.json`;
-      live external delivery remains unproven.
+      real-home X manual live Cloudflare digest delivery passed for candidate
+      `7cfec561-3827-417a-8e93-957ee84ff69a`; broader scheduled real external
+      recurrence remains unproven.
 - [ ] Add production monitoring for email ingress/outbound if email becomes a
       critical alert path.
 - [ ] Add Cloudflare callback/cron event capture after edge inbox is durable and
@@ -311,57 +332,85 @@ PR, implementation note, or final report:
       ledger paths over the generic channel delivery-attempt table; scheduled
       digest alerts route approved candidates through that ledger with
       quiet-hours deferral; due generic retries reconcile digest rows. Live
-      external digest-delivery proof remains open.
-- [ ] Decide and record the Reddit release-ready claim before promotion. There
+      external digest-delivery proof has passed once for a real-home approved X
+      candidate through Cloudflare Email; scheduled watch-source recurrence and
+      Telegram live delivery remain open.
+- [x] Decide and record the Reddit release-ready claim before promotion. There
       are two valid release paths, and they must not be collapsed into one:
       supervised browser-capture release versus unattended Reddit production
-      source. Current proof:
+      source. Current release-candidate proof:
+      `.arcwell-dev/proofs/reddit-browser-production-proof-20260625T064407Z-87932/artifacts/proof-packet.json`
+      proves the supervised path only from a staged candidate binary. The
+      original main-Chrome capture proof
       `.arcwell-dev/proofs/reddit-browser-production-proof-20260624T161717Z/artifacts/proof-packet.json`
-      proves the supervised path only. The unattended daemon/RSS proof
+      remains the production-data capture source. The unattended daemon/RSS proof
       `.arcwell-dev/proofs/radar-reddit-production-proof-20260624T150229Z-29771`
       remains blocked by Reddit HTTP 403 before source-card projection.
-  - [ ] **Supervised Browser-Capture Release definition:** Arcwell supports
+  - [x] **Supervised Browser-Capture Release definition:** Arcwell supports
         Reddit when an agent/user supplies sanitized browser-captured Reddit
-        listing JSON. This can become release-ready sooner, but it must be
-        documented as supervised and browser-assisted, not unattended.
-    - [ ] Add repeatable `scripts/reddit-browser-production-proof` so the
+        listing JSON. This is the release-ready Reddit claim: supervised and
+        browser-assisted, not unattended.
+    - [x] Add repeatable `scripts/reddit-browser-production-proof` so the
           current proof is not an ad hoc shell sequence. The script should use
           a disposable `ARCWELL_HOME`, accept a sanitized listing artifact,
           ingest it through `arcwell source-card ingest-reddit-browser-listing`,
           run a Reddit radar profile, summarize, audit, inspect ops, and write
           a proof packet with source-card/wiki/radar/cursor/source-health counts.
-    - [ ] Add artifact redaction gates that fail if persisted Reddit artifacts
+          Passing packet:
+          `.arcwell-dev/proofs/reddit-browser-production-proof-20260625T064407Z-87932/artifacts/proof-packet.json`.
+    - [x] Add artifact redaction gates that fail if persisted Reddit artifacts
           contain `modhash`, account-specific fields, cookies, tokens, local
           storage, browser profile paths, raw browser storage, or unredacted raw
           response payloads. Keep the current boundary: no browser cookie,
-          local-storage, password, or profile database inspection.
-    - [ ] Add severe browser-listing ingestion tests for duplicate listing
+          local-storage, password, or profile database inspection. The proof
+          script allow-lists persisted Reddit fields, scans JSON keys/text in
+          artifacts, and records `redaction_scan_passed=true`.
+    - [x] Add severe browser-listing ingestion tests for duplicate listing
           replay, malformed listing, oversized listing, empty listing, partial
           write failure, stale capture, hostile source text, unsafe URLs, and
-          cursor-not-advanced-on-failure.
-    - [ ] Decide surface parity for sanitized browser artifacts: either add
+          cursor-not-advanced-on-failure. Core Reddit severe tests cover replay,
+          malformed/empty/unsafe listing failure, hostile source text as
+          evidence, partial-failure no cursor/source-health advance, duplicate
+          suppression, and bearer-token request plumbing. CLI/proof gates cover
+          oversized listing files and stale capture artifacts.
+    - [x] Decide surface parity for sanitized browser artifacts: either add
           MCP/slash/skill support for ingesting an already-sanitized browser
           artifact, or explicitly document that this remains CLI-only by design
-          because capture itself belongs to the host/browser boundary.
-    - [ ] Add operator docs covering the exact capture boundary, accepted JSON
+          because capture itself belongs to the host/browser boundary. Decision:
+          CLI-only for ingestion; Codex skill text now warns that Reddit
+          browser-capture is supervised host/browser-supplied evidence and not
+          unattended Reddit support.
+    - [x] Add operator docs covering the exact capture boundary, accepted JSON
           shape, persisted fields, rejected/redacted fields, trust model,
           source-health/cursor inspection, radar-stage inspection, and proof
-          artifact layout.
-    - [ ] Prove fresh-thread Codex plugin visibility after
+          artifact layout. See `docs/reddit-browser-ingestion.md`.
+    - [x] Prove fresh-thread Codex plugin visibility after
           `scripts/arcwell-dev sync`; if no MCP/slash surface is added, prove
           the relevant skill/docs wording is visible and does not imply
-          unattended Reddit support.
-    - [ ] Add a release proof packet that starts from a clean install or
+          unattended Reddit support. `scripts/arcwell-dev sync` and
+          `scripts/verify-codex-plugin-docs` pass, and the installed Codex cache
+          contains the CLI-only Reddit boundary text in
+          `skills/wiki-research/SKILL.md`. A live already-running thread still
+          requires skill reload or a new thread, as normal for Codex plugin
+          updates.
+    - [x] Add a release proof packet that starts from a clean install or
           candidate binary, not just the dev checkout, and records install path,
           binary version, plugin/cache state, proof command, artifacts, and
-          remaining boundaries.
+          remaining boundaries. Candidate-binary proof passed at
+          `.arcwell-dev/proofs/reddit-browser-production-proof-20260625T064407Z-87932/artifacts/proof-packet.json`;
+          Arcwell has no `--version`, so the packet records binary path, SHA256,
+          and CLI help output instead.
   - [ ] **Unattended Reddit Production Source definition:** Arcwell can monitor
         Reddit on schedule without a browser. This is not close yet because
         daemon/RSS remains blocked by Reddit HTTP 403 and OAuth/sanctioned API
         access is unproven.
     - [ ] Implement Reddit OAuth or another sanctioned non-browser access path
           with scoped secrets, policy/cost gates, provider error classification,
-          token redaction, and refresh/revocation failure tests.
+          token redaction, and refresh/revocation failure tests. Groundwork:
+          `REDDIT_BEARER_TOKEN` now actually attaches bearer auth to both
+          listing and bounded-comment JSON requests and has severe request
+          capture coverage; this is not full OAuth, refresh, revocation, or
+          sanctioned live access proof.
     - [ ] Prove daemon-side Reddit fetch writes source cards, bounded comments,
           cursor, source-health, radar items/FTS/scores, summary, and audit-ok
           output on real Reddit data in a disposable or copied home.
