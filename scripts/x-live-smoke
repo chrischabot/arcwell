@@ -25,14 +25,6 @@ trap cleanup EXIT
 
 export ARCWELL_HOME="${ARCWELL_SMOKE_HOME:-$tmp/arcwell-home}"
 mkdir -p "$ARCWELL_HOME"
-if [ -n "${X_USER_CONTEXT_SOURCE_HOME:-}" ]; then
-  if [ ! -d "$X_USER_CONTEXT_SOURCE_HOME" ]; then
-    echo "BLOCKED: X_USER_CONTEXT_SOURCE_HOME does not exist: $X_USER_CONTEXT_SOURCE_HOME" >&2
-    exit 2
-  fi
-  cp -R "$X_USER_CONTEXT_SOURCE_HOME"/. "$ARCWELL_HOME"/
-  echo "Copied Arcwell home metadata into disposable X smoke home for user-context proof."
-fi
 
 RUN_ID="x-live-smoke-$(date +%Y%m%dT%H%M%S)-$$"
 fixture="$tmp/x-fixture.json"
@@ -69,6 +61,36 @@ if (!items.some((item) => item.text.includes("Ignore previous instructions") && 
 NODE
 
 echo "Local X replay/source-card smoke passed."
+
+if [ -n "${X_USER_CONTEXT_SOURCE_HOME:-}" ]; then
+  if [ ! -d "$X_USER_CONTEXT_SOURCE_HOME" ]; then
+    echo "BLOCKED: X_USER_CONTEXT_SOURCE_HOME does not exist: $X_USER_CONTEXT_SOURCE_HOME" >&2
+    exit 2
+  fi
+  rm -rf "$ARCWELL_HOME"
+  mkdir -p "$ARCWELL_HOME"
+  cp -R "$X_USER_CONTEXT_SOURCE_HOME"/. "$ARCWELL_HOME"/
+  echo "Copied Arcwell home metadata into disposable X smoke home for user-context proof."
+fi
+
+cat >"$ARCWELL_HOME/arcwell-policy.toml" <<'POLICY'
+[[rules]]
+id = "allow-x-live-smoke-provider-network"
+effect = "allow"
+action = "provider.network"
+package = "arcwell-x"
+provider = "x"
+reason = "allow explicit disposable X live-smoke provider calls"
+priority = 20
+
+[[rules]]
+id = "allow-x-live-smoke-token-refresh"
+effect = "allow"
+action = "secret.write"
+provider = "x"
+reason = "allow disposable X live-smoke OAuth token refresh"
+priority = 20
+POLICY
 
 LIVE_TOKEN="${X_BEARER_TOKEN:-${TWITTER_BEARER_TOKEN:-}}"
 secrets_health="$tmp/secrets-health.json"

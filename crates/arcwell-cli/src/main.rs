@@ -3066,6 +3066,16 @@ enum XSubcommand {
         #[arg(long, default_value_t = 100)]
         max_bookmarks: usize,
     },
+    ScheduleBookmarks {
+        #[arg(long, default_value_t = 92)]
+        bookmark_days: i64,
+        #[arg(long, default_value_t = 1000)]
+        max_bookmarks: usize,
+        #[arg(long, default_value = "warm")]
+        cadence: String,
+        #[arg(long, default_value = "active")]
+        status: String,
+    },
     ClusterRadarRun {
         run_id: String,
         #[arg(long, default_value_t = 20)]
@@ -4458,6 +4468,17 @@ fn x_command(store: Store, args: XCommand) -> Result<()> {
             bookmark_days,
             max_bookmarks,
         } => print_json(&store.x_import_bookmarks(bookmark_days, max_bookmarks)?),
+        XSubcommand::ScheduleBookmarks {
+            bookmark_days,
+            max_bookmarks,
+            cadence,
+            status,
+        } => print_json(&store.schedule_x_bookmark_import(
+            bookmark_days,
+            max_bookmarks,
+            &cadence,
+            &status,
+        )?),
         XSubcommand::ClusterRadarRun {
             run_id,
             max_source_cards,
@@ -5582,6 +5603,18 @@ async fn serve(paths: AppPaths, args: ServeArgs) -> Result<()> {
             "/ops/actions/edge-events/dead-letter",
             post(http_ops_edge_event_dead_letter),
         )
+        .route(
+            "/ops/actions/x/bookmarks/schedule",
+            post(http_ops_x_bookmarks_schedule),
+        )
+        .route(
+            "/ops/actions/x/bookmarks/enqueue",
+            post(http_ops_x_bookmarks_enqueue),
+        )
+        .route(
+            "/ops/actions/worker/run-once",
+            post(http_ops_worker_run_once),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(args.addr).await?;
@@ -5706,6 +5739,31 @@ struct OpsEdgeDeadLetterForm {
     reason: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct OpsXBookmarksScheduleForm {
+    csrf_token: String,
+    idempotency_key: String,
+    bookmark_days: i64,
+    max_bookmarks: usize,
+    cadence: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsXBookmarksEnqueueForm {
+    csrf_token: String,
+    idempotency_key: String,
+    bookmark_days: i64,
+    max_bookmarks: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsWorkerRunOnceForm {
+    csrf_token: String,
+    idempotency_key: String,
+    max_jobs: usize,
+}
+
 async fn http_ops_ui(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -5781,11 +5839,9 @@ async fn http_ops_edge_event_dead_letter(
         "edge-event-dead-letter:{}:{}",
         form.edge_event_id, form.idempotency_key
     );
-    let inserted = match state.idempotency_keys.lock() {
-        Ok(mut keys) => keys.insert(idempotency_scope),
-        Err(_) => {
-            return http_error_response(HttpError::internal("idempotency registry is unavailable"));
-        }
+    let inserted = match reserve_ops_idempotency(&state, idempotency_scope) {
+        Ok(inserted) => inserted,
+        Err(error) => return http_error_response(error),
     };
     if !inserted {
         return redirect_to_ops_ui(&format!(
@@ -5838,6 +5894,225 @@ async fn http_ops_edge_event_dead_letter(
             "/ops/ui?detail=edge:{}&notice=dead_lettered",
             url_component(&id)
         )),
+        Err(error) => http_error_response(HttpError::bad_request(
+            "ops_action_failed",
+            error.to_string(),
+        )),
+    }
+}
+
+async fn http_ops_x_bookmarks_schedule(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = validate_http_mutation_request(&state, &headers, &uri) {
+        return http_error_response(error);
+    }
+    if body.len() as u64 > state.max_body_bytes {
+        return http_error_response(HttpError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        ));
+    }
+    let form = match parse_ops_x_bookmarks_schedule_form(&body) {
+        Ok(form) => form,
+        Err(error) => return http_error_response(error),
+    };
+    if let Err(error) =
+        validate_ops_csrf_and_idempotency(&state, &form.csrf_token, &form.idempotency_key)
+    {
+        return http_error_response(error);
+    }
+    let idempotency_scope = format!("x-bookmarks-schedule:{}", form.idempotency_key);
+    let inserted = match reserve_ops_idempotency(&state, idempotency_scope) {
+        Ok(inserted) => inserted,
+        Err(error) => return http_error_response(error),
+    };
+    if !inserted {
+        return redirect_to_ops_ui("/ops/ui?q=x_bookmarks&notice=duplicate");
+    }
+
+    let result = (|| -> Result<String> {
+        let store = Store::open(state.paths.clone())?;
+        let bookmark_days = form.bookmark_days.clamp(1, 36_500);
+        let max_bookmarks = form.max_bookmarks.clamp(1, 100_000);
+        let cadence = validate_ops_x_schedule_word(&form.cadence, "cadence")?;
+        let status = validate_ops_x_schedule_word(&form.status, "status")?;
+        let decision = store.policy_check(PolicyRequest {
+            action: "ops.x_bookmarks.schedule".to_string(),
+            package: Some("arcwell-cli".to_string()),
+            provider: Some("x".to_string()),
+            source: Some("ops-ui".to_string()),
+            channel: Some("http".to_string()),
+            subject: Some("local-operator".to_string()),
+            target: Some("x:bookmarks".to_string()),
+            projected_usd: None,
+            metadata: json!({
+                "bookmark_days": bookmark_days,
+                "max_bookmarks": max_bookmarks,
+                "cadence": cadence,
+                "status": status,
+                "idempotency_key": form.idempotency_key,
+            }),
+            untrusted_excerpt: None,
+        })?;
+        if !decision.allowed {
+            bail!(
+                "policy denied ops.x_bookmarks.schedule: {}",
+                decision.reason
+            );
+        }
+        let source =
+            store.schedule_x_bookmark_import(bookmark_days, max_bookmarks, &cadence, &status)?;
+        Ok(source.id)
+    })();
+
+    match result {
+        Ok(_) => redirect_to_ops_ui("/ops/ui?q=x_bookmarks&notice=x_bookmarks_scheduled"),
+        Err(error) => http_error_response(HttpError::bad_request(
+            "ops_action_failed",
+            error.to_string(),
+        )),
+    }
+}
+
+async fn http_ops_x_bookmarks_enqueue(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = validate_http_mutation_request(&state, &headers, &uri) {
+        return http_error_response(error);
+    }
+    if body.len() as u64 > state.max_body_bytes {
+        return http_error_response(HttpError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        ));
+    }
+    let form = match parse_ops_x_bookmarks_enqueue_form(&body) {
+        Ok(form) => form,
+        Err(error) => return http_error_response(error),
+    };
+    if let Err(error) =
+        validate_ops_csrf_and_idempotency(&state, &form.csrf_token, &form.idempotency_key)
+    {
+        return http_error_response(error);
+    }
+    let idempotency_scope = format!("x-bookmarks-enqueue:{}", form.idempotency_key);
+    let inserted = match reserve_ops_idempotency(&state, idempotency_scope) {
+        Ok(inserted) => inserted,
+        Err(error) => return http_error_response(error),
+    };
+    if !inserted {
+        return redirect_to_ops_ui("/ops/ui?q=x_import_bookmarks&notice=duplicate");
+    }
+
+    let result = (|| -> Result<String> {
+        let store = Store::open(state.paths.clone())?;
+        let bookmark_days = form.bookmark_days.clamp(1, 36_500);
+        let max_bookmarks = form.max_bookmarks.clamp(1, 100_000);
+        let decision = store.policy_check(PolicyRequest {
+            action: "ops.x_bookmarks.enqueue".to_string(),
+            package: Some("arcwell-cli".to_string()),
+            provider: Some("x".to_string()),
+            source: Some("ops-ui".to_string()),
+            channel: Some("http".to_string()),
+            subject: Some("local-operator".to_string()),
+            target: Some("x_import_bookmarks".to_string()),
+            projected_usd: None,
+            metadata: json!({
+                "bookmark_days": bookmark_days,
+                "max_bookmarks": max_bookmarks,
+                "idempotency_key": form.idempotency_key,
+            }),
+            untrusted_excerpt: None,
+        })?;
+        if !decision.allowed {
+            bail!("policy denied ops.x_bookmarks.enqueue: {}", decision.reason);
+        }
+        let job = store.enqueue_x_import_bookmarks_job(bookmark_days, max_bookmarks)?;
+        Ok(job.id)
+    })();
+
+    match result {
+        Ok(id) => redirect_to_ops_ui(&format!(
+            "/ops/ui?detail=job:{}&notice=x_bookmarks_enqueued",
+            url_component(&id)
+        )),
+        Err(error) => http_error_response(HttpError::bad_request(
+            "ops_action_failed",
+            error.to_string(),
+        )),
+    }
+}
+
+async fn http_ops_worker_run_once(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = validate_http_mutation_request(&state, &headers, &uri) {
+        return http_error_response(error);
+    }
+    if body.len() as u64 > state.max_body_bytes {
+        return http_error_response(HttpError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        ));
+    }
+    let form = match parse_ops_worker_run_once_form(&body) {
+        Ok(form) => form,
+        Err(error) => return http_error_response(error),
+    };
+    if let Err(error) =
+        validate_ops_csrf_and_idempotency(&state, &form.csrf_token, &form.idempotency_key)
+    {
+        return http_error_response(error);
+    }
+    let idempotency_scope = format!("worker-run-once:{}", form.idempotency_key);
+    let inserted = match reserve_ops_idempotency(&state, idempotency_scope) {
+        Ok(inserted) => inserted,
+        Err(error) => return http_error_response(error),
+    };
+    if !inserted {
+        return redirect_to_ops_ui("/ops/ui?notice=duplicate");
+    }
+
+    let result = (|| -> Result<usize> {
+        let store = Store::open(state.paths.clone())?;
+        let max_jobs = form.max_jobs.clamp(1, 25);
+        let decision = store.policy_check(PolicyRequest {
+            action: "ops.worker.run_once".to_string(),
+            package: Some("arcwell-cli".to_string()),
+            provider: None,
+            source: Some("ops-ui".to_string()),
+            channel: Some("http".to_string()),
+            subject: Some("local-operator".to_string()),
+            target: Some("arcwell-worker".to_string()),
+            projected_usd: None,
+            metadata: json!({
+                "max_jobs": max_jobs,
+                "idempotency_key": form.idempotency_key,
+            }),
+            untrusted_excerpt: None,
+        })?;
+        if !decision.allowed {
+            bail!("policy denied ops.worker.run_once: {}", decision.reason);
+        }
+        let report = store.run_worker_once(max_jobs)?;
+        Ok(report.processed)
+    })();
+
+    match result {
+        Ok(_) => redirect_to_ops_ui("/ops/ui?notice=worker_ran_once"),
         Err(error) => http_error_response(HttpError::bad_request(
             "ops_action_failed",
             error.to_string(),
@@ -6076,9 +6351,111 @@ fn validate_ops_idempotency_key(key: &str) -> std::result::Result<(), HttpError>
     Ok(())
 }
 
+fn validate_ops_csrf_and_idempotency(
+    state: &HttpState,
+    csrf_token: &str,
+    idempotency_key: &str,
+) -> std::result::Result<(), HttpError> {
+    if !constant_time_eq(csrf_token.as_bytes(), state.csrf_token.as_bytes()) {
+        return Err(HttpError::new(
+            StatusCode::FORBIDDEN,
+            "bad_csrf",
+            "CSRF token is missing or invalid",
+        ));
+    }
+    validate_ops_idempotency_key(idempotency_key)
+}
+
+fn reserve_ops_idempotency(
+    state: &HttpState,
+    scope: String,
+) -> std::result::Result<bool, HttpError> {
+    state
+        .idempotency_keys
+        .lock()
+        .map(|mut keys| keys.insert(scope))
+        .map_err(|_| HttpError::internal("idempotency registry is unavailable"))
+}
+
 fn parse_ops_dead_letter_form(
     body: &[u8],
 ) -> std::result::Result<OpsEdgeDeadLetterForm, HttpError> {
+    let mut values = parse_ops_form_fields(
+        body,
+        &["csrf_token", "idempotency_key", "edge_event_id", "reason"],
+    )?;
+    let mut take = |key: &'static str| {
+        values
+            .remove(key)
+            .ok_or_else(|| HttpError::bad_request("bad_form", format!("missing form field: {key}")))
+    };
+    Ok(OpsEdgeDeadLetterForm {
+        csrf_token: take("csrf_token")?,
+        idempotency_key: take("idempotency_key")?,
+        edge_event_id: take("edge_event_id")?,
+        reason: take("reason")?,
+    })
+}
+
+fn parse_ops_x_bookmarks_schedule_form(
+    body: &[u8],
+) -> std::result::Result<OpsXBookmarksScheduleForm, HttpError> {
+    let mut values = parse_ops_form_fields(
+        body,
+        &[
+            "csrf_token",
+            "idempotency_key",
+            "bookmark_days",
+            "max_bookmarks",
+            "cadence",
+            "status",
+        ],
+    )?;
+    Ok(OpsXBookmarksScheduleForm {
+        csrf_token: take_required_form_string(&mut values, "csrf_token")?,
+        idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
+        bookmark_days: take_required_form_i64(&mut values, "bookmark_days", 1, 36_500)?,
+        max_bookmarks: take_required_form_usize(&mut values, "max_bookmarks", 1, 100_000)?,
+        cadence: take_required_form_string(&mut values, "cadence")?,
+        status: take_required_form_string(&mut values, "status")?,
+    })
+}
+
+fn parse_ops_x_bookmarks_enqueue_form(
+    body: &[u8],
+) -> std::result::Result<OpsXBookmarksEnqueueForm, HttpError> {
+    let mut values = parse_ops_form_fields(
+        body,
+        &[
+            "csrf_token",
+            "idempotency_key",
+            "bookmark_days",
+            "max_bookmarks",
+        ],
+    )?;
+    Ok(OpsXBookmarksEnqueueForm {
+        csrf_token: take_required_form_string(&mut values, "csrf_token")?,
+        idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
+        bookmark_days: take_required_form_i64(&mut values, "bookmark_days", 1, 36_500)?,
+        max_bookmarks: take_required_form_usize(&mut values, "max_bookmarks", 1, 100_000)?,
+    })
+}
+
+fn parse_ops_worker_run_once_form(
+    body: &[u8],
+) -> std::result::Result<OpsWorkerRunOnceForm, HttpError> {
+    let mut values = parse_ops_form_fields(body, &["csrf_token", "idempotency_key", "max_jobs"])?;
+    Ok(OpsWorkerRunOnceForm {
+        csrf_token: take_required_form_string(&mut values, "csrf_token")?,
+        idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
+        max_jobs: take_required_form_usize(&mut values, "max_jobs", 1, 25)?,
+    })
+}
+
+fn parse_ops_form_fields(
+    body: &[u8],
+    allowed_fields: &[&str],
+) -> std::result::Result<BTreeMap<String, String>, HttpError> {
     let text = std::str::from_utf8(body).map_err(|_| {
         HttpError::bad_request("bad_form", "form body must be valid UTF-8 urlencoding")
     })?;
@@ -6092,10 +6469,7 @@ fn parse_ops_dead_letter_form(
         };
         let key = percent_decode_form_component(raw_key)?;
         let value = percent_decode_form_component(raw_value)?;
-        if !matches!(
-            key.as_str(),
-            "csrf_token" | "idempotency_key" | "edge_event_id" | "reason"
-        ) {
+        if !allowed_fields.contains(&key.as_str()) {
             return Err(HttpError::bad_request(
                 "bad_form",
                 format!("unsupported form field: {key}"),
@@ -6108,17 +6482,69 @@ fn parse_ops_dead_letter_form(
             ));
         }
     }
-    let mut take = |key: &'static str| {
-        values
-            .remove(key)
-            .ok_or_else(|| HttpError::bad_request("bad_form", format!("missing form field: {key}")))
-    };
-    Ok(OpsEdgeDeadLetterForm {
-        csrf_token: take("csrf_token")?,
-        idempotency_key: take("idempotency_key")?,
-        edge_event_id: take("edge_event_id")?,
-        reason: take("reason")?,
-    })
+    Ok(values)
+}
+
+fn take_required_form_string(
+    values: &mut BTreeMap<String, String>,
+    key: &'static str,
+) -> std::result::Result<String, HttpError> {
+    values
+        .remove(key)
+        .ok_or_else(|| HttpError::bad_request("bad_form", format!("missing form field: {key}")))
+}
+
+fn take_required_form_i64(
+    values: &mut BTreeMap<String, String>,
+    key: &'static str,
+    min: i64,
+    max: i64,
+) -> std::result::Result<i64, HttpError> {
+    let value = take_required_form_string(values, key)?;
+    let parsed = value.parse::<i64>().map_err(|_| {
+        HttpError::bad_request("bad_form", format!("form field {key} must be an integer"))
+    })?;
+    if parsed < min || parsed > max {
+        return Err(HttpError::bad_request(
+            "bad_form",
+            format!("form field {key} must be between {min} and {max}"),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn take_required_form_usize(
+    values: &mut BTreeMap<String, String>,
+    key: &'static str,
+    min: usize,
+    max: usize,
+) -> std::result::Result<usize, HttpError> {
+    let value = take_required_form_string(values, key)?;
+    let parsed = value.parse::<usize>().map_err(|_| {
+        HttpError::bad_request("bad_form", format!("form field {key} must be an integer"))
+    })?;
+    if parsed < min || parsed > max {
+        return Err(HttpError::bad_request(
+            "bad_form",
+            format!("form field {key} must be between {min} and {max}"),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn validate_ops_x_schedule_word(value: &str, label: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 40 {
+        bail!("{label} must be non-empty and at most 40 bytes");
+    }
+    if trimmed != value
+        || !trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    {
+        bail!("{label} may only contain ASCII letters, numbers, underscore, or hyphen");
+    }
+    Ok(trimmed.to_string())
 }
 
 fn percent_decode_form_component(value: &str) -> std::result::Result<String, HttpError> {
@@ -6454,6 +6880,10 @@ p{margin:4px 0 14px}.muted{color:#57606a}.notice{border-left:4px solid #1f6feb;p
 .summary-grid .metric b{font-size:16px;line-height:1.25}
 .ops-form{display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;align-items:end;margin-top:18px}
 .ops-form label{display:grid;gap:4px;font-size:12px;color:#57606a}
+.control-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:14px}
+.control-grid form{border:1px solid #d8dee4;background:white;border-radius:6px;padding:10px;display:grid;gap:8px}
+.control-grid .fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.control-grid label{display:grid;gap:4px;font-size:12px;color:#57606a}
 input,select,button{font:inherit;border:1px solid #d8dee4;border-radius:6px;background:white;color:inherit;padding:7px}
 button{font-weight:600;cursor:pointer}.danger{color:#b42318}.actions form{display:flex;gap:6px;flex-wrap:wrap}.actions input[name=reason]{min-width:220px}
 .detail{border:1px solid #d8dee4;background:white;padding:12px;border-radius:6px}
@@ -6467,8 +6897,8 @@ code,pre{white-space:pre-wrap;word-break:break-word}
 .bar span{display:block;min-width:1px;border-radius:2px}
 .bar .selected{background:#1f883d}.bar .over{background:#9a6700}.bar .below{background:#6e7781}.bar .duplicate{background:#8250df}.bar .quota{background:#bf8700}.bar .other{background:#57606a}
 .scroll{overflow:auto}
-@media (max-width:720px){main{padding:14px}h1{font-size:24px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ops-form{grid-template-columns:1fr}th,td{font-size:12px;padding:7px}}
-@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}.muted,.metric span,.ops-form label{color:#8b949e}.metric,table,.detail,.notice,input,select,button{background:#161b22;border-color:#30363d}th,td{border-color:#30363d}th{background:#21262d}a{color:#58a6ff}}
+@media (max-width:720px){main{padding:14px}h1{font-size:24px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ops-form,.control-grid .fields{grid-template-columns:1fr}th,td{font-size:12px;padding:7px}}
+@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}.muted,.metric span,.ops-form label,.control-grid label{color:#8b949e}.metric,table,.detail,.notice,.control-grid form,input,select,button{background:#161b22;border-color:#30363d}th,td{border-color:#30363d}th{background:#21262d}a{color:#58a6ff}}
 </style>
 </head>
 <body><main>"#,
@@ -6490,6 +6920,7 @@ code,pre{white-space:pre-wrap;word-break:break-word}
         ));
     }
     html.push_str(&render_ops_filter_form(options));
+    html.push_str(&render_x_ops_control_panel(csrf_token, controls_enabled));
     html.push_str("<section class=\"grid\">");
     for (label, value) in [
         ("Health score", health_score.score as usize),
@@ -6502,6 +6933,11 @@ code,pre{white-space:pre-wrap;word-break:break-word}
         ("Radar runs", snapshot.radar_runs.len()),
         ("Radar source quality", snapshot.radar_source_quality.len()),
         ("Radar deliveries", snapshot.radar_deliveries.len()),
+        ("X clusters", snapshot.x_knowledge_clusters.len()),
+        (
+            "X editorial decisions",
+            snapshot.x_editorial_decisions.len(),
+        ),
         ("Source cards", snapshot.source_cards.len()),
         ("Projects", snapshot.projects.len()),
         ("Project statuses", snapshot.project_status_snapshots.len()),
@@ -6651,6 +7087,65 @@ code,pre{white-space:pre-wrap;word-break:break-word}
                     health.last_error.clone().unwrap_or_default(),
                 ]
             }),
+    ));
+    html.push_str(&ops_table_with_raw_columns(
+        "X Knowledge Clusters",
+        &[
+            "cluster", "topic", "status", "sources", "novelty", "momentum", "stale", "reason",
+            "updated",
+        ],
+        filtered_x_knowledge_clusters(snapshot, options)
+            .into_iter()
+            .take(100)
+            .map(|cluster| {
+                vec![
+                    detail_link("x-cluster", &cluster.id, &short_id(&cluster.id)),
+                    cluster.topic.clone(),
+                    cluster.status.clone(),
+                    cluster.source_card_ids.len().to_string(),
+                    format!("{:.2}", cluster.novelty_score),
+                    format!("{:.2}", cluster.momentum_score),
+                    format!("{:.2}", cluster.stale_score),
+                    cluster.reason.clone(),
+                    cluster.updated_at.clone(),
+                ]
+            }),
+        &[0],
+    ));
+    html.push_str(&ops_table_with_raw_columns(
+        "X Editorial Decisions",
+        &[
+            "decision",
+            "cluster",
+            "action",
+            "status",
+            "wiki page",
+            "digest candidate",
+            "sources",
+            "reason",
+            "updated",
+        ],
+        filtered_x_editorial_decisions(snapshot, options)
+            .into_iter()
+            .take(100)
+            .map(|decision| {
+                vec![
+                    detail_link("x-editorial", &decision.id, &short_id(&decision.id)),
+                    detail_link(
+                        "x-cluster",
+                        &decision.cluster_id,
+                        &short_id(&decision.cluster_id),
+                    ),
+                    decision.decision.clone(),
+                    decision.status.clone(),
+                    decision.wiki_page_id.clone().unwrap_or_default(),
+                    decision.digest_candidate_id.clone().unwrap_or_default(),
+                    decision.source_card_ids.len().to_string(),
+                    decision.reason.clone(),
+                    decision.updated_at.clone(),
+                ]
+            }),
+        &[0, 1],
     ));
     html.push_str(&ops_table_with_raw_columns(
         "Radar Runs",
@@ -7317,6 +7812,69 @@ fn render_ops_filter_form(options: &OpsUiOptions) -> String {
     html
 }
 
+fn render_x_ops_control_panel(csrf_token: Option<&str>, controls_enabled: bool) -> String {
+    let mut html = String::new();
+    html.push_str("<section class=\"section\"><h2>X Controls</h2>");
+    let Some(csrf_token) = csrf_token else {
+        html.push_str("<p class=\"muted\">Open /ops/ui from the authenticated HTTP server to use X controls.</p></section>");
+        return html;
+    };
+    if !controls_enabled {
+        html.push_str("<p class=\"muted\">Disabled: start server with ARCWELL_HTTP_AUTH_TOKEN to enable mutations.</p></section>");
+        return html;
+    }
+    html.push_str("<div class=\"control-grid\">");
+    html.push_str(&format!(
+        r#"<form method="post" action="/ops/actions/x/bookmarks/schedule">
+<input type="hidden" name="csrf_token" value="{}">
+<input type="hidden" name="idempotency_key" value="{}">
+<div><b>Schedule bookmark ingestion</b><p class="muted">Create or update the resident X bookmark watch source.</p></div>
+<div class="fields">
+<label>Days<input name="bookmark_days" type="number" min="1" max="36500" value="92"></label>
+<label>Max<input name="max_bookmarks" type="number" min="1" max="100000" value="1000"></label>
+<label>Cadence<input name="cadence" maxlength="40" value="warm"></label>
+<label>Status<select name="status"><option value="active">active</option><option value="paused">paused</option></select></label>
+</div>
+<button type="submit">Schedule</button>
+</form>"#,
+        html_escape(csrf_token),
+        html_escape(&ops_control_idempotency_key("x-bookmarks-schedule")),
+    ));
+    html.push_str(&format!(
+        r#"<form method="post" action="/ops/actions/x/bookmarks/enqueue">
+<input type="hidden" name="csrf_token" value="{}">
+<input type="hidden" name="idempotency_key" value="{}">
+<div><b>Queue bookmark import</b><p class="muted">Enqueue one bookmark import job without claiming provider health.</p></div>
+<div class="fields">
+<label>Days<input name="bookmark_days" type="number" min="1" max="36500" value="92"></label>
+<label>Max<input name="max_bookmarks" type="number" min="1" max="100000" value="1000"></label>
+</div>
+<button type="submit">Queue import</button>
+</form>"#,
+        html_escape(csrf_token),
+        html_escape(&ops_control_idempotency_key("x-bookmarks-enqueue")),
+    ));
+    html.push_str(&format!(
+        r#"<form method="post" action="/ops/actions/worker/run-once">
+<input type="hidden" name="csrf_token" value="{}">
+<input type="hidden" name="idempotency_key" value="{}">
+<div><b>Run worker once</b><p class="muted">Poll due schedules and drain a bounded number of local jobs.</p></div>
+<div class="fields">
+<label>Max jobs<input name="max_jobs" type="number" min="1" max="25" value="5"></label>
+</div>
+<button type="submit">Run once</button>
+</form>"#,
+        html_escape(csrf_token),
+        html_escape(&ops_control_idempotency_key("worker-run-once")),
+    ));
+    html.push_str("</div></section>");
+    html
+}
+
+fn ops_control_idempotency_key(prefix: &str) -> String {
+    format!("ops-ui-{prefix}-{}", Uuid::new_v4())
+}
+
 fn render_ops_summary(snapshot: &OpsSnapshot, score: &OpsHealthScore) -> String {
     let mut html = String::new();
     html.push_str(
@@ -7395,6 +7953,7 @@ fn render_ops_summary(snapshot: &OpsSnapshot, score: &OpsHealthScore) -> String 
             "X digest queue",
             summarize_x_digest_queue(&snapshot.x_stats),
         ),
+        ("X knowledge", summarize_x_knowledge(snapshot)),
     ] {
         html.push_str(&format!(
             "<div class=\"metric\"><span>{}</span><b>{}</b></div>",
@@ -7442,6 +8001,16 @@ fn render_ops_detail(snapshot: &OpsSnapshot, detail: &str) -> String {
             .iter()
             .find(|run| run.id == id)
             .and_then(|run| serde_json::to_value(run).ok()),
+        "x-cluster" => snapshot
+            .x_knowledge_clusters
+            .iter()
+            .find(|cluster| cluster.id == id)
+            .and_then(|cluster| serde_json::to_value(cluster).ok()),
+        "x-editorial" => snapshot
+            .x_editorial_decisions
+            .iter()
+            .find(|decision| decision.id == id)
+            .and_then(|decision| serde_json::to_value(decision).ok()),
         _ => None,
     };
     match value {
@@ -7581,6 +8150,79 @@ fn filtered_source_health<'a>(
                 )
         })
         .collect()
+}
+
+fn filtered_x_knowledge_clusters<'a>(
+    snapshot: &'a OpsSnapshot,
+    options: &OpsUiOptions,
+) -> Vec<&'a arcwell_core::XKnowledgeCluster> {
+    let mut rows = snapshot
+        .x_knowledge_clusters
+        .iter()
+        .filter(|cluster| {
+            matches_status(&cluster.status, options)
+                && matches_query(
+                    options,
+                    [
+                        cluster.id.as_str(),
+                        cluster.topic.as_str(),
+                        cluster.status.as_str(),
+                        cluster.reason.as_str(),
+                        cluster.radar_run_id.as_deref().unwrap_or_default(),
+                        cluster
+                            .metadata
+                            .get("cluster_key")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    ],
+                )
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| match normalized_sort(options) {
+        "updated_asc" => left.updated_at.cmp(&right.updated_at),
+        "status" => left
+            .status
+            .cmp(&right.status)
+            .then(left.updated_at.cmp(&right.updated_at)),
+        "kind" => left.topic.cmp(&right.topic),
+        _ => right.updated_at.cmp(&left.updated_at),
+    });
+    rows
+}
+
+fn filtered_x_editorial_decisions<'a>(
+    snapshot: &'a OpsSnapshot,
+    options: &OpsUiOptions,
+) -> Vec<&'a arcwell_core::XEditorialDecision> {
+    let mut rows = snapshot
+        .x_editorial_decisions
+        .iter()
+        .filter(|decision| {
+            matches_status(&decision.status, options)
+                && matches_query(
+                    options,
+                    [
+                        decision.id.as_str(),
+                        decision.cluster_id.as_str(),
+                        decision.decision.as_str(),
+                        decision.status.as_str(),
+                        decision.reason.as_str(),
+                        decision.wiki_page_id.as_deref().unwrap_or_default(),
+                        decision.digest_candidate_id.as_deref().unwrap_or_default(),
+                    ],
+                )
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| match normalized_sort(options) {
+        "updated_asc" => left.updated_at.cmp(&right.updated_at),
+        "status" => left
+            .status
+            .cmp(&right.status)
+            .then(left.updated_at.cmp(&right.updated_at)),
+        "kind" => left.decision.cmp(&right.decision),
+        _ => right.updated_at.cmp(&left.updated_at),
+    });
+    rows
 }
 
 fn filtered_radar_source_quality<'a>(
@@ -7849,6 +8491,31 @@ fn summarize_x_digest_queue(stats: &XStatsReport) -> String {
     }
 }
 
+fn summarize_x_knowledge(snapshot: &OpsSnapshot) -> String {
+    if snapshot.x_knowledge_clusters.is_empty() && snapshot.x_editorial_decisions.is_empty() {
+        return "none".to_string();
+    }
+    let cluster_statuses = summarize_counts(
+        snapshot
+            .x_knowledge_clusters
+            .iter()
+            .map(|cluster| cluster.status.as_str()),
+    );
+    let decision_statuses = summarize_counts(
+        snapshot
+            .x_editorial_decisions
+            .iter()
+            .map(|decision| decision.status.as_str()),
+    );
+    format!(
+        "{} cluster(s) {}; {} editorial decision(s) {}",
+        snapshot.x_knowledge_clusters.len(),
+        cluster_statuses,
+        snapshot.x_editorial_decisions.len(),
+        decision_statuses
+    )
+}
+
 fn summarize_radar_run_scores(snapshot: &OpsSnapshot) -> String {
     let Some(run) = snapshot
         .radar_runs
@@ -7970,6 +8637,9 @@ fn trimmed_non_empty(value: Option<String>) -> Option<String> {
 fn ops_notice_text(notice: &str) -> String {
     match notice {
         "dead_lettered" => "Edge event dead-lettered.".to_string(),
+        "x_bookmarks_scheduled" => "X bookmark ingestion schedule updated.".to_string(),
+        "x_bookmarks_enqueued" => "X bookmark import job queued.".to_string(),
+        "worker_ran_once" => "Worker run completed.".to_string(),
         "duplicate" => {
             "Duplicate idempotency key ignored; no second mutation was applied.".to_string()
         }
@@ -10309,6 +10979,30 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 store.x_import_bookmarks(bookmark_days, max_bookmarks)?
             ))
         }
+        "x_schedule_bookmarks" => {
+            let bookmark_days = arguments
+                .get("bookmark_days")
+                .and_then(Value::as_i64)
+                .unwrap_or(92);
+            let max_bookmarks = arguments
+                .get("max_bookmarks")
+                .and_then(Value::as_u64)
+                .unwrap_or(1000) as usize;
+            let cadence = arguments
+                .get("cadence")
+                .and_then(Value::as_str)
+                .unwrap_or("warm");
+            let status = arguments
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("active");
+            Ok(json!(store.schedule_x_bookmark_import(
+                bookmark_days,
+                max_bookmarks,
+                cadence,
+                status,
+            )?))
+        }
         "x_import_following_watch_sources" => {
             let max_users = arguments
                 .get("max_users")
@@ -12052,6 +12746,20 @@ fn mcp_tools() -> Vec<Value> {
                     "Only import bookmarked tweets newer than this many days.",
                 ),
                 ("max_bookmarks", "integer", "Maximum bookmarks to scan."),
+            ],
+        ),
+        tool(
+            "x_schedule_bookmarks",
+            "Create or update the resident worker watch source that periodically imports authenticated X bookmarks.",
+            [
+                (
+                    "bookmark_days",
+                    "integer",
+                    "Only import bookmarked tweets newer than this many days.",
+                ),
+                ("max_bookmarks", "integer", "Maximum bookmarks to scan."),
+                ("cadence", "string", "Watch cadence: hot, warm, or cold."),
+                ("status", "string", "Watch status: active or paused."),
             ],
         ),
         tool(
@@ -18117,6 +18825,103 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
     }
 
     #[test]
+    fn severe_ops_ui_surfaces_x_knowledge_clusters_and_editorial_decisions() {
+        // CLAIM: The X knowledge loop is operator-visible in /ops/ui, including
+        // durable clusters, editorial decisions, wiki/digest links, filters, and
+        // escaped detail JSON.
+        // ORACLE: real source-card-backed cluster/editorial rows render in
+        // summary and tables, filter by cluster key, and detail output does not
+        // render raw hostile source text.
+        // SEVERITY: Severe because hidden cluster/editorial state makes the
+        // automated knowledge loop look healthier than it is.
+        let paths = test_paths("ops-ui-x-knowledge");
+        let store = Store::open(paths).unwrap();
+        for (idx, summary) in [
+            "Agent MCP launch <script>alert(1)</script> source-card evidence.",
+            "Gemma model launch improves multimodal agent workflows.",
+        ]
+        .iter()
+        .enumerate()
+        {
+            store
+                .add_source_card(SourceCardInput {
+                    title: format!("X: source{idx} 20{idx}"),
+                    url: format!("https://x.com/source{idx}/status/20{idx}"),
+                    source_type: "x_tweet".to_string(),
+                    provider: "x".to_string(),
+                    summary: summary.to_string(),
+                    claims: vec![],
+                    retrieved_at: Some(format!("2026-06-2{}T00:00:00Z", idx + 1)),
+                    metadata: json!({ "source_kind": "bookmark" }),
+                })
+                .unwrap();
+        }
+        let profile = store
+            .create_radar_profile(RadarProfileInput {
+                name: "ops-ui-x-knowledge-radar".to_string(),
+                description: "Ops UI X knowledge proof.".to_string(),
+                window_hours: 24 * 30,
+                min_score: 0.0,
+                max_items: Some(10),
+                languages: vec!["en".to_string()],
+                source_selectors: json!([{ "kind": "source_card_query", "query": "agent" }]),
+                delivery_policy: json!({}),
+                model_policy: json!({}),
+                metadata: json!({}),
+            })
+            .unwrap();
+        let run = store.run_radar_profile(&profile.id, None).unwrap();
+        let clusters = store
+            .create_x_knowledge_clusters_from_radar_run(&run.run.id, 10)
+            .unwrap();
+        let cluster = clusters
+            .iter()
+            .find(|cluster| cluster.metadata["cluster_key"] == "agent-tooling-mcp")
+            .unwrap_or(&clusters[0]);
+        let decision = store
+            .run_x_editorial_decision_for_cluster(&cluster.id)
+            .unwrap();
+        let snapshot = store.ops_snapshot().unwrap();
+
+        let html = render_ops_ui_with_options(
+            &snapshot,
+            &OpsUiOptions {
+                q: Some("agent-tooling-mcp".to_string()),
+                status: Some("candidate".to_string()),
+                sort: "updated_desc".to_string(),
+                detail: Some(format!("x-cluster:{}", cluster.id)),
+                notice: None,
+            },
+            None,
+            false,
+        );
+        assert!(html.contains("X knowledge"));
+        assert!(html.contains("X Knowledge Clusters"));
+        assert!(html.contains("X Editorial Decisions"));
+        assert!(html.contains(&short_id(&cluster.id)));
+        assert!(html.contains("agent-tooling-mcp"));
+        assert!(html.contains("source_card_ids"));
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!html.contains("<script>alert(1)</script>"));
+
+        let editorial_html = render_ops_ui_with_options(
+            &snapshot,
+            &OpsUiOptions {
+                q: Some(decision.id.clone()),
+                status: Some("completed".to_string()),
+                sort: "updated_desc".to_string(),
+                detail: Some(format!("x-editorial:{}", decision.id)),
+                notice: None,
+            },
+            None,
+            false,
+        );
+        assert!(editorial_html.contains(&short_id(&decision.id)));
+        assert!(editorial_html.contains("wiki_page_id"));
+        assert!(editorial_html.contains("digest_candidate_id"));
+    }
+
+    #[test]
     fn severe_ops_ui_surfaces_radar_source_quality_without_raw_html() {
         // CLAIM: Radar source-quality windows are operator-visible in ops, affect
         // health scoring, and preserve hostile source locator text as escaped data.
@@ -18498,6 +19303,256 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
     }
 
     #[tokio::test]
+    async fn severe_ops_ui_x_controls_require_auth_csrf_policy_and_idempotency() {
+        // CLAIM: X ops controls are real, narrow, CSRF-protected mutations over
+        // durable state; rendered buttons alone are not the implementation.
+        // ORACLE: HTTP status, durable watch_sources/jobs/heartbeat state, policy
+        // decision count, and duplicate idempotency behavior.
+        // SEVERITY: Severe because local ops controls bridge browser UI into
+        // ingestion scheduling and worker execution.
+        let unauthenticated = test_http_state("ops-ui-x-controls-no-auth", None);
+        let (no_config_status, no_config_json) = response_json(
+            http_ops_x_bookmarks_schedule(
+                State(unauthenticated.clone()),
+                HeaderMap::new(),
+                Uri::from_static("/ops/actions/x/bookmarks/schedule"),
+                Bytes::from(x_bookmarks_schedule_body(
+                    &unauthenticated.csrf_token,
+                    "ops-ui-x-schedule-no-auth",
+                    92,
+                    100,
+                    "warm",
+                    "active",
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(no_config_status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            no_config_json
+                .pointer("/error/type")
+                .and_then(Value::as_str),
+            Some("mutation_auth_required")
+        );
+
+        let state = test_http_state("ops-ui-x-controls", Some("local-auth-token-123"));
+        let store = Store::open(state.paths.clone()).unwrap();
+        let valid_schedule_body = x_bookmarks_schedule_body(
+            &state.csrf_token,
+            "ops-ui-x-schedule-denied",
+            92,
+            100,
+            "warm",
+            "active",
+        );
+        let (missing_auth_status, _) = response_json(
+            http_ops_x_bookmarks_schedule(
+                State(state.clone()),
+                HeaderMap::new(),
+                Uri::from_static("/ops/actions/x/bookmarks/schedule"),
+                Bytes::from(valid_schedule_body.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(missing_auth_status, StatusCode::UNAUTHORIZED);
+
+        let (bad_csrf_status, bad_csrf_json) = response_json(
+            http_ops_x_bookmarks_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/x/bookmarks/schedule"),
+                Bytes::from(x_bookmarks_schedule_body(
+                    "wrong-csrf",
+                    "ops-ui-x-schedule-bad-csrf",
+                    92,
+                    100,
+                    "warm",
+                    "active",
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(bad_csrf_status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            bad_csrf_json.pointer("/error/type").and_then(Value::as_str),
+            Some("bad_csrf")
+        );
+
+        let (policy_status, policy_json) = response_json(
+            http_ops_x_bookmarks_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/x/bookmarks/schedule"),
+                Bytes::from(valid_schedule_body),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(policy_status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            policy_json.pointer("/error/type").and_then(Value::as_str),
+            Some("ops_action_failed")
+        );
+        assert!(store.list_watch_sources().unwrap().is_empty());
+        assert_eq!(store.list_policy_decisions(10).unwrap().len(), 1);
+
+        std::fs::write(
+            state.paths.home.join("arcwell-policy.toml"),
+            r#"
+[[rules]]
+id = "allow-ops-x-bookmarks-schedule"
+effect = "allow"
+action = "ops.x_bookmarks.schedule"
+reason = "local operator may schedule X bookmark ingestion"
+
+[[rules]]
+id = "allow-ops-x-bookmarks-enqueue"
+effect = "allow"
+action = "ops.x_bookmarks.enqueue"
+reason = "local operator may enqueue X bookmark import"
+
+[[rules]]
+id = "allow-ops-worker-run-once"
+effect = "allow"
+action = "ops.worker.run_once"
+reason = "local operator may run bounded worker pass"
+
+[[rules]]
+id = "allow-worker-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+reason = "ops controls may enqueue local worker jobs"
+"#,
+        )
+        .unwrap();
+
+        let allowed_schedule_body = x_bookmarks_schedule_body(
+            &state.csrf_token,
+            "ops-ui-x-schedule-allowed",
+            45,
+            321,
+            "warm",
+            "active",
+        );
+        let (allowed_status, _) = response_text(
+            http_ops_x_bookmarks_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/x/bookmarks/schedule"),
+                Bytes::from(allowed_schedule_body.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(allowed_status, StatusCode::SEE_OTHER);
+        let sources = store.list_watch_sources().unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].source_kind, "x_bookmarks");
+        assert_eq!(sources[0].metadata["bookmark_days"], 45);
+        assert_eq!(sources[0].metadata["max_bookmarks"], 321);
+        let decisions_after_schedule = store.list_policy_decisions(10).unwrap().len();
+
+        let (duplicate_status, _) = response_text(
+            http_ops_x_bookmarks_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/x/bookmarks/schedule"),
+                Bytes::from(allowed_schedule_body),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(duplicate_status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            store.list_policy_decisions(10).unwrap().len(),
+            decisions_after_schedule
+        );
+
+        let (enqueue_status, _) = response_text(
+            http_ops_x_bookmarks_enqueue(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/x/bookmarks/enqueue"),
+                Bytes::from(x_bookmarks_enqueue_body(
+                    &state.csrf_token,
+                    "ops-ui-x-enqueue-allowed",
+                    92,
+                    222,
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(enqueue_status, StatusCode::SEE_OTHER);
+        assert!(
+            store
+                .list_wiki_jobs()
+                .unwrap()
+                .iter()
+                .any(|job| job.kind == "x_import_bookmarks"
+                    && job.input_json["max_bookmarks"] == 222)
+        );
+
+        let (worker_status, _) = response_text(
+            http_ops_worker_run_once(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/worker/run-once"),
+                Bytes::from(worker_run_once_body(
+                    &state.csrf_token,
+                    "ops-ui-worker-run-once-allowed",
+                    1,
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(worker_status, StatusCode::SEE_OTHER);
+        assert!(
+            store
+                .ops_snapshot()
+                .unwrap()
+                .health
+                .latest_worker_heartbeat
+                .is_some()
+        );
+
+        let (bad_form_status, bad_form_json) = response_json(
+            http_ops_x_bookmarks_enqueue(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/x/bookmarks/enqueue"),
+                Bytes::from(format!(
+                    "csrf_token={}&idempotency_key={}&bookmark_days=0&max_bookmarks=5",
+                    url_component(&state.csrf_token),
+                    url_component("ops-ui-x-bad-form")
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(bad_form_status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            bad_form_json.pointer("/error/type").and_then(Value::as_str),
+            Some("bad_form")
+        );
+
+        let html = render_ops_ui_with_options(
+            &store.ops_snapshot().unwrap(),
+            &OpsUiOptions::default(),
+            Some(&state.csrf_token),
+            true,
+        );
+        assert!(html.contains("X Controls"));
+        assert!(html.contains("/ops/actions/x/bookmarks/schedule"));
+        assert!(html.contains("/ops/actions/x/bookmarks/enqueue"));
+        assert!(html.contains("/ops/actions/worker/run-once"));
+    }
+
+    #[tokio::test]
     async fn severe_ops_ui_edge_dead_letter_requires_auth_csrf_idempotency_and_policy() {
         // CLAIM: The only ops UI mutation is narrow and fails closed without auth, local Origin, CSRF, idempotency, and policy allow.
         // POSTCONDITIONS: Failed attempts do not change event status; duplicate successful submissions do not reapply or re-audit.
@@ -18709,6 +19764,49 @@ reason = "local operator may dead-letter reviewed edge events"
             url_component(idempotency_key),
             url_component(edge_event_id),
             url_component(reason)
+        )
+    }
+
+    fn x_bookmarks_schedule_body(
+        csrf_token: &str,
+        idempotency_key: &str,
+        bookmark_days: i64,
+        max_bookmarks: usize,
+        cadence: &str,
+        status: &str,
+    ) -> String {
+        format!(
+            "csrf_token={}&idempotency_key={}&bookmark_days={}&max_bookmarks={}&cadence={}&status={}",
+            url_component(csrf_token),
+            url_component(idempotency_key),
+            bookmark_days,
+            max_bookmarks,
+            url_component(cadence),
+            url_component(status)
+        )
+    }
+
+    fn x_bookmarks_enqueue_body(
+        csrf_token: &str,
+        idempotency_key: &str,
+        bookmark_days: i64,
+        max_bookmarks: usize,
+    ) -> String {
+        format!(
+            "csrf_token={}&idempotency_key={}&bookmark_days={}&max_bookmarks={}",
+            url_component(csrf_token),
+            url_component(idempotency_key),
+            bookmark_days,
+            max_bookmarks
+        )
+    }
+
+    fn worker_run_once_body(csrf_token: &str, idempotency_key: &str, max_jobs: usize) -> String {
+        format!(
+            "csrf_token={}&idempotency_key={}&max_jobs={}",
+            url_component(csrf_token),
+            url_component(idempotency_key),
+            max_jobs
         )
     }
 }

@@ -145,27 +145,30 @@ PR, implementation note, or final report:
       operational scheduled proof.
 - [ ] Treat the 2026-06-25 X knowledge-system proof as the current baseline, not
       the finish line. Latest repeatable proof saw 1,010 bookmark collections,
-      5,228 X source cards, durable X knowledge cluster
-      `xkc-30ee66c7e992e64b`, editorial decision
-      `xed-2dc0a54a2d44977c`, editorial wiki page
-      `x-knowledge-x-bookmark-trend-agent-infrastructure-and-mcp-and-coding-tools-and-m-0e2c2d7a`,
+      5,228 X source cards, three deterministic clusters (`model-launches`,
+      `computer-use-agents`, `agent-tooling-mcp`), editorial decision
+      `xed-17b46142bbec4dd7`, editorial wiki page
+      `x-knowledge-x-bookmark-trend-model-launches-for-agents-mcp-and-coding-tools-and--66364db3`,
       editorial-created digest candidate
-      `f7b47a41-3920-44a7-8f8e-4f3443923f08`, active alert schedule
-      `c011e26f-7723-4801-877f-14b544de2ee2`, controlled-provider delivery
-      `8fbc3a73-ea9e-4c94-b176-50bff262e77d`, and readable email report text
-      instead of the old internal metadata/link dump. Real home also has a
-      prior live Cloudflare email delivery and a running resident worker
-      heartbeat. Repeatable proof
-      `scripts/x-knowledge-system-proof` passed at
-      `.arcwell-dev/proofs/x-knowledge-system-proof-20260625T110318Z-31478/artifacts/proof-packet.json`,
+      `cd8af9bc-97b8-4b5c-9b92-905e2f127470`, active alert schedule
+      `a21a483d-c0b4-40ea-b0fc-66b457b8cbc1`, controlled-provider delivery
+      `ef5c0e93-c191-4b50-bca5-d8e3b7096341`, and readable email report text
+      instead of the old internal metadata/link dump. Local tests now prove
+      resident `x_bookmarks` watch-source scheduling, worker bookmark import,
+      completeness metadata, source-health backoff, due-time recurrence after
+      `next_run_at`, `/ops/ui` X cluster/editorial visibility, and authenticated
+      policy-checked X controls for schedule/enqueue/run-worker. Real home also
+      has a prior live Cloudflare email delivery and a running resident worker
+      heartbeat. Repeatable proof `scripts/x-knowledge-system-proof` passed at
+      `.arcwell-dev/proofs/x-knowledge-system-proof-20260625T114921Z-87295/artifacts/proof-packet.json`,
       proving copied real X corpus -> radar scoring -> non-authorizing model
-      overlay -> durable cluster -> editorial wiki quality gate ->
+      overlay -> durable multi-cluster buckets -> editorial wiki quality gate ->
       editorial-created digest candidate -> reviewed scheduled delivery ->
       duplicate suppression and ops visibility. Remaining work before calling
-      this operationally done: fresh live X provider fetch over the full
-      intended scope, richer autonomous multi-cluster writer/editor decisions,
-      autonomous scheduled bookmark ingestion, scheduled real external
-      recurrence proof, and multi-day monitoring.
+      this operationally done: refresh/reauthorize X OAuth credentials for
+      current live provider proof, semantic/model-assisted topic clustering,
+      scheduled real external recurrence proof over wall-clock time, and
+      multi-day monitoring.
 - [ ] Expand canonical X storage beyond the first local-search stage. Local
       JSON/X API imports now write conversation/reply/quote/retweet fields and
       `x_tweet_refs`; local archive import now records an `import_archive`
@@ -288,9 +291,11 @@ PR, implementation note, or final report:
       audit-before-remote-call, idempotent retry, target-spoofing tests, and
       disposable-target live proof.
 - [ ] Extend X worker/scheduled sync beyond implemented watch-source monitor
-      jobs, with heartbeat-specific health, bounded retries/dead letters,
-      explicit config for any default schedule, live cron/callback proof, and
-      delivery integration.
+      jobs and locally proven `x_bookmarks` scheduled import, with
+      heartbeat-specific health, bounded retries/dead letters, explicit config
+      for any default schedule, live cron/callback proof, current live X OAuth
+      credentials, wall-clock external recurrence proof, and delivery
+      integration.
 - [ ] Add X performance/stress fixtures: large archive, many duplicate tweets,
       large follow graph, FTS rebuild over a large corpus, export/import over
       large shards, bounded URL expansion, and ops UI row limits.

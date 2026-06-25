@@ -330,6 +330,8 @@ assert(summary.audit_status === "audit_ok", "radar summary should be audit-ok", 
 assert(model.score_kind === "model_interestingness_v1" && model.scored > 0, "model overlay should run", model);
 assert(model.proof_level.includes("mock"), "model overlay proof must be local/mock in this script", model);
 assert(Array.isArray(clusters) && clusters.length >= 1, "durable X knowledge cluster should be created", clusters);
+assert(clusters.length >= 2, "durable X knowledge clustering should split selected evidence into multiple topic clusters", clusters);
+assert(new Set(clusters.map((item) => item.metadata?.cluster_key).filter(Boolean)).size >= 2, "clusters should carry distinct deterministic cluster keys", clusters);
 const cluster = clusters[0];
 assert(cluster.radar_run_id === runId, "cluster should link back to radar run", cluster);
 assert((cluster.source_card_ids || []).length >= 3, "cluster should be backed by multiple source cards", cluster);
@@ -405,6 +407,15 @@ const proofPacket = {
     model_scored: model.scored,
     source_family: run.run.metadata?.source_family,
   },
+  x_knowledge_clusters: clusters.map((item) => ({
+    id: item.id,
+    topic: item.topic,
+    cluster_key: item.metadata?.cluster_key,
+    source_cards: (item.source_card_ids || []).length,
+    novelty_score: item.novelty_score,
+    momentum_score: item.momentum_score,
+    stale_score: item.stale_score,
+  })),
   gates: {
     local_db_has_x_bookmarks: true,
     x_source_cards_projected_to_radar: true,
@@ -426,7 +437,7 @@ const proofPacket = {
   remaining_risk: [
     "This proof copies production local data into a disposable home and uses a controlled email endpoint, not a real external mailbox.",
     "This proof does not fetch fresh X data; live X API watch polling remains provider/quota dependent.",
-    "Trend clustering is currently one deterministic source-card-backed cluster per radar run; richer multi-cluster splitting is still pending.",
+    "Trend clustering is deterministic keyword-bucket splitting, not yet model-assisted topic discovery or semantic clustering.",
     "Generic wiki expand can still create empty pages for synthetic topics; X editorial expansion now has a source-card-backed quality gate and drives the delivered candidate in this proof.",
   ],
 };
