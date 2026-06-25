@@ -131,16 +131,18 @@ Current implemented bridge slice:
 - Alias collision checks that fail closed instead of silently merging unrelated
   canonical entities.
 - `/ops` and `/ops/ui` visibility for knowledge events, clusters, editorial
-  decisions, reports, entities, and relations.
+  decisions, reports, entities, relations, adapter runs, and entity-resolution
+  proposals.
 - Preserved production-data foreground proof:
-  `.arcwell-dev/proofs/knowledge-live-e2e-proof-20260625T165254Z-73353/artifacts/proof-packet.json`.
+  `.arcwell-dev/proofs/knowledge-live-e2e-proof-20260625T173937Z-37414/artifacts/proof-packet.json`.
 
 What the bridge proof showed:
 
 - Live public RSS, GitHub owner, arXiv, and Hacker News adapters completed.
 - A scored radar run projected 12 source cards into 12 confirmed knowledge
   events.
-- The projection wrote 9 source-backed entities and 19 source-backed relations.
+- The projection wrote 9 source-backed entities, 19 source-backed relations,
+  and 4 shared adapter-run contract rows.
 - One source-backed cluster, one completed editorial decision, and one
   human-readable report were written durably.
 - First-pass source-backed entities and relations are now part of the
@@ -1003,38 +1005,42 @@ Proof level after this milestone: `Local Proof`.
 
 ### Milestone 2: Shared Adapter Contract
 
-- [ ] Define `KnowledgeSourceAdapter` trait or equivalent internal interface.
+- [x] Define the first durable adapter-run contract equivalent via
+      `knowledge_adapter_runs`.
 - [x] Add first bridge from existing adapter-written source cards/radar runs
       into the shared knowledge substrate.
-- [ ] Wrap RSS/blog adapter.
-- [ ] Wrap GitHub repo adapter.
-- [ ] Wrap GitHub owner/org/person adapter.
-- [ ] Wrap arXiv adapter.
-- [ ] Wrap Hacker News adapter.
-- [ ] Wrap Reddit adapter where sanctioned access exists.
-- [ ] Wrap X bookmark/watch/recent-search adapters.
-- [ ] Add common provider error taxonomy.
-- [ ] Add common cursor/source-health update helper.
+- [x] Wrap RSS adapter jobs into the shared contract.
+- [x] Wrap GitHub repo adapter jobs into the shared contract.
+- [x] Wrap GitHub owner/org/person adapter jobs into the shared contract.
+- [x] Wrap arXiv adapter jobs into the shared contract.
+- [x] Wrap Hacker News adapter jobs into the shared contract.
+- [x] Wrap Reddit adapter jobs where sanctioned access exists into the shared
+      contract.
+- [x] Wrap X bookmark/watch/recent-search jobs into the shared contract.
+- [x] Add common provider error taxonomy for contract rows.
+- [x] Add common cursor/source-health visibility at the adapter-run boundary.
 - [ ] Add common source-card write transaction helper.
 
 Refuting tests:
 
-- [ ] Cursor does not advance if source-card write fails.
-- [ ] Policy denial happens before network.
-- [ ] Cost denial happens before credentials.
-- [ ] 401/403/429/5xx classify correctly.
-- [ ] Partial malformed provider page does not corrupt cursor.
-- [ ] Duplicate provider records do not flood source cards.
-- [ ] Source-health row distinguishes healthy, stale, blocked, failed, partial.
+- [x] Cursor does not advance if source-card write fails.
+- [x] Policy denial happens before network.
+- [x] Cost denial happens before credentials.
+- [x] 401/403/429/5xx classify correctly at the contract/error taxonomy level.
+- [x] Partial malformed provider page does not corrupt cursor.
+- [x] Duplicate provider records do not flood source cards.
+- [x] Source-health row distinguishes healthy, stale, blocked, failed, partial.
 - [x] Live public RSS, GitHub owner, arXiv, and Hacker News adapter evidence can
       be projected from a scored radar run into confirmed shared knowledge
       events without manual row surgery.
+- [x] Adapter success/failure rows include provider/source identity, counts,
+      cursor before/after, source-card ids, and classified errors.
 
 Proof level after this milestone: the foreground projection bridge is
 `Production Data Proof` for public RSS, GitHub owner, arXiv, and Hacker News
-through `scripts/knowledge-live-e2e-proof`. The true shared adapter contract is
-still open, and each wrapped source family must keep or earn its own live/copy
-proof packet.
+through `scripts/knowledge-live-e2e-proof`. The shared adapter contract now has
+local severe proof and is written by the adapter job boundary; broad scheduled
+live recurrence and per-source-family live/copy proof packets still remain.
 
 ### Milestone 3: Event Extraction
 
@@ -1044,7 +1050,9 @@ proof packet.
 - [x] Add first deterministic entity extraction and linking for providers,
       source items, GitHub owners, and GitHub repos.
 - [x] Add first source-role assignment.
-- [ ] Add optional schema-validated model extraction behind policy/cost.
+- [x] Add schema-gated model-origin entity-resolution proposal recording.
+- [ ] Add live optional model invocation for entity/event extraction behind
+      policy/cost.
 - [x] Write event-source rows.
 
 Refuting tests:
@@ -1052,6 +1060,8 @@ Refuting tests:
 - [ ] Reaction post cannot become first-party announcement.
 - [ ] GitHub release and X announcement for same repo coalesce.
 - [ ] Same org launching two different repos creates two events.
+- [x] Same bare repo name under two GitHub owners creates distinct entities and
+      a non-merge resolution.
 - [ ] Simon-style benchmark post links to benchmark entity and prior wiki page.
 - [ ] Karpathy workflow social post is labeled anecdotal if no primary writeup.
 - [ ] NVIDIA model release requires model-card/repo/paper/license evidence

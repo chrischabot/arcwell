@@ -1757,7 +1757,19 @@ enum KnowledgeSubcommand {
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
+    ResolveEntities {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    EntityResolutions {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
     Relations {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    AdapterRuns {
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
@@ -3686,8 +3698,17 @@ fn knowledge(store: Store, args: KnowledgeCommand) -> Result<()> {
         KnowledgeSubcommand::Entities { limit } => {
             print_json(&store.list_knowledge_entities(limit)?)
         }
+        KnowledgeSubcommand::ResolveEntities { limit } => {
+            print_json(&store.propose_knowledge_entity_resolutions(limit)?)
+        }
+        KnowledgeSubcommand::EntityResolutions { limit } => {
+            print_json(&store.list_knowledge_entity_resolutions(limit)?)
+        }
         KnowledgeSubcommand::Relations { limit } => {
             print_json(&store.list_knowledge_relations(limit)?)
+        }
+        KnowledgeSubcommand::AdapterRuns { limit } => {
+            print_json(&store.list_knowledge_adapter_runs(limit)?)
         }
     }
 }
@@ -7013,7 +7034,15 @@ code,pre{white-space:pre-wrap;word-break:break-word}
         ("Radar runs", snapshot.radar_runs.len()),
         ("Radar source quality", snapshot.radar_source_quality.len()),
         ("Radar deliveries", snapshot.radar_deliveries.len()),
+        (
+            "Knowledge adapter runs",
+            snapshot.knowledge_adapter_runs.len(),
+        ),
         ("Knowledge entities", snapshot.knowledge_entities.len()),
+        (
+            "Knowledge resolutions",
+            snapshot.knowledge_entity_resolutions.len(),
+        ),
         ("Knowledge relations", snapshot.knowledge_relations.len()),
         ("Knowledge events", snapshot.knowledge_events.len()),
         ("Knowledge clusters", snapshot.knowledge_clusters.len()),
@@ -7224,6 +7253,55 @@ code,pre{white-space:pre-wrap;word-break:break-word}
                     relation.source_card_ids.len().to_string(),
                     format!("{:.2}", relation.confidence),
                     relation.updated_at.clone(),
+                ]
+            }),
+    ));
+    html.push_str(&ops_table(
+        "Knowledge Adapter Runs",
+        &[
+            "adapter", "provider", "kind", "locator", "status", "accepted", "rejected", "cursor",
+            "updated",
+        ],
+        snapshot.knowledge_adapter_runs.iter().take(100).map(|run| {
+            vec![
+                short_id(&run.id),
+                run.provider.clone(),
+                run.source_kind.clone(),
+                run.locator.clone(),
+                run.status.clone(),
+                run.accepted_count.to_string(),
+                run.rejected_count.to_string(),
+                run.cursor_key.clone().unwrap_or_default(),
+                run.updated_at.clone(),
+            ]
+        }),
+    ));
+    html.push_str(&ops_table(
+        "Knowledge Entity Resolutions",
+        &[
+            "resolution",
+            "decision",
+            "status",
+            "confidence",
+            "resolver",
+            "sources",
+            "reason",
+            "updated",
+        ],
+        snapshot
+            .knowledge_entity_resolutions
+            .iter()
+            .take(100)
+            .map(|resolution| {
+                vec![
+                    short_id(&resolution.id),
+                    resolution.decision.clone(),
+                    resolution.status.clone(),
+                    format!("{:.2}", resolution.confidence),
+                    resolution.resolver.clone(),
+                    resolution.source_card_ids.len().to_string(),
+                    resolution.reason.clone(),
+                    resolution.updated_at.clone(),
                 ]
             }),
     ));
@@ -19000,12 +19078,36 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
                 5,
             )
             .unwrap();
+        let entities = store.list_knowledge_entities(10).unwrap();
+        let left = entities
+            .iter()
+            .find(|entity| entity.entity_type == "github_owner")
+            .unwrap();
+        let right = entities
+            .iter()
+            .find(|entity| entity.entity_type == "github_repo")
+            .unwrap();
+        store
+            .record_model_knowledge_entity_resolution(
+                &left.id,
+                &right.id,
+                "needs_review",
+                0.51,
+                "Ops-visible model-gated resolution fixture.",
+                json!({ "fixture": true }),
+                projection.cluster.source_card_ids.clone(),
+                Some("ops-ui-fixture"),
+            )
+            .unwrap();
         let html = render_ops_ui(&store.ops_snapshot().unwrap());
         assert!(html.contains("Knowledge Entities"));
         assert!(html.contains("Knowledge Relations"));
+        assert!(html.contains("Knowledge Adapter Runs"));
+        assert!(html.contains("Knowledge Entity Resolutions"));
         assert!(html.contains("Knowledge Events"));
         assert!(html.contains("Knowledge Clusters"));
         assert!(html.contains("Knowledge Reports"));
+        assert!(html.contains("Ops-visible model-gated resolution fixture."));
         assert!(html.contains("github:openai/agents"));
         assert!(html.contains("owns_repo"));
         assert!(html.contains("Ops visible general knowledge trend"));

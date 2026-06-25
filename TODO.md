@@ -159,16 +159,23 @@ PR, implementation note, or final report:
       relations, cluster co-occurrence relations, alias collision fail-closed
       checks, and preserved live proof `scripts/knowledge-live-e2e-proof`.
       Latest proof packet
-      `.arcwell-dev/proofs/knowledge-live-e2e-proof-20260625T165254Z-73353/artifacts/proof-packet.json`
+      `.arcwell-dev/proofs/knowledge-live-e2e-proof-20260625T173937Z-37414/artifacts/proof-packet.json`
       used live public RSS, GitHub owner, arXiv, and Hacker News adapters,
-      projected 12 source cards into 12 confirmed events, 9 entities, and 19
-      relations, wrote one cluster, one editorial decision, one human-readable
-      report, and browser-checked authenticated desktop/mobile ops UI.
-      Remaining work is the true shared adapter contract, richer semantic/model
-      entity resolution, investigation jobs, semantic/model clustering,
-      wiki/digest worker integration, X credential-refresh live proof,
-      scheduled recurrence, external delivery recurrence, and broader ops UI
-      controls.
+      projected 12 source cards into 12 confirmed events, 9 entities, 19
+      relations, and 4 adapter-run contract rows, wrote one cluster, one
+      editorial decision, one human-readable report, and browser-checked
+      authenticated desktop/mobile ops UI.
+      The next slice added schema v16 `knowledge_adapter_runs` and
+      `knowledge_entity_resolutions`, normalized adapter-job contract rows for
+      RSS/GitHub/arXiv/Hacker News/Reddit/X job families, cursor before/after
+      proof, provider-error classification, CLI listing/resolution commands,
+      conservative semantic entity-resolution proposals, schema-gated
+      model-origin proposals that cannot merge graph state by themselves, and a
+      GitHub repo short-name collision fix. Remaining work is live model
+      invocation proof for entity-resolution suggestions, investigation jobs,
+      semantic/model clustering, wiki/digest worker integration, X
+      credential-refresh live proof, scheduled recurrence, external delivery
+      recurrence, and broader ops UI controls.
 - [ ] Complete the Arcwell X anti-mirage plan in
       `docs/arcwell-x-architecture-implementation-plan.md` before marking X
       beyond `Partial`.
