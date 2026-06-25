@@ -153,17 +153,22 @@ PR, implementation note, or final report:
       severe tests. The foreground projection bridge also now exists:
       `arcwell knowledge project-radar-run`,
       `arcwell knowledge project-source-card-query`, listing commands, `/ops/ui`
-      knowledge tables, provider-native timestamp normalization, and preserved
-      live proof `scripts/knowledge-live-e2e-proof`. Latest proof packet
-      `.arcwell-dev/proofs/knowledge-live-e2e-proof-20260625T152151Z-18362/artifacts/proof-packet.json`
+      knowledge tables, provider-native timestamp normalization, first
+      deterministic source-card-backed `knowledge_entities` /
+      `knowledge_relations`, GitHub owner/repo relations, provider/source
+      relations, cluster co-occurrence relations, alias collision fail-closed
+      checks, and preserved live proof `scripts/knowledge-live-e2e-proof`.
+      Latest proof packet
+      `.arcwell-dev/proofs/knowledge-live-e2e-proof-20260625T165254Z-73353/artifacts/proof-packet.json`
       used live public RSS, GitHub owner, arXiv, and Hacker News adapters,
-      projected 12 source cards into 12 confirmed events, wrote one cluster,
-      one editorial decision, one human-readable report, and browser-checked
-      authenticated desktop/mobile ops UI. Remaining work is the true shared
-      adapter contract, entities/relations, investigation jobs, semantic/model
-      clustering, wiki/digest worker integration, X credential-refresh live
-      proof, scheduled recurrence, external delivery recurrence, and broader
-      ops UI controls.
+      projected 12 source cards into 12 confirmed events, 9 entities, and 19
+      relations, wrote one cluster, one editorial decision, one human-readable
+      report, and browser-checked authenticated desktop/mobile ops UI.
+      Remaining work is the true shared adapter contract, richer semantic/model
+      entity resolution, investigation jobs, semantic/model clustering,
+      wiki/digest worker integration, X credential-refresh live proof,
+      scheduled recurrence, external delivery recurrence, and broader ops UI
+      controls.
 - [ ] Complete the Arcwell X anti-mirage plan in
       `docs/arcwell-x-architecture-implementation-plan.md` before marking X
       beyond `Partial`.

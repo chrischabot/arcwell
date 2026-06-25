@@ -1753,6 +1753,14 @@ enum KnowledgeSubcommand {
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
+    Entities {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    Relations {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
 }
 
 #[derive(Args)]
@@ -3675,6 +3683,12 @@ fn knowledge(store: Store, args: KnowledgeCommand) -> Result<()> {
             print_json(&store.list_knowledge_clusters(limit)?)
         }
         KnowledgeSubcommand::Reports { limit } => print_json(&store.list_knowledge_reports(limit)?),
+        KnowledgeSubcommand::Entities { limit } => {
+            print_json(&store.list_knowledge_entities(limit)?)
+        }
+        KnowledgeSubcommand::Relations { limit } => {
+            print_json(&store.list_knowledge_relations(limit)?)
+        }
     }
 }
 
@@ -6999,6 +7013,8 @@ code,pre{white-space:pre-wrap;word-break:break-word}
         ("Radar runs", snapshot.radar_runs.len()),
         ("Radar source quality", snapshot.radar_source_quality.len()),
         ("Radar deliveries", snapshot.radar_deliveries.len()),
+        ("Knowledge entities", snapshot.knowledge_entities.len()),
+        ("Knowledge relations", snapshot.knowledge_relations.len()),
         ("Knowledge events", snapshot.knowledge_events.len()),
         ("Knowledge clusters", snapshot.knowledge_clusters.len()),
         (
@@ -7158,6 +7174,56 @@ code,pre{white-space:pre-wrap;word-break:break-word}
                     health.last_success_at.clone().unwrap_or_default(),
                     health.last_failure_at.clone().unwrap_or_default(),
                     health.last_error.clone().unwrap_or_default(),
+                ]
+            }),
+    ));
+    html.push_str(&ops_table(
+        "Knowledge Entities",
+        &[
+            "entity",
+            "type",
+            "name",
+            "canonical",
+            "sources",
+            "confidence",
+            "updated",
+        ],
+        snapshot.knowledge_entities.iter().take(100).map(|entity| {
+            vec![
+                short_id(&entity.id),
+                entity.entity_type.clone(),
+                entity.name.clone(),
+                entity.canonical_key.clone(),
+                entity.source_card_ids.len().to_string(),
+                format!("{:.2}", entity.confidence),
+                entity.updated_at.clone(),
+            ]
+        }),
+    ));
+    html.push_str(&ops_table(
+        "Knowledge Relations",
+        &[
+            "relation",
+            "type",
+            "subject",
+            "object",
+            "sources",
+            "confidence",
+            "updated",
+        ],
+        snapshot
+            .knowledge_relations
+            .iter()
+            .take(100)
+            .map(|relation| {
+                vec![
+                    short_id(&relation.id),
+                    relation.relation_type.clone(),
+                    short_id(&relation.subject_entity_id),
+                    short_id(&relation.object_entity_id),
+                    relation.source_card_ids.len().to_string(),
+                    format!("{:.2}", relation.confidence),
+                    relation.updated_at.clone(),
                 ]
             }),
     ));
@@ -18908,8 +18974,8 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
     fn severe_ops_ui_surfaces_general_knowledge_projection_without_raw_html() {
         // CLAIM: General unified knowledge projections are visible in the ops UI
         // and hostile source-card text remains escaped.
-        // ORACLE: A real source-card projection renders Knowledge Events,
-        // Knowledge Clusters, and Knowledge Reports tables without raw script.
+        // ORACLE: A real source-card projection renders Knowledge Entities,
+        // Relations, Events, Clusters, and Reports tables without raw script.
         // SEVERITY: Severe because hidden knowledge state is a fake-done mode,
         // and ops UI aggregates untrusted source-card titles/summaries.
         let paths = test_paths("ops-ui-general-knowledge");
@@ -18935,9 +19001,13 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
             )
             .unwrap();
         let html = render_ops_ui(&store.ops_snapshot().unwrap());
+        assert!(html.contains("Knowledge Entities"));
+        assert!(html.contains("Knowledge Relations"));
         assert!(html.contains("Knowledge Events"));
         assert!(html.contains("Knowledge Clusters"));
         assert!(html.contains("Knowledge Reports"));
+        assert!(html.contains("github:openai/agents"));
+        assert!(html.contains("owns_repo"));
         assert!(html.contains("Ops visible general knowledge trend"));
         assert!(html.contains(&short_id(&projection.cluster.id)));
         assert!(!html.contains("<script>alert(1)</script>"));

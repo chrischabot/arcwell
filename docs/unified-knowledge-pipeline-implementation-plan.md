@@ -116,25 +116,35 @@ Current implemented bridge slice:
 - Durable shared tables for `knowledge_events`, `knowledge_event_sources`,
   `knowledge_clusters`, `knowledge_editorial_decisions`, and
   `knowledge_reports`.
+- Durable shared tables for first-pass `knowledge_entities` and
+  `knowledge_relations`.
 - CLI projection from existing source cards or scored radar runs:
   `arcwell knowledge project-source-card-query` and
   `arcwell knowledge project-radar-run`.
-- CLI listing for knowledge events, clusters, and reports.
+- CLI listing for knowledge events, clusters, reports, entities, and relations.
 - Deterministic source-card-to-event mapping with source-card evidence rows,
   canonical keys for common providers, source roles, duplicate grouping,
   provider-native timestamp normalization, and report quality gates.
+- Deterministic source-card-backed entity/relation mapping for providers,
+  source items, GitHub owners/repos, provider reporting links, GitHub ownership
+  links, and cluster co-occurrence links.
+- Alias collision checks that fail closed instead of silently merging unrelated
+  canonical entities.
 - `/ops` and `/ops/ui` visibility for knowledge events, clusters, editorial
-  decisions, and reports.
+  decisions, reports, entities, and relations.
 - Preserved production-data foreground proof:
-  `.arcwell-dev/proofs/knowledge-live-e2e-proof-20260625T152151Z-18362/artifacts/proof-packet.json`.
+  `.arcwell-dev/proofs/knowledge-live-e2e-proof-20260625T165254Z-73353/artifacts/proof-packet.json`.
 
 What the bridge proof showed:
 
 - Live public RSS, GitHub owner, arXiv, and Hacker News adapters completed.
 - A scored radar run projected 12 source cards into 12 confirmed knowledge
   events.
+- The projection wrote 9 source-backed entities and 19 source-backed relations.
 - One source-backed cluster, one completed editorial decision, and one
   human-readable report were written durably.
+- First-pass source-backed entities and relations are now part of the
+  projection output and live proof harness assertions.
 - Cursors and ops state were visible after durable writes.
 - Authenticated `/ops/ui` rendered desktop and mobile knowledge tables through
   browser automation without horizontal overflow.
@@ -144,6 +154,7 @@ What it still does not prove:
 - Resident scheduled recurrence over wall-clock time.
 - Live X freshness, because local X credentials still need refresh/reauthorize.
 - Entity/relation storage.
+- Semantic/model-backed entity resolution beyond deterministic source metadata.
 - Model-backed semantic synthesis or semantic multi-cluster splitting.
 - Wiki page expansion/update jobs.
 - Digest candidate routing and external delivery from shared knowledge reports.
@@ -962,16 +973,18 @@ Done when:
 
 ### Milestone 1: Shared Knowledge Schema
 
-- [ ] Add migrations for `knowledge_entities`.
+- [x] Add migrations for `knowledge_entities`.
 - [x] Add migrations for `knowledge_events`.
 - [x] Add migrations for `knowledge_event_sources`.
 - [x] Add migrations for `knowledge_clusters`.
-- [ ] Add migrations for `knowledge_relations`.
+- [x] Add migrations for `knowledge_relations`.
 - [x] Add migrations for `knowledge_editorial_decisions`.
 - [ ] Add migrations for `knowledge_investigation_jobs`.
 - [x] Add migrations for initial `knowledge_reports` local-proof subset.
 - [x] Add typed Rust structs and row mappers for the local-proof event, source,
       cluster, editorial decision, and report substrate.
+- [x] Add typed Rust structs and row mappers for first-pass entities and
+      relations.
 - [x] Add CRUD/list/read APIs for the local-proof substrate.
 - [ ] Add search APIs.
 - [x] Add ops snapshot fields.
@@ -981,7 +994,7 @@ Refuting tests:
 - [x] Duplicate canonical event upserts update instead of duplicate.
 - [x] Event cannot be confirmed without source-card evidence.
 - [x] Malicious source text is stored as data.
-- [ ] Entity alias collision requires review.
+- [x] Entity alias collision requires review.
 - [x] Cluster preserves all source-card ids and duplicate groups.
 - [x] Missing source cards block cluster/report/decision writes.
 - [x] Link-dump and missing-source-card-citation reports are rejected.
@@ -1028,7 +1041,8 @@ proof packet.
 - [x] Implement first deterministic event extraction from source cards.
 - [ ] Add canonical keys for GitHub repos/releases, packages, models, papers,
       URLs, X posts, and topic events.
-- [ ] Add entity extraction and linking.
+- [x] Add first deterministic entity extraction and linking for providers,
+      source items, GitHub owners, and GitHub repos.
 - [x] Add first source-role assignment.
 - [ ] Add optional schema-validated model extraction behind policy/cost.
 - [x] Write event-source rows.
@@ -1049,7 +1063,8 @@ Refuting tests:
       cards/radar runs.
 - [x] Implement first source-diversity and momentum scoring.
 - [ ] Implement wiki novelty lookup.
-- [ ] Implement relation extraction.
+- [x] Implement first deterministic relation extraction for provider reporting,
+      GitHub owner/repo ownership, and cluster co-occurrence.
 - [ ] Add semantic/model cluster proposal behind schema validation.
 - [ ] Add cluster revisioning or metadata to avoid stale report reuse.
 

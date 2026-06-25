@@ -26,7 +26,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 pub const APP_NAME: &str = "arcwell";
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 pub const SOURCE_CARD_SCHEMA_VERSION: u64 = 1;
 const MAX_COST_USD: f64 = 1_000_000.0;
 const SOURCE_CARD_STALE_DAYS: i64 = 180;
@@ -748,6 +748,65 @@ pub struct KnowledgeReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeEntityInput {
+    pub entity_type: String,
+    pub name: String,
+    pub canonical_key: String,
+    pub aliases: Vec<String>,
+    pub homepage_url: Option<String>,
+    pub source_card_ids: Vec<String>,
+    pub wiki_page_id: Option<String>,
+    pub confidence: f64,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeEntity {
+    pub id: String,
+    pub entity_type: String,
+    pub name: String,
+    pub canonical_key: String,
+    pub aliases: Vec<String>,
+    pub homepage_url: Option<String>,
+    pub source_card_ids: Vec<String>,
+    pub wiki_page_id: Option<String>,
+    pub confidence: f64,
+    pub metadata: Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeRelationInput {
+    pub relation_type: String,
+    pub subject_entity_id: String,
+    pub object_entity_id: String,
+    pub event_id: Option<String>,
+    pub cluster_id: Option<String>,
+    pub source_card_ids: Vec<String>,
+    pub confidence: f64,
+    pub reason: String,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeRelation {
+    pub id: String,
+    pub relation_key: String,
+    pub relation_type: String,
+    pub subject_entity_id: String,
+    pub object_entity_id: String,
+    pub event_id: Option<String>,
+    pub cluster_id: Option<String>,
+    pub source_card_ids: Vec<String>,
+    pub confidence: f64,
+    pub reason: String,
+    pub metadata: Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeProjectionReport {
     pub topic: String,
     pub proof_level: String,
@@ -755,6 +814,8 @@ pub struct KnowledgeProjectionReport {
     pub source_cards: Vec<SourceCard>,
     pub events: Vec<KnowledgeEvent>,
     pub event_sources: Vec<KnowledgeEventSource>,
+    pub entities: Vec<KnowledgeEntity>,
+    pub relations: Vec<KnowledgeRelation>,
     pub cluster: KnowledgeCluster,
     pub editorial_decision: KnowledgeEditorialDecision,
     pub report: KnowledgeReport,
@@ -3622,6 +3683,8 @@ pub struct OpsSnapshot {
     pub radar_runs: Vec<RadarRun>,
     pub radar_source_quality: Vec<RadarSourceQuality>,
     pub radar_deliveries: Vec<RadarDelivery>,
+    pub knowledge_entities: Vec<KnowledgeEntity>,
+    pub knowledge_relations: Vec<KnowledgeRelation>,
     pub knowledge_events: Vec<KnowledgeEvent>,
     pub knowledge_clusters: Vec<KnowledgeCluster>,
     pub knowledge_editorial_decisions: Vec<KnowledgeEditorialDecision>,
@@ -5144,6 +5207,9 @@ impl Store {
             ensure_x_knowledge_schema_on(conn)
         })?;
         self.apply_schema_migration(14, "unified_knowledge_pipeline", false, None, |conn| {
+            ensure_knowledge_schema_on(conn)
+        })?;
+        self.apply_schema_migration(15, "knowledge_entities_relations", false, None, |conn| {
             ensure_knowledge_schema_on(conn)
         })?;
         repair_radar_source_quality_run_scope_on(&self.conn)?;
@@ -15463,6 +15529,217 @@ impl Store {
         rows(stmt.query_map(params![limit.clamp(1, 500)], x_editorial_decision_from_row)?)
     }
 
+    pub fn upsert_knowledge_entity(&self, input: KnowledgeEntityInput) -> Result<KnowledgeEntity> {
+        let input = self.normalize_knowledge_entity_input(input)?;
+        let id = format!("kent-{}", &sha256(input.canonical_key.as_bytes())[..16]);
+        let timestamp = now();
+        let existing = self.get_knowledge_entity_by_canonical_key(&input.canonical_key)?;
+        let aliases = existing
+            .as_ref()
+            .map(|entity| merge_string_sets(&entity.aliases, &input.aliases))
+            .unwrap_or_else(|| input.aliases.clone());
+        let source_card_ids = existing
+            .as_ref()
+            .map(|entity| merge_string_sets(&entity.source_card_ids, &input.source_card_ids))
+            .unwrap_or_else(|| input.source_card_ids.clone());
+        let confidence = existing
+            .as_ref()
+            .map(|entity| entity.confidence.max(input.confidence))
+            .unwrap_or(input.confidence);
+        self.ensure_knowledge_entity_aliases_available(&input.canonical_key, &aliases)?;
+        self.conn.execute(
+            r#"
+            INSERT INTO knowledge_entities
+              (id, entity_type, name, canonical_key, aliases_json, homepage_url,
+               source_card_ids_json, wiki_page_id, confidence, metadata_json, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
+            ON CONFLICT(canonical_key) DO UPDATE SET
+              entity_type = excluded.entity_type,
+              name = excluded.name,
+              aliases_json = excluded.aliases_json,
+              homepage_url = COALESCE(excluded.homepage_url, knowledge_entities.homepage_url),
+              source_card_ids_json = excluded.source_card_ids_json,
+              wiki_page_id = COALESCE(excluded.wiki_page_id, knowledge_entities.wiki_page_id),
+              confidence = MAX(knowledge_entities.confidence, excluded.confidence),
+              metadata_json = excluded.metadata_json,
+              updated_at = excluded.updated_at
+            "#,
+            params![
+                id,
+                input.entity_type,
+                input.name,
+                input.canonical_key,
+                serde_json::to_string(&aliases)?,
+                input.homepage_url,
+                serde_json::to_string(&source_card_ids)?,
+                input.wiki_page_id,
+                confidence,
+                input.metadata.to_string(),
+                timestamp,
+            ],
+        )?;
+        self.get_knowledge_entity(&id)?
+            .with_context(|| format!("inserted knowledge entity not found: {id}"))
+    }
+
+    pub fn get_knowledge_entity(&self, id: &str) -> Result<Option<KnowledgeEntity>> {
+        validate_id(id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, entity_type, name, canonical_key, aliases_json, homepage_url,
+                       source_card_ids_json, wiki_page_id, confidence, metadata_json,
+                       created_at, updated_at
+                FROM knowledge_entities
+                WHERE id = ?1
+                "#,
+                params![id],
+                knowledge_entity_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn get_knowledge_entity_by_canonical_key(
+        &self,
+        canonical_key: &str,
+    ) -> Result<Option<KnowledgeEntity>> {
+        validate_knowledge_text("knowledge entity canonical key", canonical_key, 500)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, entity_type, name, canonical_key, aliases_json, homepage_url,
+                       source_card_ids_json, wiki_page_id, confidence, metadata_json,
+                       created_at, updated_at
+                FROM knowledge_entities
+                WHERE canonical_key = ?1
+                "#,
+                params![canonical_key],
+                knowledge_entity_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn list_knowledge_entities(&self, limit: usize) -> Result<Vec<KnowledgeEntity>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, entity_type, name, canonical_key, aliases_json, homepage_url,
+                   source_card_ids_json, wiki_page_id, confidence, metadata_json,
+                   created_at, updated_at
+            FROM knowledge_entities
+            ORDER BY updated_at DESC
+            LIMIT ?1
+            "#,
+        )?;
+        rows(stmt.query_map(params![limit.clamp(1, 500)], knowledge_entity_from_row)?)
+    }
+
+    pub fn upsert_knowledge_relation(
+        &self,
+        input: KnowledgeRelationInput,
+    ) -> Result<KnowledgeRelation> {
+        let input = self.normalize_knowledge_relation_input(input)?;
+        let relation_key = knowledge_relation_key(&input);
+        let id = format!("krel-{}", &sha256(relation_key.as_bytes())[..16]);
+        let existing = self.get_knowledge_relation_by_key(&relation_key)?;
+        let source_card_ids = existing
+            .as_ref()
+            .map(|relation| merge_string_sets(&relation.source_card_ids, &input.source_card_ids))
+            .unwrap_or_else(|| input.source_card_ids.clone());
+        let confidence = existing
+            .as_ref()
+            .map(|relation| relation.confidence.max(input.confidence))
+            .unwrap_or(input.confidence);
+        let timestamp = now();
+        self.conn.execute(
+            r#"
+            INSERT INTO knowledge_relations
+              (id, relation_key, relation_type, subject_entity_id, object_entity_id,
+               event_id, cluster_id, source_card_ids_json, confidence, reason,
+               metadata_json, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
+            ON CONFLICT(relation_key) DO UPDATE SET
+              event_id = COALESCE(excluded.event_id, knowledge_relations.event_id),
+              cluster_id = COALESCE(excluded.cluster_id, knowledge_relations.cluster_id),
+              source_card_ids_json = excluded.source_card_ids_json,
+              confidence = MAX(knowledge_relations.confidence, excluded.confidence),
+              reason = excluded.reason,
+              metadata_json = excluded.metadata_json,
+              updated_at = excluded.updated_at
+            "#,
+            params![
+                id,
+                relation_key,
+                input.relation_type,
+                input.subject_entity_id,
+                input.object_entity_id,
+                input.event_id,
+                input.cluster_id,
+                serde_json::to_string(&source_card_ids)?,
+                confidence,
+                input.reason,
+                input.metadata.to_string(),
+                timestamp,
+            ],
+        )?;
+        self.get_knowledge_relation(&id)?
+            .with_context(|| format!("inserted knowledge relation not found: {id}"))
+    }
+
+    pub fn get_knowledge_relation(&self, id: &str) -> Result<Option<KnowledgeRelation>> {
+        validate_id(id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, relation_key, relation_type, subject_entity_id, object_entity_id,
+                       event_id, cluster_id, source_card_ids_json, confidence, reason,
+                       metadata_json, created_at, updated_at
+                FROM knowledge_relations
+                WHERE id = ?1
+                "#,
+                params![id],
+                knowledge_relation_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn get_knowledge_relation_by_key(
+        &self,
+        relation_key: &str,
+    ) -> Result<Option<KnowledgeRelation>> {
+        validate_knowledge_text("knowledge relation key", relation_key, 1_000)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, relation_key, relation_type, subject_entity_id, object_entity_id,
+                       event_id, cluster_id, source_card_ids_json, confidence, reason,
+                       metadata_json, created_at, updated_at
+                FROM knowledge_relations
+                WHERE relation_key = ?1
+                "#,
+                params![relation_key],
+                knowledge_relation_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn list_knowledge_relations(&self, limit: usize) -> Result<Vec<KnowledgeRelation>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, relation_key, relation_type, subject_entity_id, object_entity_id,
+                   event_id, cluster_id, source_card_ids_json, confidence, reason,
+                   metadata_json, created_at, updated_at
+            FROM knowledge_relations
+            ORDER BY updated_at DESC
+            LIMIT ?1
+            "#,
+        )?;
+        rows(stmt.query_map(params![limit.clamp(1, 500)], knowledge_relation_from_row)?)
+    }
+
     pub fn upsert_knowledge_event(&self, input: KnowledgeEventInput) -> Result<KnowledgeEvent> {
         let input = normalize_knowledge_event_input(input)?;
         let id = format!(
@@ -16072,6 +16349,8 @@ impl Store {
 
         let mut events = Vec::new();
         let mut event_sources = Vec::new();
+        let mut entities_by_id = BTreeMap::<String, KnowledgeEntity>::new();
+        let mut relations_by_id = BTreeMap::<String, KnowledgeRelation>::new();
         for card in &source_cards {
             let event =
                 self.upsert_knowledge_event(knowledge_event_input_from_source_card(card)?)?;
@@ -16089,6 +16368,14 @@ impl Store {
                 }),
             })?;
             let confirmed = self.confirm_knowledge_event(&event.id)?;
+            let (card_entities, card_relations) =
+                self.project_knowledge_entities_for_source_card(card, &confirmed)?;
+            for entity in card_entities {
+                entities_by_id.insert(entity.id.clone(), entity);
+            }
+            for relation in card_relations {
+                relations_by_id.insert(relation.id.clone(), relation);
+            }
             events.push(confirmed);
             event_sources.push(event_source);
         }
@@ -16160,6 +16447,11 @@ impl Store {
                 "source_metadata": metadata,
             }),
         })?;
+        let cluster_relations =
+            self.project_knowledge_cluster_relations(&cluster, &source_cards, &entities_by_id)?;
+        for relation in cluster_relations {
+            relations_by_id.insert(relation.id.clone(), relation);
+        }
         let editorial_decision =
             self.record_knowledge_editorial_decision(KnowledgeEditorialDecisionInput {
                 cluster_id: cluster.id.clone(),
@@ -16208,12 +16500,149 @@ impl Store {
             source_cards,
             events,
             event_sources,
+            entities: entities_by_id.into_values().collect(),
+            relations: relations_by_id.into_values().collect(),
             cluster,
             editorial_decision,
             report,
             warnings,
             metadata,
         })
+    }
+
+    fn project_knowledge_entities_for_source_card(
+        &self,
+        card: &SourceCard,
+        event: &KnowledgeEvent,
+    ) -> Result<(Vec<KnowledgeEntity>, Vec<KnowledgeRelation>)> {
+        let inputs = knowledge_entity_inputs_for_card(card);
+        let mut entities = Vec::new();
+        let mut by_key = BTreeMap::new();
+        for input in inputs {
+            let entity = self.upsert_knowledge_entity(input)?;
+            by_key.insert(entity.canonical_key.clone(), entity.clone());
+            entities.push(entity);
+        }
+
+        let mut relations = Vec::new();
+        if let Some(primary_key) = knowledge_projected_primary_entity_key_for_card(card)
+            && let (Some(primary), Some(provider)) = (
+                by_key.get(&primary_key),
+                by_key.get(&knowledge_provider_entity_key(card)),
+            )
+            && primary.id != provider.id
+        {
+            relations.push(self.upsert_knowledge_relation(KnowledgeRelationInput {
+                relation_type: "reported_by_provider".to_string(),
+                subject_entity_id: primary.id.clone(),
+                object_entity_id: provider.id.clone(),
+                event_id: Some(event.id.clone()),
+                cluster_id: None,
+                source_card_ids: vec![card.id.clone()],
+                confidence: knowledge_source_confidence_for_card(card),
+                reason: format!(
+                    "Source card `{}` says `{}` is evidence from provider `{}`.",
+                    card.id, primary.name, card.provider
+                ),
+                metadata: json!({
+                    "source_card_url": card.url,
+                    "provider": card.provider,
+                    "source_type": card.source_type,
+                }),
+            })?);
+        }
+        if let (Some(owner), Some(repo)) = (
+            knowledge_github_owner_key(card).and_then(|key| by_key.get(&key)),
+            knowledge_github_repo_key(card).and_then(|key| by_key.get(&key)),
+        ) && owner.id != repo.id
+        {
+            relations.push(self.upsert_knowledge_relation(KnowledgeRelationInput {
+                relation_type: "owns_repo".to_string(),
+                subject_entity_id: owner.id.clone(),
+                object_entity_id: repo.id.clone(),
+                event_id: Some(event.id.clone()),
+                cluster_id: None,
+                source_card_ids: vec![card.id.clone()],
+                confidence: 0.9_f64.min(knowledge_source_confidence_for_card(card)),
+                reason: format!(
+                    "GitHub source-card metadata links owner `{}` to repo `{}`.",
+                    owner.name, repo.name
+                ),
+                metadata: json!({
+                    "source_card_url": card.url,
+                    "provider": card.provider,
+                    "source_type": card.source_type,
+                }),
+            })?);
+        }
+        Ok((entities, relations))
+    }
+
+    fn project_knowledge_cluster_relations(
+        &self,
+        cluster: &KnowledgeCluster,
+        source_cards: &[SourceCard],
+        entities_by_id: &BTreeMap<String, KnowledgeEntity>,
+    ) -> Result<Vec<KnowledgeRelation>> {
+        let mut entities_by_key = entities_by_id
+            .values()
+            .map(|entity| (entity.canonical_key.clone(), entity.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for card in source_cards {
+            if let Some(primary_key) = knowledge_projected_primary_entity_key_for_card(card)
+                && !entities_by_key.contains_key(&primary_key)
+                && let Some(entity) = self.get_knowledge_entity_by_canonical_key(&primary_key)?
+            {
+                entities_by_key.insert(primary_key, entity);
+            }
+        }
+        let mut by_primary = BTreeMap::<String, (KnowledgeEntity, BTreeSet<String>)>::new();
+        for card in source_cards {
+            if let Some(primary_key) = knowledge_projected_primary_entity_key_for_card(card)
+                && let Some(entity) = entities_by_key.get(&primary_key)
+            {
+                by_primary
+                    .entry(entity.id.clone())
+                    .or_insert_with(|| (entity.clone(), BTreeSet::new()))
+                    .1
+                    .insert(card.id.clone());
+            }
+        }
+        let primary = by_primary.into_values().collect::<Vec<_>>();
+        let mut relations = Vec::new();
+        for left_index in 0..primary.len() {
+            for right_index in (left_index + 1)..primary.len() {
+                let (left, left_sources) = &primary[left_index];
+                let (right, right_sources) = &primary[right_index];
+                let (subject, object) = if left.id <= right.id {
+                    (left, right)
+                } else {
+                    (right, left)
+                };
+                let source_card_ids = left_sources
+                    .union(right_sources)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                relations.push(self.upsert_knowledge_relation(KnowledgeRelationInput {
+                    relation_type: "co_clustered_with".to_string(),
+                    subject_entity_id: subject.id.clone(),
+                    object_entity_id: object.id.clone(),
+                    event_id: None,
+                    cluster_id: Some(cluster.id.clone()),
+                    source_card_ids,
+                    confidence: 0.6,
+                    reason: format!(
+                        "`{}` and `{}` appear in the same source-card-backed knowledge cluster `{}`.",
+                        subject.name, object.name, cluster.topic
+                    ),
+                    metadata: json!({
+                        "cluster_topic": cluster.topic,
+                        "relation_scope": "deterministic_cluster_cooccurrence",
+                    }),
+                })?);
+            }
+        }
+        Ok(relations)
     }
 
     fn normalize_knowledge_source_card_ids(&self, ids: &[String]) -> Result<Vec<String>> {
@@ -16233,6 +16662,129 @@ impl Store {
                 .with_context(|| format!("source card not found: {id}"))?;
         }
         Ok(ids)
+    }
+
+    fn normalize_knowledge_entity_input(
+        &self,
+        input: KnowledgeEntityInput,
+    ) -> Result<KnowledgeEntityInput> {
+        let aliases = normalize_knowledge_aliases(&input.aliases, Some(&input.name));
+        let source_card_ids = self.normalize_knowledge_source_card_ids(&input.source_card_ids)?;
+        let normalized = KnowledgeEntityInput {
+            entity_type: input.entity_type.trim().to_string(),
+            name: input.name.trim().to_string(),
+            canonical_key: input.canonical_key.trim().to_string(),
+            aliases,
+            homepage_url: input
+                .homepage_url
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty()),
+            source_card_ids,
+            wiki_page_id: input
+                .wiki_page_id
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty()),
+            confidence: input.confidence,
+            metadata: input.metadata,
+        };
+        validate_knowledge_entity_input(&normalized)?;
+        self.ensure_knowledge_entity_aliases_available(
+            &normalized.canonical_key,
+            &normalized.aliases,
+        )?;
+        Ok(normalized)
+    }
+
+    fn ensure_knowledge_entity_aliases_available(
+        &self,
+        canonical_key: &str,
+        aliases: &[String],
+    ) -> Result<()> {
+        let aliases = normalize_knowledge_aliases(aliases, None);
+        if aliases.is_empty() {
+            return Ok(());
+        }
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, entity_type, name, canonical_key, aliases_json, homepage_url,
+                   source_card_ids_json, wiki_page_id, confidence, metadata_json,
+                   created_at, updated_at
+            FROM knowledge_entities
+            "#,
+        )?;
+        let existing = rows(stmt.query_map([], knowledge_entity_from_row)?)?;
+        let wanted = aliases
+            .iter()
+            .map(|alias| normalize_knowledge_alias_key(alias))
+            .collect::<BTreeSet<_>>();
+        for entity in existing {
+            if entity.canonical_key == canonical_key {
+                continue;
+            }
+            let mut entity_aliases =
+                normalize_knowledge_aliases(&entity.aliases, Some(&entity.name));
+            entity_aliases.push(entity.canonical_key.clone());
+            let entity_keys = entity_aliases
+                .iter()
+                .map(|alias| normalize_knowledge_alias_key(alias))
+                .collect::<BTreeSet<_>>();
+            if let Some(conflict) = wanted.intersection(&entity_keys).next() {
+                bail!(
+                    "knowledge entity alias collision requires review: `{}` already belongs to `{}`",
+                    conflict,
+                    entity.canonical_key
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn normalize_knowledge_relation_input(
+        &self,
+        input: KnowledgeRelationInput,
+    ) -> Result<KnowledgeRelationInput> {
+        let source_card_ids = self.normalize_knowledge_source_card_ids(&input.source_card_ids)?;
+        let normalized = KnowledgeRelationInput {
+            relation_type: input.relation_type.trim().to_string(),
+            subject_entity_id: input.subject_entity_id.trim().to_string(),
+            object_entity_id: input.object_entity_id.trim().to_string(),
+            event_id: input
+                .event_id
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty()),
+            cluster_id: input
+                .cluster_id
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty()),
+            source_card_ids,
+            confidence: input.confidence,
+            reason: input.reason.trim().to_string(),
+            metadata: input.metadata,
+        };
+        validate_knowledge_relation_input(&normalized)?;
+        self.get_knowledge_entity(&normalized.subject_entity_id)?
+            .with_context(|| {
+                format!(
+                    "knowledge relation subject entity not found: {}",
+                    normalized.subject_entity_id
+                )
+            })?;
+        self.get_knowledge_entity(&normalized.object_entity_id)?
+            .with_context(|| {
+                format!(
+                    "knowledge relation object entity not found: {}",
+                    normalized.object_entity_id
+                )
+            })?;
+        if let Some(event_id) = &normalized.event_id {
+            self.get_knowledge_event(event_id)?
+                .with_context(|| format!("knowledge relation event not found: {event_id}"))?;
+        }
+        if let Some(cluster_id) = &normalized.cluster_id {
+            self.get_knowledge_cluster(cluster_id)?
+                .with_context(|| format!("knowledge relation cluster not found: {cluster_id}"))?;
+        }
+        Ok(normalized)
     }
 
     fn normalize_knowledge_event_ids(&self, ids: &[String]) -> Result<Vec<String>> {
@@ -26027,6 +26579,8 @@ impl Store {
             radar_runs: self.list_radar_runs()?.into_iter().take(50).collect(),
             radar_source_quality: self.list_all_radar_source_quality()?,
             radar_deliveries: self.list_radar_deliveries(None)?,
+            knowledge_entities: self.list_knowledge_entities(50)?,
+            knowledge_relations: self.list_knowledge_relations(50)?,
             knowledge_events: self.list_knowledge_events(50)?,
             knowledge_clusters: self.list_knowledge_clusters(50)?,
             knowledge_editorial_decisions: self.list_knowledge_editorial_decisions(50)?,
@@ -30856,6 +31410,105 @@ fn validate_knowledge_score(label: &str, value: f64) -> Result<()> {
     Ok(())
 }
 
+fn validate_knowledge_entity_input(input: &KnowledgeEntityInput) -> Result<()> {
+    validate_key(&input.entity_type)?;
+    validate_knowledge_text("knowledge entity name", &input.name, 500)?;
+    validate_knowledge_text("knowledge entity canonical key", &input.canonical_key, 500)?;
+    validate_knowledge_score("knowledge entity confidence", input.confidence)?;
+    if input.source_card_ids.is_empty() {
+        bail!("knowledge entity requires source-card evidence");
+    }
+    if input.aliases.len() > 50 {
+        bail!("knowledge entity has too many aliases");
+    }
+    for alias in &input.aliases {
+        validate_knowledge_text("knowledge entity alias", alias, 500)?;
+    }
+    if let Some(homepage_url) = &input.homepage_url {
+        validate_public_http_url(homepage_url)?;
+    }
+    if let Some(wiki_page_id) = &input.wiki_page_id {
+        validate_id(wiki_page_id)?;
+    }
+    Ok(())
+}
+
+fn validate_knowledge_relation_input(input: &KnowledgeRelationInput) -> Result<()> {
+    validate_key(&input.relation_type)?;
+    validate_id(&input.subject_entity_id)?;
+    validate_id(&input.object_entity_id)?;
+    if input.subject_entity_id == input.object_entity_id {
+        bail!("knowledge relation subject and object must differ");
+    }
+    if let Some(event_id) = &input.event_id {
+        validate_id(event_id)?;
+    }
+    if let Some(cluster_id) = &input.cluster_id {
+        validate_id(cluster_id)?;
+    }
+    if input.source_card_ids.is_empty() {
+        bail!("knowledge relation requires source-card evidence");
+    }
+    for source_card_id in &input.source_card_ids {
+        validate_id(source_card_id)?;
+    }
+    validate_knowledge_score("knowledge relation confidence", input.confidence)?;
+    validate_knowledge_text("knowledge relation reason", &input.reason, 5_000)?;
+    Ok(())
+}
+
+fn normalize_knowledge_aliases(aliases: &[String], primary_name: Option<&str>) -> Vec<String> {
+    let mut normalized = aliases
+        .iter()
+        .filter_map(|alias| normalize_knowledge_alias(alias))
+        .collect::<BTreeSet<_>>();
+    if let Some(primary_name) = primary_name.and_then(normalize_knowledge_alias) {
+        normalized.insert(primary_name);
+    }
+    normalized.into_iter().collect()
+}
+
+fn normalize_knowledge_alias(alias: &str) -> Option<String> {
+    let alias = alias.split_whitespace().collect::<Vec<_>>().join(" ");
+    if alias.is_empty() { None } else { Some(alias) }
+}
+
+fn normalize_knowledge_alias_key(alias: &str) -> String {
+    alias
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn merge_string_sets(left: &[String], right: &[String]) -> Vec<String> {
+    left.iter()
+        .chain(right.iter())
+        .filter_map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn knowledge_relation_key(input: &KnowledgeRelationInput) -> String {
+    format!(
+        "{}\n{}\n{}\n{}\n{}",
+        input.relation_type,
+        input.subject_entity_id,
+        input.object_entity_id,
+        input.event_id.as_deref().unwrap_or(""),
+        input.cluster_id.as_deref().unwrap_or("")
+    )
+}
+
 fn normalize_knowledge_event_input(input: KnowledgeEventInput) -> Result<KnowledgeEventInput> {
     let normalized = KnowledgeEventInput {
         event_type: input.event_type.trim().to_string(),
@@ -31161,6 +31814,167 @@ fn knowledge_primary_entity_key_for_card(card: &SourceCard) -> Option<String> {
         .get("source_detail")
         .and_then(Value::as_str)
         .map(|detail| format!("{}:{detail}", card.provider))
+}
+
+fn knowledge_projected_primary_entity_key_for_card(card: &SourceCard) -> Option<String> {
+    knowledge_primary_entity_key_for_card(card).or_else(|| Some(format!("url:{}", card.url)))
+}
+
+fn knowledge_entity_inputs_for_card(card: &SourceCard) -> Vec<KnowledgeEntityInput> {
+    let mut inputs = Vec::new();
+    inputs.push(knowledge_provider_entity_input(card));
+    if let Some(input) = knowledge_github_owner_entity_input(card) {
+        inputs.push(input);
+    }
+    if let Some(input) = knowledge_github_repo_entity_input(card) {
+        inputs.push(input);
+    } else if let Some(input) = knowledge_primary_source_entity_input(card) {
+        inputs.push(input);
+    }
+    let mut by_key = BTreeMap::<String, KnowledgeEntityInput>::new();
+    for input in inputs {
+        by_key.entry(input.canonical_key.clone()).or_insert(input);
+    }
+    by_key.into_values().collect()
+}
+
+fn knowledge_provider_entity_key(card: &SourceCard) -> String {
+    format!("provider:{}", card.provider.trim())
+}
+
+fn knowledge_provider_entity_input(card: &SourceCard) -> KnowledgeEntityInput {
+    KnowledgeEntityInput {
+        entity_type: "source_provider".to_string(),
+        name: card.provider.clone(),
+        canonical_key: knowledge_provider_entity_key(card),
+        aliases: vec![card.provider.clone()],
+        homepage_url: provider_homepage_url(card.provider.as_str()),
+        source_card_ids: vec![card.id.clone()],
+        wiki_page_id: None,
+        confidence: knowledge_source_confidence_for_card(card).min(0.8),
+        metadata: json!({
+            "provider": card.provider,
+            "source_type": card.source_type,
+            "trust_boundary": "provider entity is derived from source-card metadata",
+        }),
+    }
+}
+
+fn provider_homepage_url(provider: &str) -> Option<String> {
+    match provider {
+        "github" => Some("https://github.com".to_string()),
+        "arxiv" => Some("https://arxiv.org".to_string()),
+        "hackernews" => Some("https://news.ycombinator.com".to_string()),
+        "reddit" => Some("https://www.reddit.com".to_string()),
+        "x" => Some("https://x.com".to_string()),
+        _ => None,
+    }
+}
+
+fn knowledge_github_owner_key(card: &SourceCard) -> Option<String> {
+    if card.provider != "github" {
+        return None;
+    }
+    card.metadata
+        .get("owner")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|owner| !owner.is_empty())
+        .map(|owner| format!("github:owner:{owner}"))
+}
+
+fn knowledge_github_owner_entity_input(card: &SourceCard) -> Option<KnowledgeEntityInput> {
+    let key = knowledge_github_owner_key(card)?;
+    let owner = card.metadata.get("owner")?.as_str()?.trim();
+    Some(KnowledgeEntityInput {
+        entity_type: "github_owner".to_string(),
+        name: owner.to_string(),
+        canonical_key: key,
+        aliases: vec![owner.to_string()],
+        homepage_url: Some(format!("https://github.com/{owner}")),
+        source_card_ids: vec![card.id.clone()],
+        wiki_page_id: None,
+        confidence: 0.9_f64.min(knowledge_source_confidence_for_card(card)),
+        metadata: json!({
+            "provider": card.provider,
+            "source_type": card.source_type,
+            "source_card_url": card.url,
+        }),
+    })
+}
+
+fn knowledge_github_repo_key(card: &SourceCard) -> Option<String> {
+    if card.provider != "github" {
+        return None;
+    }
+    let owner = card.metadata.get("owner").and_then(Value::as_str)?;
+    let repo = card
+        .metadata
+        .get("repo")
+        .or_else(|| card.metadata.get("name"))
+        .and_then(Value::as_str)?;
+    let owner = owner.trim();
+    let repo = repo.trim();
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("github:{owner}/{repo}"))
+}
+
+fn knowledge_github_repo_entity_input(card: &SourceCard) -> Option<KnowledgeEntityInput> {
+    let key = knowledge_github_repo_key(card)?;
+    let owner = card.metadata.get("owner")?.as_str()?.trim();
+    let repo = card
+        .metadata
+        .get("repo")
+        .or_else(|| card.metadata.get("name"))?
+        .as_str()?
+        .trim();
+    let name = format!("{owner}/{repo}");
+    Some(KnowledgeEntityInput {
+        entity_type: "github_repo".to_string(),
+        name: name.clone(),
+        canonical_key: key,
+        aliases: vec![name, repo.to_string()],
+        homepage_url: Some(format!("https://github.com/{owner}/{repo}")),
+        source_card_ids: vec![card.id.clone()],
+        wiki_page_id: None,
+        confidence: 0.9_f64.min(knowledge_source_confidence_for_card(card)),
+        metadata: json!({
+            "provider": card.provider,
+            "source_type": card.source_type,
+            "owner": owner,
+            "repo": repo,
+            "source_card_url": card.url,
+        }),
+    })
+}
+
+fn knowledge_primary_source_entity_input(card: &SourceCard) -> Option<KnowledgeEntityInput> {
+    let key = knowledge_projected_primary_entity_key_for_card(card)?;
+    let entity_type = match card.provider.as_str() {
+        "arxiv" => "paper",
+        "hackernews" => "discussion",
+        "reddit" => "discussion",
+        "x" => "social_post",
+        "rss" => "feed_item",
+        _ => "source_item",
+    };
+    Some(KnowledgeEntityInput {
+        entity_type: entity_type.to_string(),
+        name: card.title.clone(),
+        canonical_key: key,
+        aliases: vec![card.title.clone()],
+        homepage_url: Some(card.url.clone()),
+        source_card_ids: vec![card.id.clone()],
+        wiki_page_id: Some(card.wiki_page_id.clone()),
+        confidence: knowledge_source_confidence_for_card(card),
+        metadata: json!({
+            "provider": card.provider,
+            "source_type": card.source_type,
+            "source_card_url": card.url,
+        }),
+    })
 }
 
 fn knowledge_source_role_for_card(card: &SourceCard) -> String {
@@ -34847,6 +35661,46 @@ fn knowledge_report_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Knowle
     })
 }
 
+fn knowledge_entity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<KnowledgeEntity> {
+    let aliases_json: String = row.get(4)?;
+    let source_card_ids_json: String = row.get(6)?;
+    let metadata_json: String = row.get(9)?;
+    Ok(KnowledgeEntity {
+        id: row.get(0)?,
+        entity_type: row.get(1)?,
+        name: row.get(2)?,
+        canonical_key: row.get(3)?,
+        aliases: parse_json_string_vec_column(&aliases_json, 4)?,
+        homepage_url: row.get(5)?,
+        source_card_ids: parse_json_string_vec_column(&source_card_ids_json, 6)?,
+        wiki_page_id: row.get(7)?,
+        confidence: row.get(8)?,
+        metadata: parse_json_column(&metadata_json, 9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+
+fn knowledge_relation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<KnowledgeRelation> {
+    let source_card_ids_json: String = row.get(7)?;
+    let metadata_json: String = row.get(10)?;
+    Ok(KnowledgeRelation {
+        id: row.get(0)?,
+        relation_key: row.get(1)?,
+        relation_type: row.get(2)?,
+        subject_entity_id: row.get(3)?,
+        object_entity_id: row.get(4)?,
+        event_id: row.get(5)?,
+        cluster_id: row.get(6)?,
+        source_card_ids: parse_json_string_vec_column(&source_card_ids_json, 7)?,
+        confidence: row.get(8)?,
+        reason: row.get(9)?,
+        metadata: parse_json_column(&metadata_json, 10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
+}
+
 fn x_knowledge_cluster_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<XKnowledgeCluster> {
     let source_card_ids_json: String = row.get(3)?;
     let radar_item_ids_json: String = row.get(5)?;
@@ -36167,6 +37021,53 @@ fn ensure_knowledge_schema_on(conn: &Connection) -> Result<()> {
         ON knowledge_reports(cluster_id, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_knowledge_reports_status
         ON knowledge_reports(status, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS knowledge_entities (
+          id TEXT PRIMARY KEY,
+          entity_type TEXT NOT NULL,
+          name TEXT NOT NULL,
+          canonical_key TEXT NOT NULL UNIQUE,
+          aliases_json TEXT NOT NULL DEFAULT '[]',
+          homepage_url TEXT,
+          source_card_ids_json TEXT NOT NULL DEFAULT '[]',
+          wiki_page_id TEXT,
+          confidence REAL NOT NULL DEFAULT 0,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_knowledge_entities_type_updated
+        ON knowledge_entities(entity_type, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_entities_name
+        ON knowledge_entities(name);
+
+        CREATE TABLE IF NOT EXISTS knowledge_relations (
+          id TEXT PRIMARY KEY,
+          relation_key TEXT NOT NULL UNIQUE,
+          relation_type TEXT NOT NULL,
+          subject_entity_id TEXT NOT NULL,
+          object_entity_id TEXT NOT NULL,
+          event_id TEXT,
+          cluster_id TEXT,
+          source_card_ids_json TEXT NOT NULL DEFAULT '[]',
+          confidence REAL NOT NULL DEFAULT 0,
+          reason TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(subject_entity_id) REFERENCES knowledge_entities(id) ON DELETE CASCADE,
+          FOREIGN KEY(object_entity_id) REFERENCES knowledge_entities(id) ON DELETE CASCADE,
+          FOREIGN KEY(event_id) REFERENCES knowledge_events(id) ON DELETE SET NULL,
+          FOREIGN KEY(cluster_id) REFERENCES knowledge_clusters(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_knowledge_relations_subject
+        ON knowledge_relations(subject_entity_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_relations_object
+        ON knowledge_relations(object_entity_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_relations_type
+        ON knowledge_relations(relation_type, updated_at DESC);
         "#,
     )?;
     Ok(())
@@ -52801,6 +53702,8 @@ mod tests {
             .unwrap();
         assert_eq!(report.events.len(), 2);
         assert_eq!(report.event_sources.len(), 2);
+        assert!(!report.entities.is_empty());
+        assert!(!report.relations.is_empty());
         assert_eq!(report.cluster.source_card_ids.len(), 2);
         assert_eq!(report.editorial_decision.status, "completed");
         assert_eq!(report.report.status, "draft");
@@ -52829,8 +53732,201 @@ mod tests {
             DateTime::parse_from_rfc2822("Wed, 24 Jun 2026 23:46:37 +0000").unwrap()
         );
         let snapshot = store.ops_snapshot().unwrap();
+        assert!(!snapshot.knowledge_entities.is_empty());
+        assert!(!snapshot.knowledge_relations.is_empty());
         assert_eq!(snapshot.knowledge_clusters.len(), 1);
         assert_eq!(snapshot.knowledge_reports.len(), 1);
+    }
+
+    #[test]
+    fn severe_knowledge_projection_creates_deduped_entities_and_relations() {
+        // CLAIM: Source-card projection creates durable source-backed entities
+        // and relations, not only event/report metadata.
+        // ORACLE: GitHub owner/repo/provider entities and owns/reported-by
+        // relations are written once, relation rows cite source cards, reruns do
+        // not inflate counts, and ops surfaces the rows.
+        // SEVERITY: Severe because without durable entity/relation rows the
+        // unified pipeline cannot correlate "repo launch -> announcement ->
+        // reaction" across source families.
+        let store = test_store("knowledge-entities-relations-projection");
+        let github = store
+            .add_source_card(SourceCardInput {
+                title: "OpenAI agents package release".to_string(),
+                url: "https://github.com/openai/agents/releases/tag/v1.0.0".to_string(),
+                source_type: "github_release".to_string(),
+                provider: "github".to_string(),
+                summary:
+                    "OpenAI released an agents package with workflow tooling and launch details."
+                        .to_string(),
+                claims: vec![SourceClaim {
+                    claim: "OpenAI released the agents package.".to_string(),
+                    kind: "fact".to_string(),
+                    confidence: 0.9,
+                }],
+                retrieved_at: Some("2026-06-25T01:00:00Z".to_string()),
+                metadata: json!({ "owner": "openai", "repo": "agents", "tag": "v1.0.0" }),
+            })
+            .unwrap();
+        let reaction = store
+            .add_source_card(SourceCardInput {
+                title: "Agents package discussion".to_string(),
+                url: "https://news.ycombinator.com/item?id=123".to_string(),
+                source_type: "hackernews_story".to_string(),
+                provider: "hackernews".to_string(),
+                summary: "Developers discussed the OpenAI agents package and compared it with MCP-style workflow tools.".to_string(),
+                claims: vec![SourceClaim {
+                    claim: "Developers discussed the OpenAI agents package.".to_string(),
+                    kind: "reaction".to_string(),
+                    confidence: 0.72,
+                }],
+                retrieved_at: Some("2026-06-25T01:05:00Z".to_string()),
+                metadata: json!({ "source_detail": "openai-agents-discussion" }),
+            })
+            .unwrap();
+
+        let first = store
+            .project_knowledge_from_source_card_query(
+                "agents package",
+                Some("OpenAI agents package launch and reaction"),
+                10,
+            )
+            .unwrap();
+        assert!(first.entities.iter().any(|entity| {
+            entity.entity_type == "github_owner" && entity.canonical_key == "github:owner:openai"
+        }));
+        assert!(first.entities.iter().any(|entity| {
+            entity.entity_type == "github_repo" && entity.canonical_key == "github:openai/agents"
+        }));
+        let owns_repo = first
+            .relations
+            .iter()
+            .find(|relation| relation.relation_type == "owns_repo")
+            .expect("github owner/repo relation");
+        assert!(owns_repo.source_card_ids.contains(&github.id));
+        assert!(first.relations.iter().any(|relation| {
+            relation.relation_type == "reported_by_provider"
+                && relation.source_card_ids.contains(&reaction.id)
+        }));
+        assert!(first.relations.iter().all(|relation| {
+            !relation.source_card_ids.is_empty()
+                && relation.subject_entity_id != relation.object_entity_id
+        }));
+        let entity_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM knowledge_entities", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let relation_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM knowledge_relations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let second = store
+            .project_knowledge_from_source_card_query(
+                "agents package",
+                Some("OpenAI agents package launch and reaction"),
+                10,
+            )
+            .unwrap();
+        let entity_count_after: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM knowledge_entities", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let relation_count_after: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM knowledge_relations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(entity_count, entity_count_after);
+        assert_eq!(relation_count, relation_count_after);
+        assert_eq!(first.cluster.id, second.cluster.id);
+
+        let snapshot = store.ops_snapshot().unwrap();
+        assert!(
+            snapshot
+                .knowledge_entities
+                .iter()
+                .any(|entity| entity.canonical_key == "github:openai/agents")
+        );
+        assert!(
+            snapshot
+                .knowledge_relations
+                .iter()
+                .any(|relation| relation.relation_type == "owns_repo")
+        );
+    }
+
+    #[test]
+    fn severe_knowledge_entity_alias_collision_requires_review() {
+        // CLAIM: Entity aliases cannot silently merge unrelated canonical
+        // entities; collisions must fail closed for review.
+        // ORACLE: the second canonical entity with alias "OpenAI" is rejected,
+        // while updating the original canonical entity with a new source card
+        // merges evidence idempotently.
+        // SEVERITY: Severe because alias collisions would corrupt competitive
+        // and historical context across companies, repos, and products.
+        let store = test_store("knowledge-entity-alias-collision");
+        let first_card = seed_knowledge_source_card(
+            &store,
+            "openai-alias-entity",
+            "OpenAI appears as a source-backed entity.",
+        );
+        let second_card = seed_knowledge_source_card(
+            &store,
+            "other-alias-entity",
+            "A different entity tries to reuse the OpenAI alias.",
+        );
+        let first = store
+            .upsert_knowledge_entity(KnowledgeEntityInput {
+                entity_type: "company".to_string(),
+                name: "OpenAI".to_string(),
+                canonical_key: "company:openai".to_string(),
+                aliases: vec!["OpenAI".to_string(), "open ai".to_string()],
+                homepage_url: Some("https://openai.com".to_string()),
+                source_card_ids: vec![first_card.id.clone()],
+                wiki_page_id: None,
+                confidence: 0.9,
+                metadata: json!({ "test": true }),
+            })
+            .unwrap();
+        let collision = store
+            .upsert_knowledge_entity(KnowledgeEntityInput {
+                entity_type: "company".to_string(),
+                name: "Other AI Lab".to_string(),
+                canonical_key: "company:other-ai-lab".to_string(),
+                aliases: vec!["  openai  ".to_string()],
+                homepage_url: Some("https://example.com/other-ai-lab".to_string()),
+                source_card_ids: vec![second_card.id.clone()],
+                wiki_page_id: None,
+                confidence: 0.5,
+                metadata: json!({}),
+            })
+            .unwrap_err();
+        assert!(collision.to_string().contains("alias collision"));
+
+        let updated = store
+            .upsert_knowledge_entity(KnowledgeEntityInput {
+                entity_type: "company".to_string(),
+                name: "OpenAI".to_string(),
+                canonical_key: "company:openai".to_string(),
+                aliases: vec!["OpenAI".to_string(), "OpenAI LP".to_string()],
+                homepage_url: Some("https://openai.com".to_string()),
+                source_card_ids: vec![second_card.id.clone()],
+                wiki_page_id: None,
+                confidence: 0.8,
+                metadata: json!({ "updated": true }),
+            })
+            .unwrap();
+        assert_eq!(first.id, updated.id);
+        assert!(updated.source_card_ids.contains(&first_card.id));
+        assert!(updated.source_card_ids.contains(&second_card.id));
+        assert!(updated.aliases.contains(&"OpenAI LP".to_string()));
     }
 
     #[test]
@@ -53673,6 +54769,61 @@ mod tests {
         let rows = store.list_all_radar_source_quality().unwrap();
         assert_eq!(rows.len(), 3);
         assert!(rows.iter().any(|row| row.id == "legacy-v11-quality"));
+    }
+
+    #[test]
+    fn severe_schema_migration_adds_knowledge_entities_relations_after_v14() {
+        // CLAIM: schema version 15 upgrades existing unified-knowledge homes
+        // with entity and relation tables instead of only working for fresh DBs.
+        // ORACLE: a hand-built schema_version=14 database records migration 15,
+        // exposes both new tables, and reaches the current schema version.
+        // SEVERITY: Severe because production homes with v14 event/cluster rows
+        // must not lose the correlation substrate on upgrade.
+        let paths = test_paths("schema-fixture-knowledge-entities-v14");
+        paths.ensure().unwrap();
+        let conn = Connection::open(&paths.db).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta (key, value) VALUES ('schema_version', '14');
+            CREATE TABLE schema_migrations (
+              version INTEGER PRIMARY KEY,
+              name TEXT NOT NULL,
+              destructive INTEGER NOT NULL DEFAULT 0,
+              backup_id TEXT,
+              applied_at TEXT NOT NULL
+            );
+            INSERT INTO schema_migrations
+              (version, name, destructive, backup_id, applied_at)
+            VALUES
+              (14, 'unified_knowledge_pipeline', 0, NULL, '2026-06-25T00:00:00Z');
+            "#,
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = Store::open(paths).unwrap();
+        assert_eq!(store.stored_schema_version().unwrap(), SCHEMA_VERSION);
+        for table in ["knowledge_entities", "knowledge_relations"] {
+            let table_count: i64 = store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(table_count, 1, "missing migrated table {table}");
+        }
+        let migration_name: String = store
+            .conn
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 15",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(migration_name, "knowledge_entities_relations");
     }
 
     #[test]

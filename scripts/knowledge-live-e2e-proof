@@ -104,6 +104,8 @@ log "projecting radar run into unified knowledge: $RADAR_RUN_ID"
   >"$ARTIFACT_DIR/knowledge-projection.json"
 
 "$ARCWELL_BIN" radar stage "$RADAR_RUN_ID" >"$ARTIFACT_DIR/radar-stage.json"
+"$ARCWELL_BIN" knowledge entities --limit 100 >"$ARTIFACT_DIR/knowledge-entities.json"
+"$ARCWELL_BIN" knowledge relations --limit 100 >"$ARTIFACT_DIR/knowledge-relations.json"
 "$ARCWELL_BIN" knowledge events --limit 100 >"$ARTIFACT_DIR/knowledge-events.json"
 "$ARCWELL_BIN" knowledge clusters --limit 100 >"$ARTIFACT_DIR/knowledge-clusters.json"
 "$ARCWELL_BIN" knowledge reports --limit 100 >"$ARTIFACT_DIR/knowledge-reports.json"
@@ -135,7 +137,11 @@ assert(projection.proof_level === "Production Data Proof", "projection did not i
 assert(projection.cluster?.topic === topic, "cluster topic mismatch", projection.cluster);
 assert(Array.isArray(projection.source_cards) && projection.source_cards.length > 0, "projection has no source cards", projection);
 assert(Array.isArray(projection.events) && projection.events.length > 0, "projection has no events", projection);
+assert(Array.isArray(projection.entities) && projection.entities.length > 0, "projection has no entities", projection);
+assert(Array.isArray(projection.relations) && projection.relations.length > 0, "projection has no relations", projection);
 assert(projection.events.every((event) => event.status === "confirmed"), "not every event is confirmed", projection.events);
+assert(projection.entities.every((entity) => Array.isArray(entity.source_card_ids) && entity.source_card_ids.length > 0), "not every entity is source-card backed", projection.entities);
+assert(projection.relations.every((relation) => Array.isArray(relation.source_card_ids) && relation.source_card_ids.length > 0), "not every relation is source-card backed", projection.relations);
 assert(projection.editorial_decision?.status === "completed", "editorial decision did not complete", projection.editorial_decision);
 assert(projection.report?.body_markdown && projection.report.body_markdown.length > 500, "report body is too thin", projection.report);
 assert(projection.report.body_markdown.includes("Confidence and uncertainty"), "report does not name uncertainty", projection.report.body_markdown);
@@ -152,6 +158,12 @@ const families = new Set((projection.source_cards || []).map((card) => card.prov
 assert(families.size >= minFamilies, "not enough provider families in projection", [...families]);
 assert((ops.knowledge_clusters || []).some((cluster) => cluster.id === projection.cluster.id), "ops missing knowledge cluster", ops.knowledge_clusters);
 assert((ops.knowledge_reports || []).some((report) => report.id === projection.report.id), "ops missing knowledge report", ops.knowledge_reports);
+for (const entity of projection.entities) {
+  assert((ops.knowledge_entities || []).some((opsEntity) => opsEntity.id === entity.id), `ops missing knowledge entity ${entity.id}`, ops.knowledge_entities);
+}
+for (const relation of projection.relations) {
+  assert((ops.knowledge_relations || []).some((opsRelation) => opsRelation.id === relation.id), `ops missing knowledge relation ${relation.id}`, ops.knowledge_relations);
+}
 const cursorKeys = new Set((cursors || []).map((cursor) => cursor.key));
 assert([...cursorKeys].some((key) => key.startsWith("github-owner:")), "missing GitHub cursor", cursors);
 assert([...cursorKeys].some((key) => key.startsWith("hackernews:")), "missing Hacker News cursor", cursors);
@@ -164,6 +176,8 @@ const proof = {
   topic,
   source_card_count: projection.source_cards.length,
   event_count: projection.events.length,
+  entity_count: projection.entities.length,
+  relation_count: projection.relations.length,
   provider_families: [...families].sort(),
   cluster_id: projection.cluster.id,
   editorial_decision_id: projection.editorial_decision.id,
@@ -173,13 +187,15 @@ const proof = {
     radar_run: path.join(artifactDir, "radar-run.json"),
     radar_stage: path.join(artifactDir, "radar-stage.json"),
     knowledge_projection: path.join(artifactDir, "knowledge-projection.json"),
+    knowledge_entities: path.join(artifactDir, "knowledge-entities.json"),
+    knowledge_relations: path.join(artifactDir, "knowledge-relations.json"),
     ops: path.join(artifactDir, "ops.json"),
     cursors: path.join(artifactDir, "cursors.json")
   },
   checked: [
     "live public adapters completed for RSS, GitHub owner, arXiv, and Hacker News",
     "radar run reached scored status and wrote selected source-card evidence",
-    "unified knowledge projection created confirmed events",
+    "unified knowledge projection created confirmed events plus source-backed entities and relations",
     "cluster/editorial/report rows are durable and ops-visible",
     "report body is human-readable and cites all cluster source-card IDs",
     "provider cursors are visible after durable writes"
@@ -225,7 +241,7 @@ agent-browser --session "$SESSION" snapshot -i >"$ARTIFACT_DIR/desktop.snapshot.
 agent-browser --session "$SESSION" eval "$(cat <<'JS'
 (() => {
   const text = document.body.innerText;
-  for (const needle of ["Arcwell Ops", "Knowledge Events", "Knowledge Clusters", "Knowledge Reports", "Live API knowledge bridge"]) {
+  for (const needle of ["Arcwell Ops", "Knowledge Entities", "Knowledge Relations", "Knowledge Events", "Knowledge Clusters", "Knowledge Reports", "Live API knowledge bridge"]) {
     if (!text.includes(needle)) throw new Error(`missing desktop text: ${needle}`);
   }
   if (document.scripts.length !== 0) throw new Error(`unexpected script tags: ${document.scripts.length}`);
@@ -251,7 +267,7 @@ agent-browser --session "$SESSION" snapshot -i >"$ARTIFACT_DIR/mobile.snapshot.t
 agent-browser --session "$SESSION" eval "$(cat <<'JS'
 (() => {
   const text = document.body.innerText;
-  for (const needle of ["Arcwell Ops", "Knowledge Clusters", "Knowledge Reports"]) {
+  for (const needle of ["Arcwell Ops", "Knowledge Entities", "Knowledge Relations", "Knowledge Clusters", "Knowledge Reports"]) {
     if (!text.includes(needle)) throw new Error(`missing mobile text: ${needle}`);
   }
   if (!document.querySelector("form.ops-form")) throw new Error("missing mobile filter form");
