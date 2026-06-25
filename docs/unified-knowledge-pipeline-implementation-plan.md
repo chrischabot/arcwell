@@ -377,8 +377,9 @@ Statuses:
 
 Invariants:
 
-- Clusters preserve all source-card ids, even duplicates.
-- Duplicate groups are recorded, not erased.
+- Clusters preserve the deduped source-card evidence set.
+- Duplicate occurrence signal is recorded in `duplicate_groups_json`, not by
+  repeating IDs in `source_card_ids_json`.
 - A cluster cannot be sent on model score alone.
 
 ### `knowledge_relations`
@@ -386,7 +387,7 @@ Invariants:
 Purpose: graph edges between events, entities, source cards, wiki pages, and
 clusters.
 
-Fields:
+Target fields for the complete operational version:
 
 - `id TEXT PRIMARY KEY`
 - `subject_type TEXT NOT NULL`
@@ -432,6 +433,12 @@ Fields:
 - `metadata_json TEXT NOT NULL DEFAULT '{}'`
 - `created_at TEXT NOT NULL`
 - `updated_at TEXT NOT NULL`
+
+Current local-proof slice implements a smaller subset: `id`, `cluster_id`,
+`title`, `body_markdown`, `status`, `source_card_ids_json`,
+`quality_findings_json`, `metadata_json`, `created_at`, and `updated_at`.
+`wiki_page_id`, `digest_candidate_id`, `report_kind`, `summary`, and richer
+quality-gate payloads remain part of the operational follow-up.
 
 Invariants:
 
@@ -902,11 +909,11 @@ Control requirements:
 
 ### Milestone 0: Plan And Claim Alignment
 
-- [ ] Add this plan.
-- [ ] Link it from Horizon/radar docs.
-- [ ] Add TODO entries for unified knowledge pipeline work.
-- [ ] Ensure `STATUS.md` says current capability is partial, not operational.
-- [ ] Run docs/plugin verifier if any command/skill/docs references change.
+- [x] Add this plan.
+- [x] Link it from Horizon/radar docs.
+- [x] Add TODO entries for unified knowledge pipeline work.
+- [x] Ensure `STATUS.md` says current capability is partial, not operational.
+- [x] Run docs/plugin verifier if any command/skill/docs references change.
 
 Done when:
 
@@ -916,25 +923,28 @@ Done when:
 ### Milestone 1: Shared Knowledge Schema
 
 - [ ] Add migrations for `knowledge_entities`.
-- [ ] Add migrations for `knowledge_events`.
-- [ ] Add migrations for `knowledge_event_sources`.
-- [ ] Add migrations for `knowledge_clusters`.
+- [x] Add migrations for `knowledge_events`.
+- [x] Add migrations for `knowledge_event_sources`.
+- [x] Add migrations for `knowledge_clusters`.
 - [ ] Add migrations for `knowledge_relations`.
-- [ ] Add migrations for `knowledge_editorial_decisions`.
+- [x] Add migrations for `knowledge_editorial_decisions`.
 - [ ] Add migrations for `knowledge_investigation_jobs`.
-- [ ] Add migrations for `knowledge_reports`.
-- [ ] Add typed Rust structs and row mappers.
-- [ ] Add CRUD/list/read/search APIs.
-- [ ] Add ops snapshot fields.
+- [x] Add migrations for initial `knowledge_reports` local-proof subset.
+- [x] Add typed Rust structs and row mappers for the local-proof event, source,
+      cluster, editorial decision, and report substrate.
+- [x] Add CRUD/list/read APIs for the local-proof substrate.
+- [ ] Add search APIs.
+- [x] Add ops snapshot fields.
 
 Refuting tests:
 
-- [ ] Duplicate canonical event upserts update instead of duplicate.
-- [ ] Event cannot be confirmed without source-card evidence.
-- [ ] Malicious source text is stored as data.
+- [x] Duplicate canonical event upserts update instead of duplicate.
+- [x] Event cannot be confirmed without source-card evidence.
+- [x] Malicious source text is stored as data.
 - [ ] Entity alias collision requires review.
-- [ ] Cluster preserves all source-card ids and duplicate groups.
-- [ ] Deleting or missing source cards blocks report promotion.
+- [x] Cluster preserves all source-card ids and duplicate groups.
+- [x] Missing source cards block cluster/report/decision writes.
+- [x] Link-dump and missing-source-card-citation reports are rejected.
 
 Proof level after this milestone: `Local Proof`.
 
@@ -1386,4 +1396,3 @@ Recommended order:
 This order prevents the most common mirage: sources and summaries appear before
 there is durable evidence, source health, cluster lineage, report quality, or
 delivery accountability.
-

@@ -146,6 +146,13 @@ PR, implementation note, or final report:
       least three source families, durable events/clusters/decisions,
       source-backed wiki writing, digest routing, external delivery ledger,
       ops visibility, and wall-clock recurrence without manual intervention.
+      First local-proof slice now exists in `arcwell-core`: durable
+      `knowledge_events`, `knowledge_event_sources`, `knowledge_clusters`,
+      `knowledge_editorial_decisions`, and `knowledge_reports`, with source-card
+      evidence gates, link-dump report rejection, ops snapshot visibility, and
+      severe tests. Remaining work is the adapter contract, entities/relations,
+      investigation jobs, wiki/digest worker integration, live provider proofs,
+      scheduled recurrence, and ops UI controls.
 - [ ] Complete the Arcwell X anti-mirage plan in
       `docs/arcwell-x-architecture-implementation-plan.md` before marking X
       beyond `Partial`.
