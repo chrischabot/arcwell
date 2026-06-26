@@ -3327,6 +3327,29 @@ pub struct XOAuthRevocationReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XOAuthScopeProbeEndpoint {
+    pub name: String,
+    pub required_scope: String,
+    pub path: String,
+    pub status: String,
+    pub classification: String,
+    pub evidence: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XOAuthScopeProbeReport {
+    pub status: String,
+    pub account_id: Option<String>,
+    pub username: Option<String>,
+    pub endpoints: Vec<XOAuthScopeProbeEndpoint>,
+    pub required_scopes: Vec<String>,
+    pub missing_or_unproven_scopes: Vec<String>,
+    pub source_health_key: String,
+    pub sync_run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XRateLimitDeferReport {
     pub scanned: usize,
     pub deferred: usize,
@@ -7198,7 +7221,7 @@ impl Store {
         Ok(rows.into_iter().collect())
     }
 
-    fn record_x_sync_run(&self, input: XSyncRunInsert<'_>) -> Result<()> {
+    fn record_x_sync_run(&self, input: XSyncRunInsert<'_>) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let metadata_json = serde_json::to_string(&input.metadata)?;
         let error = input.error.map(redact_secret_like_text);
@@ -7231,7 +7254,7 @@ impl Store {
                 metadata_json,
             ],
         )?;
-        Ok(())
+        Ok(id)
     }
 
     pub fn set_profile(
@@ -16943,6 +16966,378 @@ impl Store {
             provider_status,
             revoked_provider_side: true,
             deleted_local_secret,
+        })
+    }
+
+    pub fn x_oauth_probe(&self, search_query: Option<&str>) -> Result<XOAuthScopeProbeReport> {
+        let endpoint =
+            std::env::var("ARCWELL_X_API_BASE").unwrap_or_else(|_| "https://api.x.com".to_string());
+        self.x_oauth_probe_with_base(search_query.unwrap_or("from:openai"), &endpoint)
+    }
+
+    fn x_oauth_probe_with_base(
+        &self,
+        search_query: &str,
+        endpoint: &str,
+    ) -> Result<XOAuthScopeProbeReport> {
+        validate_query(search_query)?;
+        let source_key = "x:oauth-scope-probe";
+        let started_at = now();
+        let required_scopes = vec![
+            "users.read".to_string(),
+            "bookmark.read".to_string(),
+            "follows.read".to_string(),
+            "tweet.read".to_string(),
+        ];
+        self.policy_guard(PolicyRequest {
+            action: "provider.network".to_string(),
+            package: Some("arcwell-x".to_string()),
+            provider: Some("x".to_string()),
+            source: Some("x_oauth_probe".to_string()),
+            channel: None,
+            subject: None,
+            target: Some(excerpt(endpoint, 240)),
+            projected_usd: Some(estimated_network_fetch_cost(4)),
+            metadata: json!({
+                "operation": "oauth_scope_probe",
+                "search_query": search_query,
+                "required_scopes": required_scopes,
+            }),
+            untrusted_excerpt: None,
+        })?;
+        self.require_cost_budget(
+            "arcwell-x",
+            "x_oauth_probe",
+            "x",
+            "oauth_probe",
+            Some("x_oauth_probe"),
+            estimated_network_fetch_cost(4),
+            "X OAuth scope probe",
+        )?;
+
+        let mut endpoints = Vec::new();
+        let mut account_id = None;
+        let mut username = None;
+        let base = validated_x_api_base(endpoint)?;
+        let token = match self.x_bearer_token_for_endpoint(endpoint) {
+            Ok(token) => token,
+            Err(error) => {
+                let redacted = redact_secret_like_text(&error.to_string());
+                endpoints.push(XOAuthScopeProbeEndpoint {
+                    name: "bearer_token".to_string(),
+                    required_scope: "oauth_material".to_string(),
+                    path: "local_secret_or_refresh".to_string(),
+                    status: "failed".to_string(),
+                    classification: classify_x_probe_error(&redacted),
+                    evidence: "could not acquire usable X bearer token before provider probes"
+                        .to_string(),
+                    error: Some(excerpt(&redacted, 1000)),
+                });
+                let completed_at = now();
+                let report = self.finish_x_oauth_probe_report(
+                    source_key,
+                    started_at,
+                    completed_at,
+                    account_id,
+                    username,
+                    endpoints,
+                    required_scopes,
+                )?;
+                return Ok(report);
+            }
+        };
+
+        let me_path = "/2/users/me?user.fields=username,name";
+        match fetch_x_json(base.join(me_path)?.as_str(), Some(&token)) {
+            Ok(value) => {
+                let id = value.pointer("/data/id").and_then(Value::as_str);
+                let handle = value.pointer("/data/username").and_then(Value::as_str);
+                if let Some(id) = id {
+                    validate_key(id)?;
+                    account_id = Some(id.to_string());
+                    username = handle.map(ToOwned::to_owned);
+                    endpoints.push(XOAuthScopeProbeEndpoint {
+                        name: "users_me".to_string(),
+                        required_scope: "users.read".to_string(),
+                        path: me_path.to_string(),
+                        status: "passed".to_string(),
+                        classification: "current_provider_fetch".to_string(),
+                        evidence: format!(
+                            "provider returned authenticated user id{}",
+                            handle
+                                .map(|value| format!(" and username {}", excerpt(value, 80)))
+                                .unwrap_or_default()
+                        ),
+                        error: None,
+                    });
+                } else {
+                    endpoints.push(XOAuthScopeProbeEndpoint {
+                        name: "users_me".to_string(),
+                        required_scope: "users.read".to_string(),
+                        path: me_path.to_string(),
+                        status: "failed".to_string(),
+                        classification: "provider_shape_mismatch".to_string(),
+                        evidence: "provider returned 200 but no data.id".to_string(),
+                        error: Some("X /2/users/me response missing data.id".to_string()),
+                    });
+                }
+            }
+            Err(error) => endpoints.push(x_oauth_probe_failed_endpoint(
+                "users_me",
+                "users.read",
+                me_path,
+                error,
+            )),
+        }
+
+        if let Some(user_id) = account_id.as_deref() {
+            let bookmark_path = format!("/2/users/{user_id}/bookmarks?max_results=1");
+            match fetch_x_json(base.join(&bookmark_path)?.as_str(), Some(&token)) {
+                Ok(value) if x_probe_collection_response_is_valid(&value) => {
+                    endpoints.push(XOAuthScopeProbeEndpoint {
+                        name: "bookmarks".to_string(),
+                        required_scope: "bookmark.read".to_string(),
+                        path: "/2/users/:id/bookmarks?max_results=1".to_string(),
+                        status: "passed".to_string(),
+                        classification: "current_provider_fetch".to_string(),
+                        evidence: "provider accepted authenticated bookmarks endpoint".to_string(),
+                        error: None,
+                    });
+                }
+                Ok(_) => endpoints.push(XOAuthScopeProbeEndpoint {
+                    name: "bookmarks".to_string(),
+                    required_scope: "bookmark.read".to_string(),
+                    path: "/2/users/:id/bookmarks?max_results=1".to_string(),
+                    status: "failed".to_string(),
+                    classification: "provider_shape_mismatch".to_string(),
+                    evidence: "provider returned 200 but no collection metadata".to_string(),
+                    error: Some(
+                        "X bookmarks response missing data array or meta object".to_string(),
+                    ),
+                }),
+                Err(error) => endpoints.push(x_oauth_probe_failed_endpoint(
+                    "bookmarks",
+                    "bookmark.read",
+                    "/2/users/:id/bookmarks?max_results=1",
+                    error,
+                )),
+            }
+
+            let following_path = format!("/2/users/{user_id}/following?max_results=1");
+            match fetch_x_json(base.join(&following_path)?.as_str(), Some(&token)) {
+                Ok(value) if x_probe_collection_response_is_valid(&value) => {
+                    endpoints.push(XOAuthScopeProbeEndpoint {
+                        name: "following".to_string(),
+                        required_scope: "follows.read".to_string(),
+                        path: "/2/users/:id/following?max_results=1".to_string(),
+                        status: "passed".to_string(),
+                        classification: "current_provider_fetch".to_string(),
+                        evidence: "provider accepted authenticated following endpoint".to_string(),
+                        error: None,
+                    });
+                }
+                Ok(_) => endpoints.push(XOAuthScopeProbeEndpoint {
+                    name: "following".to_string(),
+                    required_scope: "follows.read".to_string(),
+                    path: "/2/users/:id/following?max_results=1".to_string(),
+                    status: "failed".to_string(),
+                    classification: "provider_shape_mismatch".to_string(),
+                    evidence: "provider returned 200 but no collection metadata".to_string(),
+                    error: Some(
+                        "X following response missing data array or meta object".to_string(),
+                    ),
+                }),
+                Err(error) => endpoints.push(x_oauth_probe_failed_endpoint(
+                    "following",
+                    "follows.read",
+                    "/2/users/:id/following?max_results=1",
+                    error,
+                )),
+            }
+        } else {
+            for (name, scope, path) in [
+                (
+                    "bookmarks",
+                    "bookmark.read",
+                    "/2/users/:id/bookmarks?max_results=1",
+                ),
+                (
+                    "following",
+                    "follows.read",
+                    "/2/users/:id/following?max_results=1",
+                ),
+            ] {
+                endpoints.push(XOAuthScopeProbeEndpoint {
+                    name: name.to_string(),
+                    required_scope: scope.to_string(),
+                    path: path.to_string(),
+                    status: "skipped".to_string(),
+                    classification: "dependency_failed".to_string(),
+                    evidence: "skipped because /2/users/me did not produce an account id"
+                        .to_string(),
+                    error: None,
+                });
+            }
+        }
+
+        let mut search_url = base.join("/2/tweets/search/recent")?;
+        search_url
+            .query_pairs_mut()
+            .append_pair("query", search_query)
+            .append_pair("max_results", "10")
+            .append_pair("tweet.fields", "created_at,author_id")
+            .append_pair("user.fields", "username");
+        match fetch_x_json(search_url.as_str(), Some(&token)) {
+            Ok(value) if x_probe_collection_response_is_valid(&value) => {
+                endpoints.push(XOAuthScopeProbeEndpoint {
+                    name: "recent_search".to_string(),
+                    required_scope: "tweet.read".to_string(),
+                    path: "/2/tweets/search/recent".to_string(),
+                    status: "passed".to_string(),
+                    classification: "current_provider_fetch".to_string(),
+                    evidence: format!(
+                        "provider accepted recent search query {}",
+                        excerpt(search_query, 120)
+                    ),
+                    error: None,
+                });
+            }
+            Ok(_) => endpoints.push(XOAuthScopeProbeEndpoint {
+                name: "recent_search".to_string(),
+                required_scope: "tweet.read".to_string(),
+                path: "/2/tweets/search/recent".to_string(),
+                status: "failed".to_string(),
+                classification: "provider_shape_mismatch".to_string(),
+                evidence: "provider returned 200 but no search metadata".to_string(),
+                error: Some(
+                    "X recent search response missing data array or meta object".to_string(),
+                ),
+            }),
+            Err(error) => endpoints.push(x_oauth_probe_failed_endpoint(
+                "recent_search",
+                "tweet.read",
+                "/2/tweets/search/recent",
+                error,
+            )),
+        }
+
+        let completed_at = now();
+        self.finish_x_oauth_probe_report(
+            source_key,
+            started_at,
+            completed_at,
+            account_id,
+            username,
+            endpoints,
+            required_scopes,
+        )
+    }
+
+    fn finish_x_oauth_probe_report(
+        &self,
+        source_key: &str,
+        started_at: String,
+        completed_at: String,
+        account_id: Option<String>,
+        username: Option<String>,
+        endpoints: Vec<XOAuthScopeProbeEndpoint>,
+        required_scopes: Vec<String>,
+    ) -> Result<XOAuthScopeProbeReport> {
+        let passed_scopes = endpoints
+            .iter()
+            .filter(|endpoint| endpoint.status == "passed")
+            .map(|endpoint| endpoint.required_scope.clone())
+            .collect::<BTreeSet<_>>();
+        let missing_or_unproven_scopes = required_scopes
+            .iter()
+            .filter(|scope| !passed_scopes.contains(*scope))
+            .cloned()
+            .collect::<Vec<_>>();
+        let status = if missing_or_unproven_scopes.is_empty() {
+            "passed"
+        } else if endpoints.iter().any(|endpoint| endpoint.status == "passed") {
+            "partial"
+        } else {
+            "failed"
+        }
+        .to_string();
+        if status == "passed" {
+            self.record_source_success(SourceHealthUpdate {
+                key: source_key,
+                provider: "x",
+                source_kind: "x_oauth_probe",
+                locator: "oauth_scope_probe",
+                last_item_id: account_id.as_deref(),
+                last_item_date: None,
+                cursor_key: None,
+                cursor_value: None,
+                next_run_at: Some(&now_plus_seconds(6 * 60 * 60)),
+            })?;
+        } else {
+            let summary = endpoints
+                .iter()
+                .filter(|endpoint| endpoint.status != "passed")
+                .map(|endpoint| {
+                    format!(
+                        "{}:{}:{}",
+                        endpoint.name, endpoint.classification, endpoint.evidence
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.record_source_failure(
+                source_key,
+                "x",
+                "x_oauth_probe",
+                "oauth_scope_probe",
+                &summary,
+            )?;
+        }
+        let failed_count = endpoints
+            .iter()
+            .filter(|endpoint| endpoint.status != "passed")
+            .count();
+        let sync_error = (status != "passed").then(|| {
+            format!(
+                "unproven X OAuth scope(s): {}",
+                missing_or_unproven_scopes.join(", ")
+            )
+        });
+        let sync_run_id = self.record_x_sync_run(XSyncRunInsert {
+            account_id: account_id.as_deref(),
+            stream: "oauth_scope_probe",
+            transport: "x_api",
+            status: if status == "passed" {
+                "completed"
+            } else {
+                "failed"
+            },
+            started_at: &started_at,
+            completed_at: &completed_at,
+            seen: endpoints.len(),
+            inserted: 0,
+            updated: 0,
+            skipped_duplicates: 0,
+            rejected: failed_count,
+            cursor_key: Some(source_key),
+            previous_cursor: None,
+            new_cursor: None,
+            error: sync_error.as_deref(),
+            metadata: json!({
+                "endpoints": endpoints.clone(),
+                "required_scopes": required_scopes.clone(),
+                "missing_or_unproven_scopes": missing_or_unproven_scopes.clone(),
+            }),
+        })?;
+        Ok(XOAuthScopeProbeReport {
+            status,
+            account_id,
+            username,
+            endpoints,
+            required_scopes,
+            missing_or_unproven_scopes,
+            source_health_key: source_key.to_string(),
+            sync_run_id,
         })
     }
 
@@ -39775,9 +40170,34 @@ fn redact_secret_like_text_preserving_whitespace(input: &str) -> String {
 }
 
 fn redact_secret_token(token: &str) -> String {
-    let trimmed = token.trim_matches(|ch: char| matches!(ch, '"' | '\'' | ',' | ';'));
+    let trimmed = token.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '"' | '\'' | ',' | ';' | ':' | '{' | '}' | '[' | ']' | '(' | ')'
+        )
+    });
     let lower = trimmed.to_ascii_lowercase();
     if lower == "bearer" {
+        return token.to_string();
+    }
+    let provider_secret = trimmed.starts_with("sk-")
+        || trimmed.starts_with("xoxb-")
+        || trimmed.starts_with("ghp_")
+        || trimmed.starts_with("github_pat_")
+        || trimmed.starts_with("AKIA");
+    let lower_identifier = !trimmed.is_empty()
+        && trimmed == lower
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || matches!(ch, '_' | '-' | '.'))
+        && (trimmed.contains('.') || trimmed.contains('_'));
+    let lower_identifier_secret_shaped = lower.contains("token")
+        || lower.contains("secret")
+        || lower.contains("password")
+        || lower.contains("passwd")
+        || lower.contains("api_key")
+        || lower.contains("apikey");
+    if lower_identifier && !lower_identifier_secret_shaped && !provider_secret {
         return token.to_string();
     }
     let assignment_secret = [
@@ -39798,11 +40218,6 @@ fn redact_secret_token(token: &str) -> String {
             || lower.contains(&format!("?{prefix}"))
             || lower.contains(&format!("&{prefix}"))
     });
-    let provider_secret = trimmed.starts_with("sk-")
-        || trimmed.starts_with("xoxb-")
-        || trimmed.starts_with("ghp_")
-        || trimmed.starts_with("github_pat_")
-        || trimmed.starts_with("AKIA");
     let high_entropy = trimmed.len() >= 32
         && trimmed
             .chars()
@@ -58337,6 +58752,68 @@ fn classify_x_http_error(status: StatusCode, retry_after: Option<&str>, body: &s
         reason.push_str(&format!("; provider_error={body_excerpt}"));
     }
     reason
+}
+
+fn x_probe_collection_response_is_valid(value: &Value) -> bool {
+    value.get("data").and_then(Value::as_array).is_some()
+        || value.get("meta").and_then(Value::as_object).is_some()
+}
+
+fn classify_x_probe_error(error: &str) -> String {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("token rejected")
+        || lower.contains("expired")
+        || lower.contains("invalid_grant")
+        || lower.contains("revok")
+        || lower.contains("unauthorized")
+        || lower.contains("http 401")
+    {
+        "provider_revocation_or_expiry".to_string()
+    } else if lower.contains("scope")
+        || lower.contains("bookmark.read")
+        || lower.contains("follows.read")
+        || lower.contains("tweet.read")
+        || lower.contains("users.read")
+    {
+        "scope_mismatch".to_string()
+    } else if lower.contains("tier")
+        || lower.contains("access tier")
+        || lower.contains("client-not-enrolled")
+        || lower.contains("unsupported authentication")
+        || lower.contains("does not allow this endpoint")
+        || lower.contains("http 403")
+    {
+        "provider_tier_or_endpoint_denial".to_string()
+    } else if lower.contains("rate limit")
+        || lower.contains("quota")
+        || lower.contains("too many requests")
+        || lower.contains("http 429")
+    {
+        "quota_tier_denial".to_string()
+    } else if lower.contains("missing") || lower.contains("required") || lower.contains("not found")
+    {
+        "missing_refresh_material".to_string()
+    } else {
+        "provider_network_failure".to_string()
+    }
+}
+
+fn x_oauth_probe_failed_endpoint(
+    name: &str,
+    required_scope: &str,
+    path: &str,
+    error: anyhow::Error,
+) -> XOAuthScopeProbeEndpoint {
+    let error = redact_secret_like_text(&error.to_string());
+    XOAuthScopeProbeEndpoint {
+        name: name.to_string(),
+        required_scope: required_scope.to_string(),
+        path: path.to_string(),
+        status: "failed".to_string(),
+        classification: classify_x_probe_error(&error),
+        evidence: "provider did not accept this endpoint with the current bearer token".to_string(),
+        error: Some(excerpt(&error, 1000)),
+    }
 }
 
 fn x_fail_on_response_errors(value: &Value) -> Result<()> {
@@ -88063,6 +88540,237 @@ reason = "test denies X link expansion"
             store.get_secret_value("X_BEARER_TOKEN").unwrap().as_deref(),
             Some("fresh-access-token")
         );
+    }
+
+    #[test]
+    fn severe_x_oauth_probe_proves_each_scope_endpoint_and_writes_ledgers() {
+        // CLAIM: X OAuth scope probing proves each required user-context scope
+        // by reaching a matching provider endpoint, not by trusting stored scope
+        // metadata or a single /users/me response.
+        // PRECONDITIONS: A bearer token is available and the provider accepts
+        // users/me, bookmarks, following, and recent-search probes.
+        // POSTCONDITIONS: the report passes all required scopes, writes healthy
+        // source health, records a completed x_sync_run, and does not leak token
+        // bytes in serialized output.
+        // ORACLE: loopback provider request paths plus source_health/x_sync_runs.
+        // SEVERITY: Severe because provider-scope claims are otherwise easy to
+        // fake with stale token-response metadata.
+        clear_x_bearer_env();
+        let store = test_store("x-oauth-probe-pass");
+        let token = format!("probe-token-{}", "p".repeat(64));
+        store
+            .set_secret_value_with_metadata("X_BEARER_TOKEN", &token, "x", Some("x"), None)
+            .unwrap();
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "allow-x-oauth-probe-network"
+effect = "allow"
+action = "provider.network"
+package = "arcwell-x"
+provider = "x"
+source = "x_oauth_probe"
+reason = "allow local X OAuth probe fixture"
+priority = 20
+"#,
+        );
+        let (base, requests) = mock_recording_sequence_server(vec![
+            (
+                "200 OK",
+                "",
+                r#"{"data":{"id":"u1","username":"arcwell_probe","name":"Arcwell Probe"}}"#,
+                "application/json",
+            ),
+            (
+                "200 OK",
+                "",
+                r#"{"data":[],"meta":{"result_count":0}}"#,
+                "application/json",
+            ),
+            (
+                "200 OK",
+                "",
+                r#"{"data":[],"meta":{"result_count":0}}"#,
+                "application/json",
+            ),
+            (
+                "200 OK",
+                "",
+                r#"{"data":[],"meta":{"result_count":0}}"#,
+                "application/json",
+            ),
+        ]);
+
+        let report = store.x_oauth_probe_with_base("from:openai", &base).unwrap();
+        assert_eq!(report.status, "passed");
+        assert_eq!(report.account_id.as_deref(), Some("u1"));
+        assert!(report.missing_or_unproven_scopes.is_empty(), "{report:?}");
+        assert_eq!(
+            report
+                .endpoints
+                .iter()
+                .map(|endpoint| endpoint.required_scope.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["bookmark.read", "follows.read", "tweet.read", "users.read"])
+        );
+        assert!(
+            report
+                .endpoints
+                .iter()
+                .all(|endpoint| endpoint.status == "passed"),
+            "{report:?}"
+        );
+        let captured = requests.lock().unwrap().join("\n");
+        assert!(captured.contains("GET /2/users/me?"), "{captured}");
+        assert!(
+            captured.contains("GET /2/users/u1/bookmarks?"),
+            "{captured}"
+        );
+        assert!(
+            captured.contains("GET /2/users/u1/following?"),
+            "{captured}"
+        );
+        assert!(
+            captured.contains("GET /2/tweets/search/recent?"),
+            "{captured}"
+        );
+        assert!(
+            captured.contains("authorization: Bearer probe-token-"),
+            "{captured}"
+        );
+
+        let health = store
+            .get_source_health("x:oauth-scope-probe")
+            .unwrap()
+            .expect("probe health");
+        assert_eq!(health.status, "healthy");
+        assert_eq!(health.last_item_id.as_deref(), Some("u1"));
+        let sync: (String, String) = store
+            .conn
+            .query_row(
+                "SELECT status, metadata_json FROM x_sync_runs WHERE id = ?1",
+                params![report.sync_run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(sync.0, "completed");
+        assert!(sync.1.contains("bookmark.read"), "{}", sync.1);
+        let serialized = serde_json::to_string(&report).unwrap();
+        assert!(!serialized.contains(&token));
+        assert!(!sync.1.contains(&token));
+    }
+
+    #[test]
+    fn severe_x_oauth_probe_keeps_partial_scope_failures_visible_and_redacted() {
+        // CLAIM: X OAuth scope probing must not call credentials healthy when
+        // only /users/me succeeds; every unproven endpoint must stay visible in
+        // report, source health, and x_sync_runs.
+        // PRECONDITIONS: /users/me succeeds but bookmarks/following/recent
+        // search fail with scope/tier/revocation-style provider errors.
+        // POSTCONDITIONS: the report is partial, missing scopes are explicit,
+        // source health is failed, sync-run status is failed, and raw bearer
+        // text is not serialized.
+        // ORACLE: report fields plus durable source_health/x_sync_runs rows.
+        // SEVERITY: Severe because single-endpoint provider probes are a
+        // classic false-green for scheduled bookmark/following ingestion.
+        clear_x_bearer_env();
+        let store = test_store("x-oauth-probe-partial");
+        let token = format!("probe-token-{}", "s".repeat(64));
+        store
+            .set_secret_value_with_metadata("X_BEARER_TOKEN", &token, "x", Some("x"), None)
+            .unwrap();
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "allow-x-oauth-probe-network"
+effect = "allow"
+action = "provider.network"
+package = "arcwell-x"
+provider = "x"
+source = "x_oauth_probe"
+reason = "allow local X OAuth probe fixture"
+priority = 20
+"#,
+        );
+        let (base, _requests) = mock_recording_sequence_server(vec![
+            (
+                "200 OK",
+                "",
+                r#"{"data":{"id":"u1","username":"arcwell_probe","name":"Arcwell Probe"}}"#,
+                "application/json",
+            ),
+            (
+                "403 Forbidden",
+                "",
+                r#"{"title":"Unsupported Authentication","detail":"bookmark.read scope required"}"#,
+                "application/json",
+            ),
+            (
+                "403 Forbidden",
+                "",
+                r#"{"title":"Forbidden","detail":"follows.read scope required"}"#,
+                "application/json",
+            ),
+            (
+                "401 Unauthorized",
+                "",
+                r#"{"error":"invalid_token","error_description":"revoked access token probe-token-ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"}"#,
+                "application/json",
+            ),
+        ]);
+
+        let report = store.x_oauth_probe_with_base("from:openai", &base).unwrap();
+        assert_eq!(report.status, "partial");
+        assert_eq!(
+            report.missing_or_unproven_scopes,
+            vec![
+                "bookmark.read".to_string(),
+                "follows.read".to_string(),
+                "tweet.read".to_string()
+            ]
+        );
+        let by_name = report
+            .endpoints
+            .iter()
+            .map(|endpoint| (endpoint.name.as_str(), endpoint))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(by_name["users_me"].status, "passed");
+        assert_eq!(by_name["bookmarks"].classification, "scope_mismatch");
+        assert_eq!(by_name["following"].classification, "scope_mismatch");
+        assert_eq!(
+            by_name["recent_search"].classification,
+            "provider_revocation_or_expiry"
+        );
+
+        let health = store
+            .get_source_health("x:oauth-scope-probe")
+            .unwrap()
+            .expect("probe health");
+        assert_eq!(health.status, "failed");
+        assert!(
+            health
+                .last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("bookmarks:scope_mismatch"),
+            "{health:?}"
+        );
+        let sync: (String, String, String) = store
+            .conn
+            .query_row(
+                "SELECT status, COALESCE(error, ''), metadata_json FROM x_sync_runs WHERE id = ?1",
+                params![report.sync_run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(sync.0, "failed");
+        assert!(sync.1.contains("bookmark.read"), "{}", sync.1);
+        let serialized = serde_json::to_string(&report).unwrap();
+        assert!(!serialized.contains(&token));
+        assert!(!sync.2.contains(&token));
+        assert!(!health.last_error.unwrap_or_default().contains(&token));
     }
 
     #[test]

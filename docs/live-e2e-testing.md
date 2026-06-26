@@ -168,6 +168,20 @@ The credential probe verifies:
 - live current credentials can run recent search and, when enabled, a tiny
   bookmark/follow watch-source rebuild.
 
+`arcwell x oauth-probe` / `x_oauth_probe` is the first-class endpoint-scope
+probe for current X credentials. It is provider-network policy/cost gated,
+uses the shared stored bearer/refresh path, and calls:
+
+- `/2/users/me` for `users.read`;
+- `/2/users/:id/bookmarks?max_results=1` for `bookmark.read`;
+- `/2/users/:id/following?max_results=1` for `follows.read`;
+- `/2/tweets/search/recent` for `tweet.read`.
+
+Each endpoint records passed/failed/skipped status, classification, redacted
+error text, a `source_health` row, and an `x_sync_runs` audit row. This proves
+endpoint acceptance for the current credential; it is not a separate provider
+token-introspection API and it does not revoke tokens.
+
 `scripts/x-oauth-revoke-proof` is the repeatable controlled-provider proof for
 the X OAuth revoke path. It uses a disposable `ARCWELL_HOME`, starts a local
 OAuth endpoint for `/2/oauth2/revoke`, seeds sentinel X access/refresh tokens,

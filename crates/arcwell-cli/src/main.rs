@@ -885,6 +885,7 @@ fn resolve_dynamic_slash_alias(
                 "exchange" | "exchange-code" | "oauth-exchange" => &["x", "oauth-exchange"][..],
                 "refresh" | "oauth-refresh" => &["x", "oauth-refresh"][..],
                 "revoke" | "oauth-revoke" => &["x", "oauth-revoke"][..],
+                "probe" | "oauth-probe" => &["x", "oauth-probe"][..],
                 _ => &["x"][..],
             };
             let rest = if parts == ["x"] { rest } else { &rest[1..] };
@@ -3438,6 +3439,10 @@ enum XSubcommand {
         #[arg(long, default_value_t = 10000)]
         limit: usize,
     },
+    OauthProbe {
+        #[arg(long)]
+        search_query: Option<String>,
+    },
     OauthUrl {
         #[arg(long)]
         client_id: String,
@@ -5224,6 +5229,9 @@ fn x_command(store: Store, args: XCommand) -> Result<()> {
             defer_rate_limited_hours,
             limit,
         } => print_json(&store.x_repair_health(defer_rate_limited_hours, limit)?),
+        XSubcommand::OauthProbe { search_query } => {
+            print_json(&store.x_oauth_probe(search_query.as_deref())?)
+        }
         XSubcommand::OauthUrl {
             client_id,
             redirect_uri,
@@ -13896,6 +13904,10 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 store.x_repair_health(defer_rate_limited_hours, limit)?
             ))
         }
+        "x_oauth_probe" => {
+            let search_query = arguments.get("search_query").and_then(Value::as_str);
+            Ok(json!(store.x_oauth_probe(search_query)?))
+        }
         "x_oauth_authorize_url" => {
             let client_id = required_string(&arguments, "client_id")?;
             let redirect_uri = required_string(&arguments, "redirect_uri")?;
@@ -15729,6 +15741,15 @@ fn mcp_tools() -> Vec<Value> {
                     "Maximum stale rate-limited rows to defer.",
                 ),
             ],
+        ),
+        tool(
+            "x_oauth_probe",
+            "Probe current X OAuth credentials against provider endpoints for users.read, bookmark.read, follows.read, and tweet.read without importing source data.",
+            [(
+                "search_query",
+                "string",
+                "Optional recent-search query used to prove tweet.read; defaults to from:openai.",
+            )],
         ),
         tool(
             "x_oauth_authorize_url",

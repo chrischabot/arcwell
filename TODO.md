@@ -1134,6 +1134,14 @@ PR, implementation note, or final report:
       usage/cost data.
 - [ ] Add provider-specific live credential probes for configured providers
       without leaking secret values.
+      X now has a first-class `arcwell x oauth-probe` / `x_oauth_probe`
+      endpoint-scope probe for `users.read`, `bookmark.read`, `follows.read`,
+      and `tweet.read`. It writes redacted `source_health` and `x_sync_runs`
+      evidence without importing source rows. Live local-home run on
+      2026-06-26 passed all four X endpoints and recorded sync run
+      `cfe9fc9d-cbde-4b1c-bcc4-39330945fd9b`. Remaining work is equivalent
+      first-class probes for the other configured providers and live proof
+      packets per provider.
 - [ ] Add provider-side revocation/rotation helpers where provider APIs make
       that safe and useful.
       X OAuth now has `arcwell x oauth-revoke` and MCP `x_oauth_revoke` for

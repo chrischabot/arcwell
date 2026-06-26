@@ -18,6 +18,7 @@ arcwell x import-portable ./arcwell-x-portable
 arcwell x oauth-url --client-id "$X_CLIENT_ID" --redirect-uri http://127.0.0.1/callback --scopes tweet.read,users.read,bookmark.read,follows.read,offline.access
 arcwell x oauth-exchange --client-id "$X_CLIENT_ID" --redirect-uri http://127.0.0.1/callback --code "$CODE" --code-verifier "$CODE_VERIFIER"
 arcwell x oauth-refresh --client-id "$X_CLIENT_ID"
+arcwell x oauth-probe --search-query "from:openai"
 arcwell x oauth-revoke --name X_BEARER_TOKEN --client-id "$X_CLIENT_ID" --token-type-hint access_token --delete-local
 arcwell x rebuild-definitive-watch-sources --bookmark-days 92 --max-bookmarks 1000 --max-recent-follows 100
 arcwell x recent-search "from:openai" --max-results 25
@@ -48,6 +49,7 @@ MCP tools:
 - `x_oauth_authorize_url`
 - `x_oauth_exchange_code`
 - `x_oauth_refresh`
+- `x_oauth_probe`
 - `x_oauth_revoke`
 - `x_rebuild_definitive_watch_sources`
 - `x_import_following_watch_sources`
@@ -157,6 +159,13 @@ Boundary:
   success. The repeatable non-destructive proof is `scripts/x-oauth-revoke-proof`;
   live revocation of the real token is intentionally operator-approved because
   it is destructive.
+- `arcwell x oauth-probe` / `x_oauth_probe` probes the current stored X OAuth
+  credential against provider endpoints for `users.read`, `bookmark.read`,
+  `follows.read`, and `tweet.read` without importing source rows. Each endpoint
+  reports passed/failed/skipped status, classification, and redacted error text,
+  and the run writes `source_health` plus `x_sync_runs` audit state. This proves
+  endpoint acceptance for the current token; it is not a destructive revoke
+  proof or a separate X token-introspection endpoint.
 - OAuth authorization URL generation returns the PKCE `code_verifier`; keep it until the callback code has been exchanged.
 - Live recent search uses X API v2 and stores `x:recent-search:<query>` cursor state from `meta.newest_id`.
 - The recommended watch-list path is `x rebuild-definitive-watch-sources`: it replaces existing `x_handle` watch sources with authors of recent bookmarked tweets plus a capped recent-follow sample.
