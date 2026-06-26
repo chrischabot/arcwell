@@ -189,12 +189,16 @@ PR, implementation note, or final report:
       source-card-backed editor writes a stable wiki page, quality-gated
       knowledge report, durable editorial decision, and optional deduped digest
       candidate through the resident `knowledge_cluster_expand` worker job.
-      Severe tests cover idempotent replay, worker execution, prompt injection
-      as labeled evidence, and rejection of the empty metadata/link-dump shape.
+      The worker now also auto-enqueues due `candidate`/`active` shared clusters
+      without a manual enqueue command, skips completed or blocked expansion
+      decisions, and suppresses duplicate pending expansion jobs. Severe tests
+      cover idempotent replay, manual and automatic worker execution, prompt
+      injection as labeled evidence, blocked-cluster non-retry, active-job
+      dedupe, and rejection of the empty metadata/link-dump shape.
       Remaining work is investigation jobs, broad production-data clustering,
-      X credential-refresh live proof, scheduled recurrence, external delivery
-      recurrence, richer model-backed writer/editor synthesis, and broader ops
-      UI controls.
+      X credential-refresh live proof, wall-clock scheduled source recurrence,
+      external delivery recurrence, richer model-backed writer/editor
+      synthesis, and broader ops UI controls.
 - [ ] Complete the Arcwell X anti-mirage plan in
       `docs/arcwell-x-architecture-implementation-plan.md` before marking X
       beyond `Partial`.
