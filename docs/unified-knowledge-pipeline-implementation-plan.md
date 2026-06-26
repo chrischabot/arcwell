@@ -108,8 +108,9 @@ Missing or partial:
 - Automatic research fanout from clusters.
 - General wiki writer/editor quality gate for cross-source pages.
 - Unified "interestingness" and alert routing across all sources.
-- Wall-clock recurrence proof for real external alerts.
-- Live X freshness is currently blocked by expired credentials.
+- Multi-day/live-external wall-clock recurrence proof for real alerts.
+- Live X freshness now has capped copied-home proof; broad quota/tier and
+  long-running recurrence remain open.
 - Ops controls are still narrow.
 
 Current implemented bridge slice:
@@ -146,6 +147,8 @@ Current implemented bridge slice:
   proposals.
 - Preserved production-data foreground proof:
   `.arcwell-dev/proofs/knowledge-live-e2e-proof-20260625T173937Z-37414/artifacts/proof-packet.json`.
+- Preserved bounded resident recurrence proof:
+  `.arcwell-dev/proofs/knowledge-wall-clock-recurrence-proof-20260626T081032Z-11178/proof-packet.json`.
 
 What the bridge proof showed:
 
@@ -179,16 +182,19 @@ What the bridge proof showed:
 
 What it still does not prove:
 
-- Resident scheduled recurrence over wall-clock time.
-- Live X freshness, because local X credentials still need refresh/reauthorize.
+- Multi-day launchd/systemd recurrence or live external inbox delivery over
+  elapsed time. The bounded copied-home wall-clock proof runs one resident
+  worker process for 80 ticks over 21 seconds with a controlled local email
+  provider.
+- Broad live X freshness beyond the capped copied-home smoke.
 - Model-invoked entity resolution over broad production clusters or scheduled
   recurrence; the live proof is a foreground provider attempt over proof
   fixture data.
 - Model-backed semantic synthesis, broad production-data clustering, or
   scheduled recurrence; the cluster proof is a foreground provider attempt over
   proof fixture data.
-- Wiki page expansion/update jobs.
-- Digest candidate routing and external delivery from shared knowledge reports.
+- Autonomous approval, broad wiki page update decisions, and live external
+  delivery from shared knowledge reports.
 - Broad ops repair controls.
 
 ## Unified Pipeline
@@ -1238,6 +1244,15 @@ Add preserved proof scripts:
       with 295 source cards and verifies large-cluster prose bounding plus a
       complete source-card id audit index. It is not wall-clock external
       recurrence.
+- [x] `scripts/knowledge-wall-clock-recurrence-proof`
+      passed at
+      `.arcwell-dev/proofs/knowledge-wall-clock-recurrence-proof-20260626T081032Z-11178/proof-packet.json`:
+      copied real source cards -> scheduled backlog watch source -> one
+      bounded resident worker loop over 80 wall-clock ticks -> backlog cluster
+      -> wiki/report expansion -> editorial-linked digest candidate -> explicit
+      proof-harness approval while the same worker was alive -> scheduled
+      controlled-provider delivery -> heartbeat and ops visibility. It is not
+      multi-day service operation or live external inbox recurrence.
 - [ ] `scripts/knowledge-ops-browser-smoke`
 
 Cross-source proof must show:
@@ -1427,7 +1442,8 @@ Provider and scheduling:
 - [ ] retry storm bounded
 - [ ] dead-letter after max attempts
 - [ ] quiet-hours deferral and resume
-- [ ] wall-clock recurrence proof
+- [x] bounded copied-home wall-clock recurrence proof
+- [ ] live external or multi-day service recurrence proof
 
 Report quality:
 

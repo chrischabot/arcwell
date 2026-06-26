@@ -144,6 +144,8 @@ enum WorkerSubcommand {
         max_jobs_per_tick: usize,
         #[arg(long, default_value_t = 5000)]
         idle_sleep_ms: u64,
+        #[arg(long)]
+        max_ticks: Option<usize>,
     },
 }
 
@@ -3483,15 +3485,50 @@ fn worker(store: Store, args: WorkerCommand) -> Result<()> {
         WorkerSubcommand::Run {
             max_jobs_per_tick,
             idle_sleep_ms,
-        } => loop {
-            let report = store.run_worker_once(max_jobs_per_tick)?;
-            if report.processed > 0 {
-                println!("{}", serde_json::to_string(&report)?);
+            max_ticks,
+        } => {
+            let mut ticks = 0usize;
+            let mut processed = 0usize;
+            let mut completed = 0usize;
+            let mut failed = 0usize;
+            let mut deferred = 0usize;
+            let mut dead_lettered = 0usize;
+            loop {
+                if max_ticks.is_some_and(|limit| ticks >= limit.clamp(1, 10_000)) {
+                    break;
+                }
+                let report = store.run_worker_once(max_jobs_per_tick)?;
+                ticks += 1;
+                processed += report.processed;
+                completed += report.completed;
+                failed += report.failed;
+                deferred += report.deferred;
+                dead_lettered += report.dead_lettered;
+                if report.processed > 0 {
+                    println!("{}", serde_json::to_string(&report)?);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(
+                    idle_sleep_ms.clamp(250, 60_000),
+                ));
             }
-            std::thread::sleep(std::time::Duration::from_millis(
-                idle_sleep_ms.clamp(250, 60_000),
-            ));
-        },
+            if max_ticks.is_some() {
+                println!(
+                    "{}",
+                    serde_json::to_string(&json!({
+                        "status": "completed",
+                        "ticks": ticks,
+                        "processed": processed,
+                        "completed": completed,
+                        "failed": failed,
+                        "deferred": deferred,
+                        "dead_lettered": dead_lettered,
+                        "max_jobs_per_tick": max_jobs_per_tick.clamp(1, 100),
+                        "idle_sleep_ms": idle_sleep_ms.clamp(250, 60_000),
+                    }))?
+                );
+            }
+            Ok(())
+        }
     }
 }
 
@@ -15782,6 +15819,40 @@ mod tests {
 
         let failures = service_plist_contract_failures(&plist_path);
         assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    #[test]
+    fn severe_worker_run_max_ticks_exits_after_repeated_wall_clock_ticks() {
+        // CLAIM: worker run can be bounded for proof harnesses without changing
+        // service mode, and the bounded loop performs repeated resident ticks
+        // rather than exiting after a single run-once drain.
+        // ORACLE: two ticks with a sub-clamp sleep record a heartbeat and take
+        // at least the clamped 250ms sleep interval twice.
+        // SEVERITY: Severe because wall-clock recurrence proof is hollow if it
+        // only calls run-once or if the bounded loop exits immediately.
+        let paths = test_paths("worker-run-max-ticks");
+        let store = Store::open(paths.clone()).unwrap();
+        let started = std::time::Instant::now();
+        worker(
+            store,
+            WorkerCommand {
+                command: WorkerSubcommand::Run {
+                    max_jobs_per_tick: 1,
+                    idle_sleep_ms: 1,
+                    max_ticks: Some(2),
+                },
+            },
+        )
+        .unwrap();
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(450),
+            "bounded worker loop exited too quickly: {:?}",
+            started.elapsed()
+        );
+        let store = Store::open(paths).unwrap();
+        let heartbeat = store.latest_worker_heartbeat().unwrap().unwrap();
+        assert!(heartbeat.worker_id.starts_with("arcwell-worker-"));
+        assert_eq!(heartbeat.processed_jobs, 0);
     }
 
     #[test]
