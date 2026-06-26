@@ -1970,6 +1970,46 @@ enum KnowledgeSubcommand {
         #[arg(long)]
         timeout_seconds: Option<u64>,
     },
+    EnqueueEntityResolutionModel {
+        left_entity_id: String,
+        right_entity_id: String,
+        #[arg(long, default_value = "mock")]
+        provider: String,
+        #[arg(long)]
+        model_name: Option<String>,
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+    },
+    EnqueueDueEntityResolution {
+        #[arg(long, default_value_t = 25)]
+        max_pairs: usize,
+        #[arg(long, default_value = "mock")]
+        provider: String,
+        #[arg(long)]
+        model_name: Option<String>,
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+    },
+    ScheduleEntityResolution {
+        #[arg(long, default_value_t = 25)]
+        max_pairs: usize,
+        #[arg(long, default_value = "mock")]
+        provider: String,
+        #[arg(long)]
+        model_name: Option<String>,
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        #[arg(long, default_value = "warm")]
+        cadence: String,
+        #[arg(long, default_value = "active")]
+        status: String,
+    },
     EntityResolutions {
         #[arg(long, default_value_t = 50)]
         limit: usize,
@@ -4188,6 +4228,52 @@ fn knowledge(store: Store, args: KnowledgeCommand) -> Result<()> {
                 endpoint,
                 timeout_seconds,
             },
+        )?),
+        KnowledgeSubcommand::EnqueueEntityResolutionModel {
+            left_entity_id,
+            right_entity_id,
+            provider,
+            model_name,
+            endpoint,
+            timeout_seconds,
+        } => print_json(&store.enqueue_knowledge_entity_resolution_model_job(
+            &left_entity_id,
+            &right_entity_id,
+            &provider,
+            model_name.as_deref(),
+            endpoint.as_deref(),
+            timeout_seconds,
+        )?),
+        KnowledgeSubcommand::EnqueueDueEntityResolution {
+            max_pairs,
+            provider,
+            model_name,
+            endpoint,
+            timeout_seconds,
+        } => print_json(&store.enqueue_due_knowledge_entity_resolution_jobs(
+            max_pairs,
+            &provider,
+            model_name.as_deref(),
+            endpoint.as_deref(),
+            timeout_seconds,
+            None,
+        )?),
+        KnowledgeSubcommand::ScheduleEntityResolution {
+            max_pairs,
+            provider,
+            model_name,
+            endpoint,
+            timeout_seconds,
+            cadence,
+            status,
+        } => print_json(&store.schedule_knowledge_entity_resolution(
+            &provider,
+            model_name.as_deref(),
+            endpoint.as_deref(),
+            timeout_seconds,
+            max_pairs,
+            &cadence,
+            &status,
         )?),
         KnowledgeSubcommand::EntityResolutions { limit } => {
             print_json(&store.list_knowledge_entity_resolutions(limit)?)

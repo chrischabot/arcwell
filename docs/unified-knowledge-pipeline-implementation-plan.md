@@ -138,6 +138,16 @@ Current implemented bridge slice:
   `arcwell knowledge resolve-entity-model`, with policy/cost gates,
   schema-validated output, source-card citation requirements, prompt-injection
   reason rejection, and pending-review-only writes.
+- Scheduled review-only entity-resolution recurrence through
+  `arcwell knowledge schedule-entity-resolution`,
+  `arcwell knowledge enqueue-due-entity-resolution`, the
+  `knowledge_entity_resolution` watch-source kind, and the resident
+  `knowledge_entity_resolution_model` worker job. Local severe tests prove the
+  worker enqueues eligible source-card-backed entity pairs, writes only
+  `pending_review` model proposals, advances source health only after durable
+  output, suppresses replay, creates no relations/wiki/reports/digests, and
+  records provider-policy denial as failed job/source-health without credentials
+  or cost rows.
 - Schema-gated semantic/model cluster proposals through
   `arcwell knowledge propose-clusters`, with policy/cost gates, source-card
   citation requirements, duplicate-source-card rejection across proposed
@@ -306,9 +316,10 @@ What it still does not prove:
   worker process for 80 ticks over 21 seconds with a controlled local email
   provider.
 - Broad live X freshness beyond the capped copied-home smoke.
-- Model-invoked entity resolution over broad production clusters or scheduled
-  recurrence; the live proof is a foreground provider attempt over proof
-  fixture data.
+- Model-invoked entity resolution over broad production clusters. Local
+  scheduled recurrence now exists, but the live proof remains a foreground
+  provider attempt over proof fixture data rather than a broad production-corpus
+  scheduled provider proof.
 - Broad production-data semantic/model clustering quality. Local severe tests
   and the copied-home live-provider scheduled proof now prove the scheduled
   worker candidate-only path, while the promotion/expansion proof is still a

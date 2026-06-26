@@ -177,6 +177,18 @@ PR, implementation note, or final report:
       prompt-injection/malformed-output/cost-denial/policy-denial severe
       tests, and repeatable mock plus live OpenAI browser proof at
       `.arcwell-dev/proofs/knowledge-entity-resolution-production-proof-20260625T181411Z-84883/artifacts/proof-packet.json`.
+      Scheduled entity-resolution recurrence now adds
+      `arcwell knowledge enqueue-entity-resolution-model`,
+      `arcwell knowledge enqueue-due-entity-resolution`,
+      `arcwell knowledge schedule-entity-resolution`, the
+      `knowledge_entity_resolution` watch-source kind, and the resident
+      `knowledge_entity_resolution_model` job. Severe tests prove eligible
+      source-card-backed pairs become review-only pending model proposals,
+      replay is suppressed, no relation/wiki/report/digest side effects are
+      written, source health advances only after durable output, and provider
+      policy denial is visible without credentials, costs, or hidden graph
+      mutation. This is local scheduled proof, not broad production-corpus live
+      entity-resolution quality.
       This slice adds `arcwell knowledge propose-clusters`, schema-gated
       semantic/model cluster proposals behind policy/cost, severe tests for
       prompt-injection, out-of-prompt evidence, duplicate evidence reuse,

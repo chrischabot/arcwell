@@ -1482,6 +1482,15 @@ pub struct KnowledgeClusterModelWriterEnqueueReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeEntityResolutionEnqueueReport {
+    pub inspected: usize,
+    pub enqueued: usize,
+    pub skipped: usize,
+    pub jobs: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeClusterInvestigationExecutionEnqueueReport {
     pub inspected: usize,
     pub enqueued: usize,
@@ -1563,6 +1572,7 @@ pub struct WorkerRunReport {
     pub radar_schedule: Option<RadarScheduleEnqueueReport>,
     pub digest_alert_schedule: Option<DigestAlertScheduleEnqueueReport>,
     pub knowledge_cluster_model_writer: Option<KnowledgeClusterModelWriterEnqueueReport>,
+    pub knowledge_entity_resolution: Option<KnowledgeEntityResolutionEnqueueReport>,
     pub knowledge_cluster_editorial_decision:
         Option<KnowledgeClusterEditorialDecisionEnqueueReport>,
     pub knowledge_cluster_expansion: Option<KnowledgeClusterExpansionEnqueueReport>,
@@ -13855,6 +13865,185 @@ impl Store {
         })
     }
 
+    pub fn enqueue_knowledge_entity_resolution_model_job(
+        &self,
+        left_entity_id: &str,
+        right_entity_id: &str,
+        model_provider: &str,
+        model_name: Option<&str>,
+        endpoint: Option<&str>,
+        timeout_seconds: Option<u64>,
+    ) -> Result<WikiJob> {
+        self.enqueue_knowledge_entity_resolution_model_job_with_lineage(
+            left_entity_id,
+            right_entity_id,
+            model_provider,
+            model_name,
+            endpoint,
+            timeout_seconds,
+            None,
+        )
+    }
+
+    fn enqueue_knowledge_entity_resolution_model_job_with_lineage(
+        &self,
+        left_entity_id: &str,
+        right_entity_id: &str,
+        model_provider: &str,
+        model_name: Option<&str>,
+        endpoint: Option<&str>,
+        timeout_seconds: Option<u64>,
+        lineage: Option<Value>,
+    ) -> Result<WikiJob> {
+        validate_id(left_entity_id)?;
+        validate_id(right_entity_id)?;
+        if left_entity_id == right_entity_id {
+            bail!("knowledge entity resolution model job requires two different entities");
+        }
+        let (left_entity_id, right_entity_id) = if left_entity_id <= right_entity_id {
+            (left_entity_id.to_string(), right_entity_id.to_string())
+        } else {
+            (right_entity_id.to_string(), left_entity_id.to_string())
+        };
+        self.get_knowledge_entity(&left_entity_id)?
+            .with_context(|| format!("left knowledge entity not found: {left_entity_id}"))?;
+        self.get_knowledge_entity(&right_entity_id)?
+            .with_context(|| format!("right knowledge entity not found: {right_entity_id}"))?;
+        if self
+            .knowledge_entity_resolution_model_has_active_job(&left_entity_id, &right_entity_id)?
+        {
+            bail!(
+                "knowledge entity resolution model job already active for pair {left_entity_id}/{right_entity_id}"
+            );
+        }
+        let provider = model_provider.trim().to_ascii_lowercase();
+        if !matches!(provider.as_str(), "mock" | "openai") {
+            bail!("unsupported knowledge entity resolution model provider: {provider}");
+        }
+        let model_name = model_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if let Some(model_name) = &model_name {
+            validate_key(model_name)?;
+        }
+        if let Some(endpoint) = endpoint {
+            validated_endpoint(Some(endpoint), "https://api.openai.com/v1/responses")?;
+        }
+        let mut input = json!({
+            "left_entity_id": left_entity_id,
+            "right_entity_id": right_entity_id,
+            "model_provider": provider,
+            "model_name": model_name,
+            "endpoint": endpoint,
+            "timeout_seconds": timeout_seconds,
+        });
+        if let Some(lineage) = lineage
+            && let Some(object) = input.as_object_mut()
+        {
+            object.insert("lineage".to_string(), lineage);
+        }
+        self.enqueue_wiki_job("knowledge_entity_resolution_model", input)
+    }
+
+    pub fn schedule_knowledge_entity_resolution(
+        &self,
+        model_provider: &str,
+        model_name: Option<&str>,
+        endpoint: Option<&str>,
+        timeout_seconds: Option<u64>,
+        max_pairs: usize,
+        cadence: &str,
+        status: &str,
+    ) -> Result<WatchSource> {
+        let provider = model_provider.trim().to_ascii_lowercase();
+        if !matches!(provider.as_str(), "mock" | "openai") {
+            bail!("unsupported knowledge entity resolution model provider: {provider}");
+        }
+        let model_name = model_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if let Some(model_name) = &model_name {
+            validate_key(model_name)?;
+        }
+        if let Some(endpoint) = endpoint {
+            validated_endpoint(Some(endpoint), "https://api.openai.com/v1/responses")?;
+        }
+        self.upsert_watch_source(WatchSourceInput {
+            source_kind: "knowledge_entity_resolution".to_string(),
+            locator: "entities".to_string(),
+            label: "Knowledge entity resolution".to_string(),
+            cadence: cadence.to_string(),
+            status: status.to_string(),
+            metadata: json!({
+                "model_provider": provider,
+                "model_name": model_name,
+                "endpoint": endpoint,
+                "timeout_seconds": timeout_seconds,
+                "max_pairs": max_pairs.clamp(1, 100),
+                "origin": "knowledge_entity_resolution_schedule",
+                "boundary": "Scheduled entity resolution writes review-only proposals from source-card-backed entity pairs; it cannot merge entities or create relations."
+            }),
+        })
+    }
+
+    fn enqueue_due_knowledge_entity_resolution_job_from_source(
+        &self,
+        source: &WatchSource,
+        source_key: &str,
+    ) -> Result<Option<WikiJob>> {
+        let model_provider = source
+            .metadata
+            .get("model_provider")
+            .and_then(Value::as_str)
+            .unwrap_or("mock");
+        let model_name = source.metadata.get("model_name").and_then(Value::as_str);
+        let endpoint = source.metadata.get("endpoint").and_then(Value::as_str);
+        let timeout_seconds = source
+            .metadata
+            .get("timeout_seconds")
+            .and_then(Value::as_u64);
+        let max_pairs = source
+            .metadata
+            .get("max_pairs")
+            .and_then(Value::as_u64)
+            .unwrap_or(25) as usize;
+        let mut report = self.enqueue_due_knowledge_entity_resolution_jobs(
+            max_pairs,
+            model_provider,
+            model_name,
+            endpoint,
+            timeout_seconds,
+            Some(json!({
+                "trigger": "watch_source_due",
+                "watch_source_id": source.id,
+                "watch_source_key": source_key,
+                "source_kind": source.source_kind,
+                "locator": source.locator,
+                "cadence": source.cadence,
+                "metadata": source.metadata,
+            })),
+        )?;
+        if let Some(job_id) = report.jobs.pop() {
+            return self.get_wiki_job(&job_id)?.map(Some).with_context(|| {
+                format!("enqueued knowledge entity resolution job not found: {job_id}")
+            });
+        }
+        self.record_source_success(SourceHealthUpdate {
+            key: source_key,
+            provider: "arcwell",
+            source_kind: "knowledge_entity_resolution",
+            locator: &source.locator,
+            last_item_id: None,
+            last_item_date: None,
+            cursor_key: None,
+            cursor_value: None,
+            next_run_at: Some(&now_plus_seconds(3600)),
+        })?;
+        Ok(None)
+    }
+
     fn enqueue_due_knowledge_cluster_model_write_job_from_source(
         &self,
         source: &WatchSource,
@@ -14370,6 +14559,83 @@ impl Store {
         Ok(report)
     }
 
+    pub fn enqueue_due_knowledge_entity_resolution_jobs(
+        &self,
+        max_pairs: usize,
+        model_provider: &str,
+        model_name: Option<&str>,
+        endpoint: Option<&str>,
+        timeout_seconds: Option<u64>,
+        lineage: Option<Value>,
+    ) -> Result<KnowledgeEntityResolutionEnqueueReport> {
+        let provider = model_provider.trim().to_ascii_lowercase();
+        if !matches!(provider.as_str(), "mock" | "openai") {
+            bail!("unsupported knowledge entity resolution model provider: {provider}");
+        }
+        let model_name = model_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if let Some(model_name) = &model_name {
+            validate_key(model_name)?;
+        }
+        if let Some(endpoint) = endpoint {
+            validated_endpoint(Some(endpoint), "https://api.openai.com/v1/responses")?;
+        }
+        let mut report = KnowledgeEntityResolutionEnqueueReport {
+            inspected: 0,
+            enqueued: 0,
+            skipped: 0,
+            jobs: Vec::new(),
+            errors: Vec::new(),
+        };
+        for (left, right) in self.knowledge_entity_resolution_candidate_pairs(max_pairs)? {
+            report.inspected += 1;
+            if self.knowledge_entity_resolution_model_has_active_job(&left.id, &right.id)? {
+                report.skipped += 1;
+                continue;
+            }
+            if self
+                .knowledge_entity_resolution_has_model_proposal(&left.id, &right.id, &provider)?
+            {
+                report.skipped += 1;
+                continue;
+            }
+            match self.enqueue_knowledge_entity_resolution_model_job_with_lineage(
+                &left.id,
+                &right.id,
+                &provider,
+                model_name.as_deref(),
+                endpoint,
+                timeout_seconds,
+                lineage.clone().map(|mut value| {
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("left_entity_id".to_string(), json!(left.id.clone()));
+                        object.insert("right_entity_id".to_string(), json!(right.id.clone()));
+                        object.insert(
+                            "boundary".to_string(),
+                            json!("Due recurrence enqueues a review-only entity-resolution model job; entity identity remains unchanged until separate human/policy review."),
+                        );
+                    }
+                    value
+                }),
+            ) {
+                Ok(job) => {
+                    report.enqueued += 1;
+                    report.jobs.push(job.id);
+                }
+                Err(error) => {
+                    report.skipped += 1;
+                    report.errors.push(format!(
+                        "{}:{} / {}:{}: {error}",
+                        left.entity_type, left.name, right.entity_type, right.name
+                    ));
+                }
+            }
+        }
+        Ok(report)
+    }
+
     pub fn enqueue_due_knowledge_cluster_investigation_execution_jobs(
         &self,
         max_clusters: usize,
@@ -14601,6 +14867,86 @@ impl Store {
             )
             .map(|count| count > 0)
             .map_err(Into::into)
+    }
+
+    fn knowledge_entity_resolution_model_has_active_job(
+        &self,
+        left_entity_id: &str,
+        right_entity_id: &str,
+    ) -> Result<bool> {
+        validate_id(left_entity_id)?;
+        validate_id(right_entity_id)?;
+        let (left_entity_id, right_entity_id) = if left_entity_id <= right_entity_id {
+            (left_entity_id.to_string(), right_entity_id.to_string())
+        } else {
+            (right_entity_id.to_string(), left_entity_id.to_string())
+        };
+        self.conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM wiki_jobs
+                WHERE kind = 'knowledge_entity_resolution_model'
+                  AND (
+                    status IN ('pending', 'running', 'deferred')
+                    OR (status = 'failed' AND attempts < max_attempts)
+                  )
+                  AND json_extract(input_json, '$.left_entity_id') = ?1
+                  AND json_extract(input_json, '$.right_entity_id') = ?2
+                "#,
+                params![left_entity_id, right_entity_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .map_err(Into::into)
+    }
+
+    fn knowledge_entity_resolution_has_model_proposal(
+        &self,
+        left_entity_id: &str,
+        right_entity_id: &str,
+        model_provider: &str,
+    ) -> Result<bool> {
+        validate_id(left_entity_id)?;
+        validate_id(right_entity_id)?;
+        let resolver = format!("{}-model-v1", model_provider.trim().to_ascii_lowercase());
+        let pair_key =
+            knowledge_entity_resolution_pair_key(left_entity_id, right_entity_id, &resolver);
+        let id = format!("keres-{}", &sha256(pair_key.as_bytes())[..16]);
+        self.conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM knowledge_entity_resolutions
+                WHERE id = ?1
+                  AND status IN ('pending_review', 'resolved', 'rejected', 'blocked')
+                "#,
+                params![id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .map_err(Into::into)
+    }
+
+    fn knowledge_entity_resolution_candidate_pairs(
+        &self,
+        max_pairs: usize,
+    ) -> Result<Vec<(KnowledgeEntity, KnowledgeEntity)>> {
+        let entities = self.list_knowledge_entities(500)?;
+        let mut pairs = Vec::new();
+        'outer: for left_index in 0..entities.len() {
+            let left = &entities[left_index];
+            for right in entities.iter().skip(left_index + 1) {
+                if knowledge_entity_resolution_proposal(left, right).is_none() {
+                    continue;
+                }
+                pairs.push((left.clone(), right.clone()));
+                if pairs.len() >= max_pairs.clamp(1, 100) {
+                    break 'outer;
+                }
+            }
+        }
+        Ok(pairs)
     }
 
     fn knowledge_cluster_editorial_decision_has_active_job(
@@ -15143,6 +15489,17 @@ impl Store {
                         &source_key,
                     )
                 }
+                "knowledge_entity_resolution" => {
+                    let maybe_job = self.enqueue_due_knowledge_entity_resolution_job_from_source(
+                        &source,
+                        &source_key,
+                    )?;
+                    let Some(job) = maybe_job else {
+                        report.skipped += 1;
+                        continue;
+                    };
+                    Ok(job)
+                }
                 other => Err(anyhow::anyhow!("unsupported watch source kind: {other}")),
             };
             match job {
@@ -15194,6 +15551,14 @@ impl Store {
         )?;
         let knowledge_cluster_model_writer = if knowledge_cluster_model_writer.inspected > 0 {
             Some(knowledge_cluster_model_writer)
+        } else {
+            None
+        };
+        let knowledge_entity_resolution = self.enqueue_due_knowledge_entity_resolution_jobs(
+            max_jobs, "mock", None, None, None, None,
+        )?;
+        let knowledge_entity_resolution = if knowledge_entity_resolution.inspected > 0 {
+            Some(knowledge_entity_resolution)
         } else {
             None
         };
@@ -15261,6 +15626,7 @@ impl Store {
             radar_schedule,
             digest_alert_schedule,
             knowledge_cluster_model_writer,
+            knowledge_entity_resolution,
             knowledge_cluster_editorial_decision,
             knowledge_cluster_expansion,
             knowledge_cluster_investigation_execution,
@@ -32544,6 +32910,9 @@ impl Store {
                 "knowledge_cluster_model_write" => {
                     self.execute_knowledge_cluster_model_write(&job.input_json)
                 }
+                "knowledge_entity_resolution_model" => {
+                    self.execute_knowledge_entity_resolution_model(&job.input_json)
+                }
                 "knowledge_cluster_backlog" => {
                     self.execute_knowledge_cluster_backlog(&job.input_json)
                 }
@@ -34358,6 +34727,96 @@ impl Store {
             "quality_findings": report.quality_findings,
             "model_writer": report.metadata.get("model_writer"),
             "status": "completed"
+        }))
+    }
+
+    fn execute_knowledge_entity_resolution_model(&self, input: &Value) -> Result<Value> {
+        let left_entity_id = input
+            .get("left_entity_id")
+            .and_then(Value::as_str)
+            .context("knowledge_entity_resolution_model missing left_entity_id")?;
+        let right_entity_id = input
+            .get("right_entity_id")
+            .and_then(Value::as_str)
+            .context("knowledge_entity_resolution_model missing right_entity_id")?;
+        let model_provider = input
+            .get("model_provider")
+            .and_then(Value::as_str)
+            .unwrap_or("mock");
+        let model_name = input
+            .get("model_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let endpoint = input
+            .get("endpoint")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let timeout_seconds = input.get("timeout_seconds").and_then(Value::as_u64);
+        let invocation_result =
+            self.invoke_knowledge_entity_resolution_model(KnowledgeEntityResolutionModelInput {
+                left_entity_id: left_entity_id.to_string(),
+                right_entity_id: right_entity_id.to_string(),
+                model_provider: model_provider.to_string(),
+                model_name,
+                endpoint,
+                timeout_seconds,
+            });
+        let invocation = match invocation_result {
+            Ok(invocation) => invocation,
+            Err(error) => {
+                if let Some(lineage) = input.get("lineage")
+                    && let Some(source_key) =
+                        lineage.get("watch_source_key").and_then(Value::as_str)
+                {
+                    let locator = lineage
+                        .get("locator")
+                        .and_then(Value::as_str)
+                        .unwrap_or("entities");
+                    let _ = self.record_source_failure(
+                        source_key,
+                        "knowledge_entity_resolution",
+                        "knowledge_entity_resolution",
+                        locator,
+                        &error.to_string(),
+                    );
+                }
+                bail!("{}", redact_secret_like_text(&error.to_string()));
+            }
+        };
+        if let Some(lineage) = input.get("lineage")
+            && let Some(source_key) = lineage.get("watch_source_key").and_then(Value::as_str)
+        {
+            let locator = lineage
+                .get("locator")
+                .and_then(Value::as_str)
+                .unwrap_or("entities");
+            self.record_source_success(SourceHealthUpdate {
+                key: source_key,
+                provider: "arcwell",
+                source_kind: "knowledge_entity_resolution",
+                locator,
+                last_item_id: Some(invocation.resolution.id.as_str()),
+                last_item_date: None,
+                cursor_key: None,
+                cursor_value: None,
+                next_run_at: Some(&now_plus_seconds(3600)),
+            })?;
+        }
+        Ok(json!({
+            "status": "completed",
+            "resolution_id": invocation.resolution.id,
+            "left_entity_id": invocation.resolution.left_entity_id,
+            "right_entity_id": invocation.resolution.right_entity_id,
+            "decision": invocation.resolution.decision,
+            "resolution_status": invocation.resolution.status,
+            "resolver": invocation.resolution.resolver,
+            "source_card_ids": invocation.resolution.source_card_ids,
+            "model_provider": invocation.model_provider,
+            "model_name": invocation.model_name,
+            "prompt_version": invocation.prompt_version,
+            "cost_decision_id": invocation.cost_decision_id,
+            "proof_level": invocation.proof_level,
+            "boundary": "Scheduled model entity resolution writes review-only proposals only; it does not merge entities or create relations."
         }))
     }
 
@@ -40390,6 +40849,7 @@ fn provider_network_source_for_job(kind: &str) -> &str {
         "x_import_bookmarks" => "x_import_bookmarks",
         "x_monitor_watch_source" => "x_monitor",
         "knowledge_cluster_model_write" => "knowledge_cluster_writer",
+        "knowledge_entity_resolution_model" => "knowledge_entity_resolution",
         other => other,
     }
 }
@@ -41496,6 +41956,7 @@ fn validate_job_kind(kind: &str) -> Result<()> {
         | "knowledge_cluster_editorial_decide"
         | "knowledge_cluster_expand"
         | "knowledge_cluster_model_write"
+        | "knowledge_entity_resolution_model"
         | "knowledge_cluster_backlog"
         | "knowledge_cluster_model_propose"
         | "knowledge_cluster_investigate"
@@ -52980,6 +53441,11 @@ fn validate_watch_source_input(input: &WatchSourceInput) -> Result<()> {
         }
         "knowledge_model_clusters" => validate_query(&input.locator)?,
         "knowledge_model_write" => validate_id(&input.locator)?,
+        "knowledge_entity_resolution" => {
+            if input.locator != "entities" {
+                bail!("knowledge_entity_resolution watch source locator must be entities");
+            }
+        }
         _ => unreachable!("source kind validated above"),
     }
     Ok(())
@@ -52997,7 +53463,8 @@ fn validate_watch_source_kind(kind: &str) -> Result<()> {
         | "x_handle"
         | "knowledge_backlog"
         | "knowledge_model_clusters"
-        | "knowledge_model_write" => Ok(()),
+        | "knowledge_model_write"
+        | "knowledge_entity_resolution" => Ok(()),
         other => bail!("unsupported watch source kind: {other}"),
     }
 }
@@ -53051,6 +53518,7 @@ fn watch_source_health_key(source: &WatchSource) -> Result<String> {
         "knowledge_backlog" => Ok("knowledge:source-card-backlog".to_string()),
         "knowledge_model_clusters" => Ok(format!("knowledge:model-clusters:{}", source.locator)),
         "knowledge_model_write" => Ok(format!("knowledge:model-write:{}", source.locator)),
+        "knowledge_entity_resolution" => Ok("knowledge:entity-resolution:entities".to_string()),
         other => bail!("unsupported watch source kind: {other}"),
     }
 }
@@ -65952,6 +66420,225 @@ reason = "cluster proposals disabled"
                 .contains("reviewable proposal only")
         );
         assert!(store.list_knowledge_relations(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn severe_scheduled_model_entity_resolution_worker_is_reviewable_and_idempotent() {
+        // CLAIM: Scheduled entity-resolution recurrence enqueues and executes
+        // review-only model proposals for eligible source-card-backed pairs.
+        // POSTCONDITIONS: The worker writes one pending resolution, advances
+        // source health only after durable output, creates no relation/wiki/
+        // digest side effects, and a replay does not enqueue another job.
+        // SEVERITY: Severe because scheduled identity resolution can otherwise
+        // look operational while silently merging graph identity or retrying
+        // the same pair forever.
+        let store = test_store("knowledge-scheduled-entity-resolution");
+        let left_card = seed_knowledge_source_card(
+            &store,
+            "scheduled-entity-left",
+            "Scheduled OpenAI entity evidence with homepage https://openai.com.",
+        );
+        let right_card = seed_knowledge_source_card(
+            &store,
+            "scheduled-entity-right",
+            "Scheduled OpenAI LP entity evidence with homepage https://openai.com.",
+        );
+        let left = store
+            .upsert_knowledge_entity(KnowledgeEntityInput {
+                entity_type: "company".to_string(),
+                name: "Scheduled OpenAI".to_string(),
+                canonical_key: "company:scheduled-openai".to_string(),
+                aliases: vec!["Scheduled OpenAI".to_string()],
+                homepage_url: Some("https://openai.com".to_string()),
+                source_card_ids: vec![left_card.id.clone()],
+                wiki_page_id: None,
+                confidence: 0.91,
+                metadata: json!({}),
+            })
+            .unwrap();
+        let right = store
+            .upsert_knowledge_entity(KnowledgeEntityInput {
+                entity_type: "company".to_string(),
+                name: "Scheduled OpenAI LP".to_string(),
+                canonical_key: "company:scheduled-openai-lp".to_string(),
+                aliases: vec!["Scheduled OpenAI LP".to_string()],
+                homepage_url: Some("https://openai.com".to_string()),
+                source_card_ids: vec![right_card.id.clone()],
+                wiki_page_id: None,
+                confidence: 0.83,
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let source = store
+            .schedule_knowledge_entity_resolution("mock", None, None, None, 10, "warm", "active")
+            .unwrap();
+        assert_eq!(source.source_kind, "knowledge_entity_resolution");
+        assert_eq!(source.locator, "entities");
+
+        let first = store.run_worker_once(10).unwrap();
+        assert_eq!(first.completed, 1);
+        assert_eq!(
+            first.watch_poll.as_ref().map(|report| report.enqueued),
+            Some(1)
+        );
+        assert_eq!(
+            first
+                .knowledge_entity_resolution
+                .as_ref()
+                .map(|report| report.enqueued),
+            Some(0),
+            "the direct resident sweep must skip the watch-source-enqueued active job"
+        );
+        let resolutions = store.list_knowledge_entity_resolutions(10).unwrap();
+        assert_eq!(resolutions.len(), 1);
+        let resolution = &resolutions[0];
+        assert_eq!(resolution.status, "pending_review");
+        assert_eq!(resolution.decision, "same_as_candidate");
+        assert_eq!(resolution.resolver, "mock-model-v1");
+        let expected_left = if left.id <= right.id {
+            &left.id
+        } else {
+            &right.id
+        };
+        assert_eq!(&resolution.left_entity_id, expected_left);
+        assert_eq!(resolution.source_card_ids.len(), 2);
+        assert!(store.list_knowledge_relations(10).unwrap().is_empty());
+        assert!(store.list_knowledge_reports(10).unwrap().is_empty());
+        assert!(
+            store.list_digest_candidates().unwrap().is_empty(),
+            "entity resolution must not create digest candidates"
+        );
+        let health = store
+            .get_source_health("knowledge:entity-resolution:entities")
+            .unwrap()
+            .expect("scheduled entity resolution should record source health");
+        assert_eq!(health.status, "healthy");
+        assert_eq!(health.last_item_id.as_deref(), Some(resolution.id.as_str()));
+        assert!(health.next_run_at.is_some());
+
+        let second = store.run_worker_once(10).unwrap();
+        assert_eq!(second.processed, 0);
+        assert_eq!(store.list_wiki_jobs().unwrap().len(), 1);
+        assert_eq!(
+            store.list_knowledge_entity_resolutions(10).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn severe_scheduled_model_entity_resolution_policy_denial_is_visible() {
+        // CLAIM: Scheduled OpenAI entity-resolution recurrence obeys provider
+        // policy before credentials/cost/provider calls and records an
+        // operator-visible source-health failure.
+        // POSTCONDITIONS: The worker fails the job with a redacted policy
+        // error, writes no resolution/relation/cost rows, and does not mark
+        // source health healthy.
+        // SEVERITY: Severe because unattended model resolution must fail closed
+        // under tightened policy instead of looking like an empty successful
+        // schedule.
+        let store = test_store("knowledge-scheduled-entity-resolution-deny");
+        let left_card = seed_knowledge_source_card(
+            &store,
+            "scheduled-deny-left",
+            "Scheduled policy-denied entity left evidence with homepage https://left.example.com.",
+        );
+        let right_card = seed_knowledge_source_card(
+            &store,
+            "scheduled-deny-right",
+            "Scheduled policy-denied entity right evidence with homepage https://left.example.com.",
+        );
+        store
+            .upsert_knowledge_entity(KnowledgeEntityInput {
+                entity_type: "company".to_string(),
+                name: "Scheduled Policy Left".to_string(),
+                canonical_key: "company:scheduled-policy-left".to_string(),
+                aliases: vec!["Scheduled Policy Left".to_string()],
+                homepage_url: Some("https://left.example.com".to_string()),
+                source_card_ids: vec![left_card.id.clone()],
+                wiki_page_id: None,
+                confidence: 0.8,
+                metadata: json!({}),
+            })
+            .unwrap();
+        store
+            .upsert_knowledge_entity(KnowledgeEntityInput {
+                entity_type: "company".to_string(),
+                name: "Scheduled Policy Right".to_string(),
+                canonical_key: "company:scheduled-policy-right".to_string(),
+                aliases: vec!["Scheduled Policy Right".to_string()],
+                homepage_url: Some("https://left.example.com".to_string()),
+                source_card_ids: vec![right_card.id.clone()],
+                wiki_page_id: None,
+                confidence: 0.8,
+                metadata: json!({}),
+            })
+            .unwrap();
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "allow-scheduled-entity-resolution-worker-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+source = "knowledge_entity_resolution_model"
+reason = "allow scheduled entity resolution worker enqueue in severe test"
+
+[[rules]]
+id = "deny-scheduled-openai-entity-resolution"
+effect = "deny"
+action = "provider.network"
+package = "arcwell-knowledge"
+provider = "openai"
+source = "knowledge_entity_resolution"
+reason = "scheduled entity resolution provider disabled"
+"#,
+        );
+        store
+            .schedule_knowledge_entity_resolution(
+                "openai",
+                Some("gpt-4.1-mini"),
+                Some("https://api.openai.com/v1/responses"),
+                Some(5),
+                10,
+                "warm",
+                "active",
+            )
+            .unwrap();
+
+        let report = store.run_worker_once(10).unwrap();
+        assert_eq!(report.failed, 1, "{report:?}");
+        assert!(
+            store
+                .list_knowledge_entity_resolutions(10)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(store.list_knowledge_relations(10).unwrap().is_empty());
+        assert!(store.list_cost_decisions(10).unwrap().is_empty());
+        let failed_job = store
+            .list_wiki_jobs()
+            .unwrap()
+            .into_iter()
+            .find(|job| job.kind == "knowledge_entity_resolution_model")
+            .expect("scheduled entity-resolution job should exist");
+        assert_eq!(failed_job.status, "failed");
+        let error = failed_job.error.unwrap_or_default();
+        assert!(error.contains("policy denied provider.network"), "{error}");
+        assert!(!error.contains("OPENAI_API_KEY"), "{error}");
+        let health = store
+            .get_source_health("knowledge:entity-resolution:entities")
+            .unwrap()
+            .expect("policy denial should be visible in source health");
+        assert_ne!(health.status, "healthy");
+        assert!(
+            health
+                .last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("policy denied provider.network")
+        );
+        assert!(health.last_success_at.is_none());
     }
 
     #[test]
