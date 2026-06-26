@@ -209,6 +209,13 @@ PR, implementation note, or final report:
       Controls for scheduling the backlog watch source and enqueueing a
       one-shot backlog clustering job, with CSRF, idempotency, policy gates,
       and severe HTTP tests.
+      Copied-home production-corpus proof
+      `.arcwell-dev/proofs/knowledge-backlog-production-proof-20260626T051406Z/artifacts/proof-packet.md`
+      inspected 500 real source cards, accepted 157, skipped 343, considered
+      22 groups, and projected 12 source-backed human-readable reports. This
+      promotes the deterministic backlog bridge only; it does not promote
+      semantic/model clustering, live X freshness, wall-clock recurrence, or
+      external digest recurrence.
       Remaining work is investigation jobs, broad production-data
       semantic/model clustering, X credential-refresh live proof, wall-clock
       scheduled source recurrence, external delivery recurrence, richer
