@@ -135,6 +135,18 @@ send, and scans artifacts for the sentinel token. It does not prove provider
 scope introspection, revoked-token APIs, a real external inbox receipt, or
 multi-day live external recurrence.
 
+Real external credential-reminder smoke: the real local home now has active
+schedule `cfdb4004-f90e-4b85-9845-3d7988679915` for
+`email:chabotc@gmail.com` with quiet hours `22:00`-`08:00` UTC. A worker pass on
+`2026-06-26T17:14:59+00:00` sent delivery
+`7330f061-3953-4c62-aa83-e068bd7a70bb`; Gmail receipt
+`19f04ed94d54589c` landed in the inbox from `codex@chabot.dev` with subject
+`Arcwell credential reminder: Arcwell credential health reminder`. The body is
+human-readable and includes Bottom line, What needs attention, Why it matters,
+Suggested follow-up, Evidence quality, Sources, and Audit trail sections. This
+proves one live external inbox delivery, not repeated future recurrence or
+multi-day service operation.
+
 `scripts/x-credential-probe` copies the configured source home into a proof home
 and writes a redacted proof packet. Forced refresh is guarded because refreshing
 from a copied home can rotate the provider-side refresh token and strand the
