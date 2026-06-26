@@ -716,6 +716,14 @@ pub struct KnowledgeClusterProposalModelInvocation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeClusterPromotionReport {
+    pub cluster: KnowledgeCluster,
+    pub editorial_decision: KnowledgeEditorialDecision,
+    pub policy_decision_id: Option<String>,
+    pub proof_level: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeEditorialDecisionInput {
     pub cluster_id: String,
     pub decision: String,
@@ -13626,8 +13634,10 @@ impl Store {
         lineage: Option<Value>,
     ) -> Result<WikiJob> {
         validate_id(cluster_id)?;
-        self.get_knowledge_cluster(cluster_id)?
+        let cluster = self
+            .get_knowledge_cluster(cluster_id)?
             .with_context(|| format!("knowledge cluster not found: {cluster_id}"))?;
+        ensure_knowledge_cluster_can_expand(&cluster)?;
         let mut input = json!({ "cluster_id": cluster_id, "create_digest": create_digest });
         if let Some(lineage) = lineage
             && let Some(object) = input.as_object_mut()
@@ -13753,6 +13763,10 @@ impl Store {
         {
             report.inspected += 1;
             if !matches!(cluster.status.as_str(), "candidate" | "active") {
+                report.skipped += 1;
+                continue;
+            }
+            if knowledge_cluster_requires_model_promotion(&cluster) {
                 report.skipped += 1;
                 continue;
             }
@@ -16952,6 +16966,167 @@ impl Store {
         rows(stmt.query_map(params![limit.clamp(1, 500)], knowledge_cluster_from_row)?)
     }
 
+    pub fn promote_knowledge_cluster(
+        &self,
+        cluster_id: &str,
+        reviewer: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<KnowledgeClusterPromotionReport> {
+        validate_id(cluster_id)?;
+        let reviewer =
+            sanitize_work_text(reviewer.unwrap_or("arcwell-knowledge-cluster-review"), 200)?;
+        let reason = sanitize_work_text(
+            reason.unwrap_or(
+                "Promoted source-card-backed knowledge cluster after explicit review and policy gate.",
+            ),
+            2_000,
+        )?;
+        validate_knowledge_text("knowledge cluster promotion reviewer", &reviewer, 200)?;
+        validate_knowledge_text("knowledge cluster promotion reason", &reason, 2_000)?;
+        let cluster = self
+            .get_knowledge_cluster(cluster_id)?
+            .with_context(|| format!("knowledge cluster not found: {cluster_id}"))?;
+        if cluster.source_card_ids.is_empty() {
+            bail!("knowledge cluster promotion requires source-card evidence");
+        }
+        if cluster.status == "active" {
+            let editorial_decision = self
+                .get_knowledge_editorial_decision_for_cluster(&cluster.id, "promote_model_cluster")?
+                .with_context(|| {
+                    format!(
+                        "active knowledge cluster {} has no durable promote_model_cluster decision",
+                        cluster.id
+                    )
+                })?;
+            return Ok(KnowledgeClusterPromotionReport {
+                cluster,
+                editorial_decision,
+                policy_decision_id: None,
+                proof_level: "Local Proof: already-promoted source-card-backed knowledge cluster"
+                    .to_string(),
+            });
+        }
+        if cluster.status != "candidate" {
+            bail!(
+                "knowledge cluster promotion requires candidate status; cluster {} is {}",
+                cluster.id,
+                cluster.status
+            );
+        }
+
+        let decision = self.policy_check(PolicyRequest {
+            action: "knowledge_cluster.promote".to_string(),
+            package: Some("arcwell-librarian".to_string()),
+            provider: None,
+            source: Some("knowledge_cluster_model_review".to_string()),
+            channel: None,
+            subject: Some(cluster.id.clone()),
+            target: Some(cluster.id.clone()),
+            projected_usd: None,
+            metadata: json!({
+                "cluster_id": cluster.id,
+                "cluster_topic": cluster.topic,
+                "cluster_origin": cluster.metadata.get("origin").and_then(Value::as_str),
+                "cluster_status": cluster.status,
+                "reviewer": reviewer,
+                "source_card_count": cluster.source_card_ids.len(),
+                "boundary": "Promotion marks a reviewable cluster as eligible for shared wiki/report/digest expansion; it does not approve digest delivery.",
+            }),
+            untrusted_excerpt: Some(format!("{}\n{}", cluster.topic, cluster.reason)),
+        })?;
+        if !decision.allowed {
+            let blocked =
+                self.record_knowledge_editorial_decision(KnowledgeEditorialDecisionInput {
+                    cluster_id: cluster.id.clone(),
+                    decision: "promote_model_cluster".to_string(),
+                    status: "blocked".to_string(),
+                    wiki_page_id: None,
+                    digest_candidate_id: None,
+                    source_card_ids: cluster.source_card_ids.clone(),
+                    reason: format!(
+                        "Knowledge cluster promotion blocked by policy: {}",
+                        redact_secret_like_text(&decision.reason)
+                    ),
+                    quality_findings: vec!["promotion_policy_not_allowed".to_string()],
+                    metadata: json!({
+                        "origin": "knowledge_cluster_model_review_v1",
+                        "reviewer": reviewer,
+                        "policy_decision_id": decision.id,
+                        "policy_effect": decision.effect,
+                        "matched_rule_id": decision.matched_rule_id,
+                    }),
+                })?;
+            bail!(
+                "knowledge cluster promotion blocked by policy: {} (decision_id: {}, editorial_decision_id: {})",
+                redact_secret_like_text(&decision.reason),
+                decision.id,
+                blocked.id
+            );
+        }
+
+        let timestamp = now();
+        let mut metadata = match cluster.metadata.as_object() {
+            Some(object) => Value::Object(object.clone()),
+            None => json!({}),
+        };
+        if let Some(object) = metadata.as_object_mut() {
+            object.insert(
+                "promotion".to_string(),
+                json!({
+                    "status": "active",
+                    "origin": "knowledge_cluster_model_review_v1",
+                    "reviewed_by": reviewer,
+                    "reason": reason,
+                    "policy_decision_id": decision.id,
+                    "matched_rule_id": decision.matched_rule_id,
+                    "promoted_at": timestamp,
+                    "boundary": "This promotion makes the cluster eligible for deterministic source-card-backed expansion; digest delivery still requires separate review/policy/channel gates.",
+                }),
+            );
+        }
+        let metadata = sanitize_work_json(metadata)?;
+        self.conn.execute(
+            r#"
+            UPDATE knowledge_clusters
+            SET status = 'active', metadata_json = ?2, updated_at = ?3
+            WHERE id = ?1
+            "#,
+            params![cluster.id, metadata.to_string(), timestamp],
+        )?;
+        let promoted = self
+            .get_knowledge_cluster(&cluster.id)?
+            .with_context(|| format!("promoted knowledge cluster not found: {}", cluster.id))?;
+        let editorial_decision =
+            self.record_knowledge_editorial_decision(KnowledgeEditorialDecisionInput {
+                cluster_id: promoted.id.clone(),
+                decision: "promote_model_cluster".to_string(),
+                status: "completed".to_string(),
+                wiki_page_id: None,
+                digest_candidate_id: None,
+                source_card_ids: promoted.source_card_ids.clone(),
+                reason: format!(
+                    "Promoted knowledge cluster {} to active after explicit policy-gated review by {}. {}",
+                    promoted.id, reviewer, reason
+                ),
+                quality_findings: Vec::new(),
+                metadata: json!({
+                    "origin": "knowledge_cluster_model_review_v1",
+                    "reviewer": reviewer,
+                    "policy_decision_id": decision.id,
+                    "matched_rule_id": decision.matched_rule_id,
+                    "proof_level": "Local Proof: policy-gated promotion from model proposal to active shared cluster",
+                }),
+            })?;
+        Ok(KnowledgeClusterPromotionReport {
+            cluster: promoted,
+            editorial_decision,
+            policy_decision_id: Some(decision.id),
+            proof_level:
+                "Local Proof: policy-gated promotion from model proposal to active shared cluster"
+                    .to_string(),
+        })
+    }
+
     pub fn expand_knowledge_cluster(
         &self,
         cluster_id: &str,
@@ -16960,6 +17135,27 @@ impl Store {
         let cluster = self
             .get_knowledge_cluster(cluster_id)?
             .with_context(|| format!("knowledge cluster not found: {cluster_id}"))?;
+        if let Err(error) = ensure_knowledge_cluster_can_expand(&cluster) {
+            let _ = self.record_knowledge_editorial_decision(KnowledgeEditorialDecisionInput {
+                cluster_id: cluster.id.clone(),
+                decision: "model_cluster_expand_requires_promotion".to_string(),
+                status: "blocked".to_string(),
+                wiki_page_id: None,
+                digest_candidate_id: None,
+                source_card_ids: cluster.source_card_ids.clone(),
+                reason: format!(
+                    "Knowledge cluster expansion blocked before writing wiki/report/digest: {error}"
+                ),
+                quality_findings: vec!["model_cluster_requires_promotion".to_string()],
+                metadata: json!({
+                    "origin": "knowledge_cluster_editor_v1",
+                    "create_digest": create_digest,
+                    "cluster_topic": cluster.topic,
+                    "blocked_boundary": "Model-proposed clusters are review-only until promoted through knowledge_cluster.promote policy.",
+                }),
+            });
+            return Err(error);
+        }
         if cluster.source_card_ids.is_empty() {
             bail!("knowledge cluster expansion requires source-card evidence");
         }
@@ -34403,6 +34599,21 @@ fn validate_knowledge_cluster_input(input: &KnowledgeClusterInput) -> Result<()>
     }
     for source_card_id in &input.source_card_ids {
         validate_id(source_card_id)?;
+    }
+    Ok(())
+}
+
+fn knowledge_cluster_requires_model_promotion(cluster: &KnowledgeCluster) -> bool {
+    cluster.metadata.get("origin").and_then(Value::as_str) == Some("model_cluster_proposal_v1")
+        && cluster.status != "active"
+}
+
+fn ensure_knowledge_cluster_can_expand(cluster: &KnowledgeCluster) -> Result<()> {
+    if knowledge_cluster_requires_model_promotion(cluster) {
+        bail!(
+            "knowledge cluster {} is a review-only model proposal and requires knowledge_cluster.promote policy before wiki/report/digest expansion",
+            cluster.id
+        );
     }
     Ok(())
 }
@@ -60501,6 +60712,222 @@ reason = "block expansion enqueue token=sk-chain-secret"
                     .any(|ops_cluster| ops_cluster.id == cluster.id)
             );
         }
+    }
+
+    #[test]
+    fn severe_model_cluster_proposals_require_promotion_before_expansion() {
+        // CLAIM: model-origin cluster candidates are not trusted expansion
+        // inputs until an explicit promotion gate marks them active.
+        // ORACLE: direct expansion, direct enqueue, and due-enqueue all refuse
+        // model-origin candidate clusters while writing no wiki/report/digest
+        // side effects.
+        // SEVERITY: Severe because otherwise a review-only model proposal can
+        // silently become an autonomous wiki/digest write through recurrence.
+        let store = test_store("knowledge-model-cluster-promotion-required");
+        let first = seed_knowledge_source_card(
+            &store,
+            "model-promotion-first",
+            "Model promotion evidence says a new agent SDK was announced for MCP workflows.",
+        );
+        let second = seed_knowledge_source_card(
+            &store,
+            "model-promotion-second",
+            "Model promotion evidence says an open source model release shipped benchmark details.",
+        );
+        let invocation = store
+            .invoke_knowledge_cluster_model(KnowledgeClusterProposalModelInput {
+                source_card_ids: vec![first.id.clone(), second.id.clone()],
+                model_provider: "mock".to_string(),
+                model_name: None,
+                endpoint: None,
+                timeout_seconds: None,
+                max_clusters: 6,
+            })
+            .unwrap();
+        let cluster = invocation.clusters.first().expect("model cluster");
+        assert_eq!(cluster.status, "candidate");
+        assert_eq!(
+            cluster.metadata.get("origin").and_then(Value::as_str),
+            Some("model_cluster_proposal_v1")
+        );
+        let wiki_count_before = store.list_wiki_pages().unwrap().len();
+        let report_count_before = store.list_knowledge_reports(10).unwrap().len();
+        let digest_count_before = store.list_digest_candidates().unwrap().len();
+
+        let expansion_error = store
+            .expand_knowledge_cluster(&cluster.id, true)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            expansion_error.contains("requires knowledge_cluster.promote"),
+            "{expansion_error}"
+        );
+        let enqueue_error = store
+            .enqueue_knowledge_cluster_expansion_job(&cluster.id, true)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            enqueue_error.contains("requires knowledge_cluster.promote"),
+            "{enqueue_error}"
+        );
+        let due = store
+            .enqueue_due_knowledge_cluster_expansion_jobs(10)
+            .unwrap();
+        assert_eq!(due.enqueued, 0);
+        assert_eq!(due.skipped, invocation.clusters.len());
+        assert_eq!(
+            store.list_knowledge_reports(10).unwrap().len(),
+            report_count_before
+        );
+        assert_eq!(store.list_wiki_pages().unwrap().len(), wiki_count_before);
+        assert_eq!(
+            store.list_digest_candidates().unwrap().len(),
+            digest_count_before
+        );
+        assert!(
+            store
+                .list_knowledge_editorial_decisions(10)
+                .unwrap()
+                .iter()
+                .any(
+                    |decision| decision.decision == "model_cluster_expand_requires_promotion"
+                        && decision.status == "blocked"
+                )
+        );
+    }
+
+    #[test]
+    fn severe_model_cluster_promotion_is_policy_gated_and_unlocks_worker_expansion() {
+        // CLAIM: a model-origin cluster can feed wiki/report/digest automation
+        // only after an explicit local promotion policy decision.
+        // ORACLE: absent policy leaves the candidate unpromoted; an explicit
+        // allow rule records a completed promotion decision, flips the cluster
+        // to active, and lets the normal worker expansion create human-readable
+        // wiki/report/digest artifacts.
+        // SEVERITY: Severe because "semantic clustering" must not become
+        // trusted publication merely because the model produced plausible JSON.
+        let store = test_store("knowledge-model-cluster-policy-promotion");
+        let release = seed_knowledge_source_card(
+            &store,
+            "promotion-openai-package",
+            "Promotion evidence says OpenAI published a GitHub package for agent workflows.",
+        );
+        let reaction = seed_knowledge_source_card(
+            &store,
+            "promotion-developer-reaction",
+            "Promotion evidence says developers connected the package to MCP agent infrastructure.",
+        );
+        let invocation = store
+            .invoke_knowledge_cluster_model(KnowledgeClusterProposalModelInput {
+                source_card_ids: vec![release.id.clone(), reaction.id.clone()],
+                model_provider: "mock".to_string(),
+                model_name: None,
+                endpoint: None,
+                timeout_seconds: None,
+                max_clusters: 6,
+            })
+            .unwrap();
+        let cluster = invocation.clusters.first().expect("model cluster");
+
+        let blocked = store
+            .promote_knowledge_cluster(
+                &cluster.id,
+                Some("severe-test-reviewer"),
+                Some("Attempted promotion without explicit policy."),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(blocked.contains("blocked by policy"), "{blocked}");
+        assert_eq!(
+            store
+                .get_knowledge_cluster(&cluster.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "candidate"
+        );
+        assert!(
+            store
+                .list_policy_decisions(10)
+                .unwrap()
+                .iter()
+                .any(|decision| !decision.allowed
+                    && decision.action == "knowledge_cluster.promote"
+                    && decision.source.as_deref() == Some("knowledge_cluster_model_review"))
+        );
+
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "allow-model-cluster-promotion"
+effect = "allow"
+action = "knowledge_cluster.promote"
+package = "arcwell-librarian"
+source = "knowledge_cluster_model_review"
+reason = "allow reviewed model cluster proposal promotion in severe test"
+priority = 20
+
+[[rules]]
+id = "allow-model-cluster-expansion-worker-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+source = "knowledge_cluster_expand"
+reason = "allow promoted model cluster expansion enqueue in severe test"
+priority = 20
+"#,
+        );
+        let promotion = store
+            .promote_knowledge_cluster(
+                &cluster.id,
+                Some("severe-test-reviewer"),
+                Some("Source-card evidence is coherent enough to expand."),
+            )
+            .unwrap();
+        assert_eq!(promotion.cluster.status, "active");
+        assert_eq!(promotion.editorial_decision.status, "completed");
+        assert_eq!(
+            promotion.editorial_decision.decision,
+            "promote_model_cluster"
+        );
+        assert!(
+            promotion
+                .cluster
+                .metadata
+                .get("promotion")
+                .and_then(|value| value.get("policy_decision_id"))
+                .and_then(Value::as_str)
+                .is_some()
+        );
+
+        let due = store
+            .enqueue_due_knowledge_cluster_expansion_jobs(10)
+            .unwrap();
+        assert_eq!(due.enqueued, 1, "{due:?}");
+        let worker = store.run_worker_once(1).unwrap();
+        assert_eq!(worker.processed, 1, "{worker:#?}");
+        assert_eq!(worker.jobs[0].kind, "knowledge_cluster_expand");
+        assert_eq!(worker.jobs[0].status, "completed");
+        let reports = store.list_knowledge_reports(10).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].body_markdown.contains(&promotion.cluster.id));
+        assert!(reports[0].body_markdown.contains("Executive Read"));
+        assert!(
+            reports[0]
+                .body_markdown
+                .contains("Confidence And Uncertainty")
+        );
+        assert!(!store.list_wiki_pages().unwrap().is_empty());
+        assert!(!store.list_digest_candidates().unwrap().is_empty());
+        assert!(
+            store
+                .list_knowledge_editorial_decisions(10)
+                .unwrap()
+                .iter()
+                .any(|decision| decision.decision == "expand_wiki_and_digest"
+                    && decision.status == "completed"
+                    && decision.cluster_id == promotion.cluster.id)
+        );
     }
 
     #[test]

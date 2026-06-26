@@ -142,6 +142,13 @@ Current implemented bridge slice:
   citation requirements, duplicate-source-card rejection across proposed
   clusters, prompt-injection topic/reason rejection, confirmed event backing,
   and candidate-only cluster writes.
+- Policy-gated promotion of model-origin cluster proposals through
+  `arcwell knowledge promote-cluster`. Unpromoted model-origin candidates are
+  refused by foreground expansion, direct expansion enqueue, and due expansion
+  recurrence; promotion records a durable `promote_model_cluster` editorial
+  decision, flips the cluster to `active`, and still leaves digest delivery
+  behind separate review, policy, channel, quiet-hours, idempotency, and retry
+  gates.
 - `/ops` and `/ops/ui` visibility for knowledge events, clusters, editorial
   decisions, reports, entities, relations, adapter runs, and entity-resolution
   proposals.
@@ -169,13 +176,17 @@ What the bridge proof showed:
   `.arcwell-dev/proofs/knowledge-entity-resolution-production-proof-20260625T181411Z-84883/artifacts/proof-packet.json`.
 - `scripts/knowledge-cluster-proposal-production-proof` invoked model-backed
   cluster proposals with both deterministic mock provider and live OpenAI
-  `gpt-4.1-mini`; the live proof wrote candidate clusters
-  `kcl-205fe1128dc14509`, `kcl-802d116c38631d29`, and
-  `kcl-75ca99fa8fd4702a`, recorded cost decision
-  `b00e23a5-f30d-493c-8369-97cfe41fea9a`, confirmed event/source evidence,
-  created no knowledge reports/wiki pages/digests, and browser-checked ops
-  visibility at
-  `.arcwell-dev/proofs/knowledge-cluster-proposal-production-proof-20260626T042922Z-52005/artifacts/proof-packet.json`.
+  `gpt-4.1-mini`; the live proof
+  `.arcwell-dev/proofs/knowledge-cluster-proposal-production-proof-20260626T083551Z-61527/artifacts/proof-packet.json`
+  recorded cost decision `d055f61f-a4b4-49e3-aafb-e3e7e31b9b8b`,
+  wrote three candidate clusters, confirmed event/source evidence, proved no
+  report/wiki/digest side effects at proposal time, denied pre-promotion
+  expansion, promoted `kcl-bf3b8decc24a5fe3` through explicit
+  `knowledge_cluster.promote` policy decision
+  `8e19aae8-9952-40b3-ba40-e72f2db98335`, expanded it into wiki page
+  `knowledge-nvidia-open-source-model-release-with-benchmarks-and-evaluations-d92102a7`,
+  report `krpt-9ec31fc4ce0bd58b`, digest candidate
+  `7f59d663-50e5-4fe5-bebe-4852d4e47f8f`, and browser-checked ops visibility.
 - Cursors and ops state were visible after durable writes.
 - Authenticated `/ops/ui` rendered desktop and mobile knowledge tables through
   browser automation without horizontal overflow.
@@ -190,9 +201,11 @@ What it still does not prove:
 - Model-invoked entity resolution over broad production clusters or scheduled
   recurrence; the live proof is a foreground provider attempt over proof
   fixture data.
-- Model-backed semantic synthesis, broad production-data clustering, or
-  scheduled recurrence; the cluster proof is a foreground provider attempt over
-  proof fixture data.
+- Broad production-data semantic/model clustering or scheduled model-cluster
+  recurrence; the cluster proof is a foreground provider attempt over proof
+  fixture data with one policy-gated promoted expansion.
+- Accepted model-backed writer/editor synthesis; promoted model clusters still
+  use deterministic source-card-backed expansion prose.
 - Autonomous approval, broad wiki page update decisions, and live external
   delivery from shared knowledge reports.
 - Broad ops repair controls.
@@ -1113,16 +1126,21 @@ Refuting tests:
 - [x] Implement first deterministic relation extraction for provider reporting,
       GitHub owner/repo ownership, and cluster co-occurrence.
 - [x] Add semantic/model cluster proposal behind schema validation.
+- [x] Add policy-gated promotion before model-origin clusters can drive
+      wiki/report/digest expansion.
 - [ ] Add cluster revisioning or metadata to avoid stale report reuse.
 
 Refuting tests:
 
-- [ ] OpenAI GitHub release plus X post plus HN discussion forms one cluster.
+- [ ] OpenAI GitHub release plus X post plus HN discussion forms one promoted
+      production-corpus cluster after policy review.
 - [ ] Unrelated OpenAI posts do not merge just because the company matches.
 - [ ] Vercel SDK launch compares to prior agent SDK pages without claiming
       equivalence unsupported by evidence.
 - [ ] Duplicate URLs are grouped, not dropped.
 - [ ] Model cluster output with missing members fails closed.
+- [x] Model-origin candidate clusters cannot be expanded or queued before
+      `knowledge_cluster.promote` policy approval.
 
 ### Milestone 5: Editorial Decision Worker
 

@@ -1765,6 +1765,13 @@ enum KnowledgeSubcommand {
         #[arg(long)]
         skip_digest: bool,
     },
+    PromoteCluster {
+        cluster_id: String,
+        #[arg(long)]
+        reviewer: Option<String>,
+        #[arg(long)]
+        reason: Option<String>,
+    },
     InvestigateCluster {
         cluster_id: String,
     },
@@ -3842,6 +3849,15 @@ fn knowledge(store: Store, args: KnowledgeCommand) -> Result<()> {
             cluster_id,
             skip_digest,
         } => print_json(&store.expand_knowledge_cluster(&cluster_id, !skip_digest)?),
+        KnowledgeSubcommand::PromoteCluster {
+            cluster_id,
+            reviewer,
+            reason,
+        } => print_json(&store.promote_knowledge_cluster(
+            &cluster_id,
+            reviewer.as_deref(),
+            reason.as_deref(),
+        )?),
         KnowledgeSubcommand::InvestigateCluster { cluster_id } => {
             print_json(&store.create_knowledge_cluster_investigation(&cluster_id)?)
         }

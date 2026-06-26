@@ -92,17 +92,64 @@ log "running cluster proposal provider=$PROVIDER model=$MODEL"
 "$ARCWELL_BIN" cost summary >"$ARTIFACT_DIR/cost-summary.json"
 "$ARCWELL_BIN" policy list --limit 20 >"$ARTIFACT_DIR/policy-decisions.json"
 
+CLUSTER_ID="$(node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (!p.clusters?.[0]?.id) process.exit(2); console.log(p.clusters[0].id);' "$ARTIFACT_DIR/cluster-proposal.json")"
+
+log "proving pre-promotion expansion is blocked for $CLUSTER_ID"
+set +e
+"$ARCWELL_BIN" knowledge expand-cluster "$CLUSTER_ID" \
+  >"$ARTIFACT_DIR/pre-promotion-expansion.stdout.json" \
+  2>"$ARTIFACT_DIR/pre-promotion-expansion.stderr.txt"
+PRE_PROMOTION_STATUS=$?
+set -e
+if [ "$PRE_PROMOTION_STATUS" -eq 0 ]; then
+  echo "FAIL: model-proposed cluster expanded before promotion" >&2
+  exit 1
+fi
+
+cat >"$ARCWELL_HOME/arcwell-policy.toml" <<'POLICY'
+[[rules]]
+id = "allow-proof-model-cluster-promotion"
+effect = "allow"
+action = "knowledge_cluster.promote"
+package = "arcwell-librarian"
+source = "knowledge_cluster_model_review"
+reason = "allow proof-scoped model cluster promotion after proposal side-effect checks"
+priority = 20
+POLICY
+
+log "promoting model cluster through explicit policy"
+"$ARCWELL_BIN" knowledge promote-cluster "$CLUSTER_ID" \
+  --reviewer "knowledge-cluster-proof" \
+  --reason "Proof-scoped promotion after source-card-backed model proposal and pre-promotion expansion denial." \
+  >"$ARTIFACT_DIR/cluster-promotion.json"
+
+log "expanding promoted cluster into wiki/report/digest"
+"$ARCWELL_BIN" knowledge expand-cluster "$CLUSTER_ID" \
+  >"$ARTIFACT_DIR/cluster-expansion.json"
+
+"$ARCWELL_BIN" knowledge clusters --limit 20 >"$ARTIFACT_DIR/clusters-after-promotion.json"
+"$ARCWELL_BIN" knowledge reports --limit 20 >"$ARTIFACT_DIR/reports-after-promotion.json"
+"$ARCWELL_BIN" ops >"$ARTIFACT_DIR/ops-after-promotion.json"
+"$ARCWELL_BIN" policy list --limit 40 >"$ARTIFACT_DIR/policy-decisions-after-promotion.json"
+
 log "validating cluster proposal artifacts"
-node - "$ARTIFACT_DIR" "$PROOF_ROOT" "$PROVIDER" "$MODEL" "$QUERY" <<'NODE'
+node - "$ARTIFACT_DIR" "$PROOF_ROOT" "$PROVIDER" "$MODEL" "$QUERY" "$CLUSTER_ID" "$PRE_PROMOTION_STATUS" <<'NODE'
 const fs = require("fs");
 const path = require("path");
-const [artifactDir, proofRoot, provider, model, query] = process.argv.slice(2);
+const [artifactDir, proofRoot, provider, model, query, clusterId, prePromotionStatus] = process.argv.slice(2);
 const read = (name) => JSON.parse(fs.readFileSync(path.join(artifactDir, name), "utf8"));
 const proposal = read("cluster-proposal.json");
 const clusters = read("clusters.json");
 const events = read("events.json");
 const reports = read("reports.json");
 const ops = read("ops.json");
+const promotion = read("cluster-promotion.json");
+const expansion = read("cluster-expansion.json");
+const clustersAfter = read("clusters-after-promotion.json");
+const reportsAfter = read("reports-after-promotion.json");
+const opsAfter = read("ops-after-promotion.json");
+const policyAfter = read("policy-decisions-after-promotion.json");
+const prePromotionError = fs.readFileSync(path.join(artifactDir, "pre-promotion-expansion.stderr.txt"), "utf8");
 function assert(condition, message, detail) {
   if (!condition) {
     console.error(`FAIL: ${message}`);
@@ -135,25 +182,61 @@ for (const eventId of proposal.clusters.flatMap((cluster) => cluster.event_ids |
 }
 assert((reports || []).length === 0, "cluster proposal must not write knowledge reports", reports);
 assert((ops.knowledge_reports || []).length === 0, "cluster proposal must not create report ops rows", ops.knowledge_reports);
+assert(Number(prePromotionStatus) !== 0, "pre-promotion expansion should fail");
+assert(prePromotionError.includes("requires knowledge_cluster.promote"), "pre-promotion error should name promotion gate", prePromotionError);
+assert(promotion.cluster?.id === clusterId, "promotion cluster mismatch", promotion);
+assert(promotion.cluster?.status === "active", "promotion should activate cluster", promotion.cluster);
+assert(promotion.editorial_decision?.decision === "promote_model_cluster", "promotion should record editorial decision", promotion.editorial_decision);
+assert(promotion.editorial_decision?.status === "completed", "promotion decision should complete", promotion.editorial_decision);
+assert(promotion.policy_decision_id, "promotion should record policy decision", promotion);
+assert((policyAfter || []).some((decision) => decision.action === "knowledge_cluster.promote" && decision.allowed), "policy list should include allowed promotion", policyAfter);
+assert((clustersAfter || []).some((cluster) => cluster.id === clusterId && cluster.status === "active"), "cluster list should show active promoted cluster", clustersAfter);
+assert(expansion.cluster?.id === clusterId, "expansion cluster mismatch", expansion);
+assert(expansion.editorial_decision?.decision === "expand_wiki_and_digest", "expansion should record wiki/digest decision", expansion.editorial_decision);
+assert(expansion.editorial_decision?.status === "completed", "expansion decision should complete", expansion.editorial_decision);
+assert(expansion.wiki_page?.content?.includes("Executive Read"), "wiki page should be human-readable", expansion.wiki_page);
+assert(expansion.wiki_page?.content?.includes("Confidence And Uncertainty"), "wiki page should name uncertainty", expansion.wiki_page);
+assert(expansion.wiki_page?.content?.includes(clusterId), "wiki page should link cluster id", expansion.wiki_page);
+for (const sourceId of expansion.cluster.source_card_ids || []) {
+  assert(expansion.wiki_page.content.includes(sourceId), `wiki page missing source id ${sourceId}`, expansion.wiki_page.content);
+}
+assert(expansion.report?.body_markdown?.includes("Executive Read"), "report should have human-readable prose", expansion.report);
+assert(!expansion.report?.body_markdown?.startsWith("Arcwell digest candidate\nTopic:"), "report must not be metadata/link dump", expansion.report?.body_markdown);
+assert(expansion.digest_candidate?.id, "expansion should create digest candidate", expansion);
+assert((reportsAfter || []).some((report) => report.id === expansion.report.id), "reports list should contain expansion report", reportsAfter);
+assert((opsAfter.knowledge_reports || []).some((report) => report.id === expansion.report.id), "ops should expose expansion report", opsAfter.knowledge_reports);
+assert((opsAfter.digest_candidates || []).some((candidate) => candidate.id === expansion.digest_candidate.id), "ops should expose digest candidate", opsAfter.digest_candidates);
 const proof = {
   proof_name: "knowledge-cluster-proposal-production-proof",
   proof_level: provider === "openai"
-    ? "Live Provider Attempt for schema-gated knowledge cluster proposals"
-    : "Local Provider Proof for schema-gated knowledge cluster proposals",
+    ? "Live Provider Attempt for schema-gated cluster proposal plus policy-gated promotion/expansion"
+    : "Local Provider Proof for schema-gated cluster proposal plus policy-gated promotion/expansion",
   proof_root: proofRoot,
   arcwell_home: process.env.ARCWELL_HOME,
   provider,
   model,
   query,
   cluster_ids: proposal.clusters.map((cluster) => cluster.id),
+  promoted_cluster_id: clusterId,
+  report_id: expansion.report.id,
+  wiki_page_id: expansion.wiki_page.id,
+  digest_candidate_id: expansion.digest_candidate.id,
   event_ids: proposal.clusters.flatMap((cluster) => cluster.event_ids || []),
   cost_decision_id: proposal.cost_decision_id || null,
+  promotion_policy_decision_id: promotion.policy_decision_id,
   artifacts: {
     proposal: path.join(artifactDir, "cluster-proposal.json"),
     clusters: path.join(artifactDir, "clusters.json"),
     events: path.join(artifactDir, "events.json"),
     reports: path.join(artifactDir, "reports.json"),
-    ops: path.join(artifactDir, "ops.json")
+    ops: path.join(artifactDir, "ops.json"),
+    pre_promotion_expansion_error: path.join(artifactDir, "pre-promotion-expansion.stderr.txt"),
+    promotion: path.join(artifactDir, "cluster-promotion.json"),
+    expansion: path.join(artifactDir, "cluster-expansion.json"),
+    clusters_after_promotion: path.join(artifactDir, "clusters-after-promotion.json"),
+    reports_after_promotion: path.join(artifactDir, "reports-after-promotion.json"),
+    ops_after_promotion: path.join(artifactDir, "ops-after-promotion.json"),
+    policy_after_promotion: path.join(artifactDir, "policy-decisions-after-promotion.json")
   },
   checked: [
     "source-card evidence was written before clustering",
@@ -161,11 +244,15 @@ const proof = {
     "clusters cite source-card evidence and event ids",
     "cluster metadata includes review-only boundary",
     "no knowledge report/editorial/wiki/digest side effect was created",
-    "ops snapshot exposes proposed clusters"
+    "pre-promotion expansion is denied before wiki/report/digest writes",
+    "explicit knowledge_cluster.promote policy promotes one model cluster to active",
+    "promoted cluster expands into human-readable wiki/report/digest surfaces with source-card ids and uncertainty text",
+    "ops snapshot exposes proposed clusters, promoted report, and digest candidate"
   ],
   remaining_risk: [
     "This proves foreground cluster proposals, not scheduled recurrence.",
-    "This does not yet run the autonomous writer/editor or digest router from shared clusters.",
+    "This proves deterministic expansion after policy-gated promotion, not accepted model-backed writer synthesis.",
+    "This does not deliver the digest candidate externally.",
     "For provider=openai this is a live provider attempt over proof fixture data, not broad production source clustering."
   ]
 };
@@ -204,7 +291,7 @@ agent-browser --session "$SESSION" snapshot -i >"$ARTIFACT_DIR/desktop.snapshot.
 agent-browser --session "$SESSION" eval "$(cat <<'JS'
 (() => {
   const text = document.body.innerText;
-  for (const needle of ["Arcwell Ops", "Knowledge Clusters", "Knowledge Events", "candidate"]) {
+  for (const needle of ["Arcwell Ops", "Knowledge Clusters", "Knowledge Events", "Knowledge Reports", "candidate", "active"]) {
     if (!text.includes(needle)) throw new Error(`missing desktop text: ${needle}`);
   }
   if (document.scripts.length !== 0) throw new Error(`unexpected script tags: ${document.scripts.length}`);
@@ -225,7 +312,7 @@ agent-browser --session "$SESSION" snapshot -i >"$ARTIFACT_DIR/mobile.snapshot.t
 agent-browser --session "$SESSION" eval "$(cat <<'JS'
 (() => {
   const text = document.body.innerText;
-  for (const needle of ["Arcwell Ops", "Knowledge Clusters", "candidate"]) {
+  for (const needle of ["Arcwell Ops", "Knowledge Clusters", "Knowledge Reports", "candidate", "active"]) {
     if (!text.includes(needle)) throw new Error(`missing mobile text: ${needle}`);
   }
   if (document.scripts.length !== 0) throw new Error(`unexpected mobile script tags: ${document.scripts.length}`);

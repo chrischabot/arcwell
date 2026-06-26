@@ -305,6 +305,19 @@ PR, implementation note, or final report:
       digest path. It is still not multi-day launchd/systemd operation, live
       external inbox recurrence, broad semantic/model clustering, or production
       monitoring.
+      Model cluster promotion proof
+      `.arcwell-dev/proofs/knowledge-cluster-proposal-production-proof-20260626T083551Z-61527/artifacts/proof-packet.json`
+      then proved live OpenAI `gpt-4.1-mini` schema-gated cluster proposals
+      remain candidate-only, pre-promotion wiki/report/digest expansion is
+      denied, explicit `knowledge_cluster.promote` policy promotes one
+      candidate to `active`, and the promoted cluster expands into a
+      human-readable wiki page, report, digest candidate, and ops-visible
+      artifacts. Severe tests prove foreground expansion, direct enqueue, and
+      due-enqueue all refuse unpromoted model-origin clusters, and policy denial
+      leaves the cluster candidate-only. This closes the "review-only model JSON
+      silently became publication" mirage. It is still a proof-fixture provider
+      attempt plus deterministic expansion, not broad production-corpus semantic
+      clustering or accepted model-backed writer synthesis.
       X provider fetches now share a local-proof bearer freshness path: recent
       search, bookmark import, following/watch rebuild, and watch-source
       monitor refresh an expired stored `X_BEARER_TOKEN` through stored
@@ -320,10 +333,11 @@ PR, implementation note, or final report:
       bearer/refresh pair was copied back into the real local secret store; X
       secret health is now present/redacted.
       Remaining work is broad live fresh primary-source acquisition,
-      production-data semantic/model clustering, broad X quota/tier/live
-      coverage beyond the capped smoke, multi-day scheduled source recurrence,
-      live external delivery recurrence, production monitoring, richer
-      model-backed writer/editor synthesis, and broader ops UI repair controls.
+      production-data semantic/model clustering over real corpora, broad X
+      quota/tier/live coverage beyond the capped smoke, multi-day scheduled
+      source recurrence, live external delivery recurrence, production
+      monitoring, richer model-backed writer/editor synthesis, and broader ops
+      UI repair controls.
 - [ ] Complete the Arcwell X anti-mirage plan in
       `docs/arcwell-x-architecture-implementation-plan.md` before marking X
       beyond `Partial`.
