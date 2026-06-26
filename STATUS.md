@@ -68,6 +68,8 @@ Knowledge worker chaining and deterministic backlog update: completed `knowledge
 
 2026-06-26 cluster evidence revision note: terminal editorial, expansion, investigation-execution, and model-writer decisions now suppress recurrence only for the source-card set they evaluated. `add_source_cards_to_knowledge_cluster` merges fresh evidence into an existing cluster, updates event evidence and a readable source-card-set fingerprint, and severe tests prove shared editorial recurrence plus promoted model-writer recurrence reopen after fresh source-card evidence arrives. This is Local Proof against stale-decision mirages, not versioned decision history, semantic merge quality, live external delivery, or multi-day service proof.
 
+2026-06-26 stale cluster digest supersession note: reopened shared expansion and promoted model-writer runs now supersede older undelivered digest candidates referenced by stale cluster decisions before a refreshed candidate can route. Severe tests approve an initial candidate, merge fresh evidence, rerun autonomous recurrence, prove the wiki/report/refreshed digest cite the new source card, prove the old candidate becomes `superseded`/non-deliverable, and prove no external delivery is created by the refresh itself. Pending/sent delivery ledger rows are preserved rather than rewritten. This is Local Proof for stale digest suppression, not live external recurrence or broad production semantic quality.
+
 ## Product Reality
 
 | Area | Exact state | Live status | Tests | Owner | Blocker / next proof |

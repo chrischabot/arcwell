@@ -18277,9 +18277,12 @@ impl Store {
                 "create_digest": create_digest,
             }),
         })?;
+        let mut superseded_digest_candidate_ids = Vec::new();
         let (digest_candidate, auto_approval) = if create_digest {
             let candidate =
                 self.create_digest_candidate(&cluster.topic, &cluster.source_card_ids)?;
+            superseded_digest_candidate_ids =
+                self.supersede_stale_cluster_digest_candidates(&cluster, &candidate.id)?;
             let (candidate, approval) =
                 self.maybe_auto_approve_knowledge_digest_candidate(&cluster, &report, &candidate)?;
             (Some(candidate), approval)
@@ -18320,6 +18323,7 @@ impl Store {
                 "report_id": report.id,
                 "wiki_page_title": wiki_title,
                 "digest_auto_approval": auto_approval,
+                "superseded_digest_candidate_ids": superseded_digest_candidate_ids,
             }),
         })?;
         let investigation = self.create_knowledge_cluster_investigation(&cluster.id)?;
@@ -18337,6 +18341,7 @@ impl Store {
                 "origin": "knowledge_cluster_editor_v1",
                 "create_digest": create_digest,
                 "digest_auto_approval": auto_approval,
+                "superseded_digest_candidate_ids": superseded_digest_candidate_ids,
             }),
         })
     }
@@ -18471,9 +18476,12 @@ impl Store {
                 "score": invocation.score,
             }),
         })?;
+        let mut superseded_digest_candidate_ids = Vec::new();
         let (digest_candidate, auto_approval) = if input.create_digest {
             let candidate =
                 self.create_digest_candidate(&cluster.topic, &cluster.source_card_ids)?;
+            superseded_digest_candidate_ids =
+                self.supersede_stale_cluster_digest_candidates(&cluster, &candidate.id)?;
             let (candidate, approval) =
                 self.maybe_auto_approve_knowledge_digest_candidate(&cluster, &report, &candidate)?;
             (Some(candidate), approval)
@@ -18514,6 +18522,7 @@ impl Store {
                 "report_id": report.id,
                 "wiki_page_title": wiki_title,
                 "digest_auto_approval": auto_approval,
+                "superseded_digest_candidate_ids": superseded_digest_candidate_ids,
                 "model_writer": {
                     "model_provider": invocation.model_provider,
                     "model_name": invocation.model_name,
@@ -18666,6 +18675,80 @@ impl Store {
                 "source_card_count": candidate.source_card_ids.len(),
             }),
         ))
+    }
+
+    fn supersede_stale_cluster_digest_candidates(
+        &self,
+        cluster: &KnowledgeCluster,
+        replacement_candidate_id: &str,
+    ) -> Result<Vec<String>> {
+        validate_id(replacement_candidate_id)?;
+        let mut superseded = Vec::new();
+        for decision in ["expand_wiki_and_digest", "model_write_wiki_and_digest"] {
+            let Some(existing) =
+                self.get_knowledge_editorial_decision_for_cluster(&cluster.id, decision)?
+            else {
+                continue;
+            };
+            if knowledge_editorial_decision_matches_cluster_revision(&existing, cluster) {
+                continue;
+            }
+            let Some(candidate_id) = existing.digest_candidate_id.as_deref() else {
+                continue;
+            };
+            if candidate_id == replacement_candidate_id {
+                continue;
+            }
+            if self.supersede_digest_candidate_if_undelivered(
+                candidate_id,
+                replacement_candidate_id,
+                &format!(
+                    "Superseded by refreshed cluster evidence for {} after source-card set changed from {} to {}.",
+                    cluster.id,
+                    knowledge_source_card_revision(&existing.source_card_ids),
+                    knowledge_source_card_revision(&cluster.source_card_ids)
+                ),
+            )? {
+                superseded.push(candidate_id.to_string());
+            }
+        }
+        superseded.sort();
+        superseded.dedup();
+        Ok(superseded)
+    }
+
+    fn supersede_digest_candidate_if_undelivered(
+        &self,
+        candidate_id: &str,
+        replacement_candidate_id: &str,
+        note: &str,
+    ) -> Result<bool> {
+        validate_id(candidate_id)?;
+        validate_id(replacement_candidate_id)?;
+        validate_notes(note)?;
+        let timestamp = now();
+        let changed = self.conn.execute(
+            r#"
+            UPDATE digest_candidates
+            SET status = 'superseded',
+                review_status = 'rejected',
+                reviewed_at = ?1,
+                reviewed_by = 'arcwell-digest-supersession',
+                review_note = ?2,
+                updated_at = ?1
+            WHERE id = ?3
+              AND id <> ?4
+              AND status IN ('ready', 'approved')
+              AND NOT EXISTS (
+                SELECT 1
+                FROM digest_deliveries delivery
+                WHERE delivery.candidate_id = ?3
+                  AND delivery.status IN ('pending', 'sent')
+              )
+            "#,
+            params![timestamp, note, candidate_id, replacement_candidate_id],
+        )?;
+        Ok(changed > 0)
     }
 
     pub fn create_knowledge_cluster_investigation(
@@ -61046,6 +61129,20 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(first_decision.source_card_ids.len(), 2);
+        let first_digest_id = first_decision
+            .digest_candidate_id
+            .as_ref()
+            .expect("first expansion digest candidate")
+            .clone();
+        let approved_stale = store
+            .approve_digest_candidate(
+                &first_digest_id,
+                Some("revision-shared-review"),
+                Some("Approve the initial candidate before fresh evidence arrives."),
+            )
+            .unwrap();
+        assert_eq!(approved_stale.status, "approved");
+        assert_eq!(approved_stale.review_status, "approved");
         let fresh = seed_knowledge_source_card(
             &store,
             "revision-shared-fresh",
@@ -61092,12 +61189,78 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(refreshed_decision.source_card_ids.len(), 3);
+        let refreshed_digest_id = refreshed_decision
+            .digest_candidate_id
+            .as_ref()
+            .expect("refreshed expansion digest candidate")
+            .clone();
+        assert_ne!(refreshed_digest_id, first_digest_id);
         assert_eq!(
             refreshed_decision
                 .metadata
                 .pointer("/cluster_evidence_revision/source_card_count")
                 .and_then(Value::as_u64),
             Some(3)
+        );
+        assert!(
+            refreshed_decision
+                .metadata
+                .get("superseded_digest_candidate_ids")
+                .and_then(Value::as_array)
+                .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(&first_digest_id))),
+            "{refreshed_decision:#?}"
+        );
+        let stale_digest = store
+            .get_digest_candidate(&first_digest_id)
+            .unwrap()
+            .expect("stale digest candidate");
+        assert_eq!(stale_digest.status, "superseded");
+        assert_eq!(stale_digest.review_status, "rejected");
+        assert_eq!(
+            stale_digest.reviewed_by.as_deref(),
+            Some("arcwell-digest-supersession")
+        );
+        let refreshed_digest = store
+            .get_digest_candidate(&refreshed_digest_id)
+            .unwrap()
+            .expect("refreshed digest candidate");
+        assert!(refreshed_digest.source_card_ids.contains(&fresh.id));
+        assert_eq!(refreshed_digest.source_card_ids.len(), 3);
+        let refreshed_report_id = refreshed_decision
+            .metadata
+            .get("report_id")
+            .and_then(Value::as_str)
+            .expect("refreshed report id")
+            .to_string();
+        let refreshed_report = store
+            .get_knowledge_report(&refreshed_report_id)
+            .unwrap()
+            .expect("refreshed report");
+        assert!(refreshed_report.source_card_ids.contains(&fresh.id));
+        assert!(refreshed_report.body_markdown.contains(&fresh.id));
+        let refreshed_wiki_id = refreshed_decision
+            .wiki_page_id
+            .as_ref()
+            .expect("refreshed wiki page id")
+            .clone();
+        let refreshed_wiki = store
+            .read_wiki_page(&refreshed_wiki_id)
+            .unwrap()
+            .expect("refreshed wiki page");
+        assert!(refreshed_wiki.content.contains(&fresh.id));
+        let stale_gate = store
+            .check_digest_candidate_delivery(
+                &first_digest_id,
+                "email",
+                "cluster evidence stale digest",
+                Some("user@example.com"),
+            )
+            .unwrap();
+        assert!(!stale_gate.allowed);
+        assert!(
+            stale_gate.reason.contains("status=superseded"),
+            "{}",
+            stale_gate.reason
         );
     }
 
@@ -64221,6 +64384,19 @@ priority = 20
             first_decision.source_card_ids.len(),
             cluster.source_card_ids.len()
         );
+        let first_digest_id = first_decision
+            .digest_candidate_id
+            .as_ref()
+            .expect("first model-writer digest candidate")
+            .clone();
+        let approved_stale = store
+            .approve_digest_candidate(
+                &first_digest_id,
+                Some("revision-model-writer-review"),
+                Some("Approve the initial model-writer candidate before fresh evidence arrives."),
+            )
+            .unwrap();
+        assert_eq!(approved_stale.status, "approved");
 
         let fresh = seed_knowledge_source_card(
             &store,
@@ -64271,6 +64447,12 @@ priority = 20
             refreshed_decision.source_card_ids.len(),
             updated.source_card_ids.len()
         );
+        let refreshed_digest_id = refreshed_decision
+            .digest_candidate_id
+            .as_ref()
+            .expect("refreshed model-writer digest candidate")
+            .clone();
+        assert_ne!(refreshed_digest_id, first_digest_id);
         assert_eq!(
             refreshed_decision
                 .metadata
@@ -64278,6 +64460,25 @@ priority = 20
                 .and_then(Value::as_u64),
             Some(updated.source_card_ids.len() as u64)
         );
+        assert!(
+            refreshed_decision
+                .metadata
+                .get("superseded_digest_candidate_ids")
+                .and_then(Value::as_array)
+                .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(&first_digest_id))),
+            "{refreshed_decision:#?}"
+        );
+        let stale_digest = store
+            .get_digest_candidate(&first_digest_id)
+            .unwrap()
+            .expect("stale model-writer digest candidate");
+        assert_eq!(stale_digest.status, "superseded");
+        assert_eq!(stale_digest.review_status, "rejected");
+        let refreshed_digest = store
+            .get_digest_candidate(&refreshed_digest_id)
+            .unwrap()
+            .expect("refreshed model-writer digest candidate");
+        assert!(refreshed_digest.source_card_ids.contains(&fresh.id));
         assert!(store.list_digest_deliveries(None).unwrap().is_empty());
     }
 

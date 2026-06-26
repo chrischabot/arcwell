@@ -207,9 +207,13 @@ Current implemented bridge slice:
   cluster scores, stores a source-card-set fingerprint, and due recurrence
   reopens when that fingerprint changes. Severe tests prove fresh evidence
   reopens shared editorial recurrence and promoted model-writer recurrence
-  without external delivery. This is local stale-evidence protection, not
-  versioned decision history, broad semantic merge quality, or live
-  wall-clock recurrence.
+  without external delivery. Reopened expansion/model-writer runs now also
+  supersede older undelivered digest candidates referenced by stale cluster
+  decisions, refresh wiki/report/digest artifacts with the fresh source-card
+  citations, and make the stale candidates fail the delivery gate while
+  preserving already pending/sent delivery ledger rows. This is local
+  stale-evidence and stale-digest protection, not versioned decision history,
+  broad semantic merge quality, or live wall-clock recurrence.
 - Source-card-gated model cluster writing through
   `arcwell knowledge write-cluster-model`,
   `arcwell knowledge enqueue-cluster-model-write`, and the resident
@@ -1448,7 +1452,10 @@ Add preserved proof scripts:
       prove terminal decisions are current only for the source-card set they
       evaluated. Adding a fresh source card to an existing cluster updates the
       cluster fingerprint and reopens shared editorial/model-writer recurrence
-      without authorizing external delivery.
+      without authorizing external delivery. These tests now also approve an
+      initial stale digest candidate, prove refreshed wiki/report/digest
+      artifacts cite the new source card, supersede the old undelivered
+      candidate, and verify that stale candidate fails the delivery gate.
 - [x] `scripts/knowledge-digest-recurrence-proof`
       passed at
       `.arcwell-dev/proofs/knowledge-digest-recurrence-proof-20260626T075355Z-75160/proof-packet.json`:

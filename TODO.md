@@ -434,7 +434,14 @@ PR, implementation note, or final report:
       recurrence and promoted model-writer recurrence reopen after fresh
       evidence is merged, while still avoiding external delivery. This is local
       stale-evidence proof, not versioned decision history, semantic merge
-      quality, or live wall-clock recurrence.
+      quality, or live wall-clock recurrence. The reopened expansion/model
+      writer path now also supersedes older undelivered digest candidates
+      referenced by stale cluster decisions, refreshes wiki/report/digest
+      artifacts with the new source-card citations, and keeps stale candidates
+      non-deliverable while preserving already pending/sent delivery ledger
+      rows. Severe tests approve an initial stale candidate, merge new evidence,
+      rerun autonomous shared/editorial and promoted model-writer recurrence,
+      and prove the stale candidate is no longer routable.
       The authenticated `/ops/ui` Knowledge Controls now also expose a
       CSRF/idempotency-protected model-cluster promotion action, double-gated by
       `ops.knowledge_clusters.promote` and core `knowledge_cluster.promote`
