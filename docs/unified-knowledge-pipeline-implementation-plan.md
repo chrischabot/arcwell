@@ -142,6 +142,13 @@ Current implemented bridge slice:
   citation requirements, duplicate-source-card rejection across proposed
   clusters, prompt-injection topic/reason rejection, confirmed event backing,
   and candidate-only cluster writes.
+- Scheduled model-cluster proposal jobs through
+  `arcwell knowledge enqueue-model-clusters` and
+  `arcwell knowledge schedule-model-clusters`. The `knowledge_model_clusters`
+  watch source searches source cards for a configured query, invokes the same
+  schema-gated model proposal path behind policy/cost gates only when evidence
+  exists, writes review-only candidate clusters, records source-health state,
+  and still refuses wiki/report/digest expansion until explicit promotion.
 - Policy-gated promotion of model-origin cluster proposals through
   `arcwell knowledge promote-cluster`. Unpromoted model-origin candidates are
   refused by foreground expansion, direct expansion enqueue, and due expansion
@@ -206,9 +213,11 @@ What it still does not prove:
 - Model-invoked entity resolution over broad production clusters or scheduled
   recurrence; the live proof is a foreground provider attempt over proof
   fixture data.
-- Broad production-data semantic/model clustering or scheduled model-cluster
-  recurrence; the cluster proof is a foreground provider attempt over proof
-  fixture data with one policy-gated promoted expansion.
+- Broad production-data semantic/model clustering or live-provider scheduled
+  model-cluster recurrence; local severe tests prove the scheduled worker
+  candidate-only path, while the production cluster proof is still a foreground
+  provider attempt over proof fixture data with one policy-gated promoted
+  expansion.
 - Accepted model-backed writer/editor synthesis; promoted model clusters still
   use deterministic source-card-backed expansion prose.
 - Autonomous approval, broad wiki page update decisions, and live external
@@ -1131,6 +1140,8 @@ Refuting tests:
 - [x] Implement first deterministic relation extraction for provider reporting,
       GitHub owner/repo ownership, and cluster co-occurrence.
 - [x] Add semantic/model cluster proposal behind schema validation.
+- [x] Add scheduled model-cluster proposal jobs that write candidate-only
+      clusters and preserve the promotion boundary.
 - [x] Add policy-gated promotion before model-origin clusters can drive
       wiki/report/digest expansion.
 - [ ] Add cluster revisioning or metadata to avoid stale report reuse.
@@ -1146,6 +1157,9 @@ Refuting tests:
 - [ ] Model cluster output with missing members fails closed.
 - [x] Model-origin candidate clusters cannot be expanded or queued before
       `knowledge_cluster.promote` policy approval.
+- [x] Scheduled model-cluster proposal jobs skip empty evidence without a
+      provider call, fail closed on provider-policy denial, and do not create
+      wiki/report/digest side effects before promotion.
 
 ### Milestone 5: Editorial Decision Worker
 

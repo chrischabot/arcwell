@@ -183,6 +183,16 @@ PR, implementation note, or final report:
       policy denial, cost denial, and no writer/digest side effects, plus
       repeatable mock and live OpenAI browser proof at
       `.arcwell-dev/proofs/knowledge-cluster-proposal-production-proof-20260626T042922Z-52005/artifacts/proof-packet.json`.
+      This slice adds `arcwell knowledge enqueue-model-clusters`,
+      `arcwell knowledge schedule-model-clusters`, the
+      `knowledge_model_clusters` watch-source kind, and the resident
+      `knowledge_cluster_model_propose` worker job. Severe tests prove a due
+      schedule writes source-card-backed model-origin candidate clusters without
+      wiki/report/digest side effects, empty evidence skips without invoking a
+      provider or retry storm, provider-policy denial writes no clusters, and
+      malformed enqueue input creates no poison job. This is Local Proof for
+      scheduled model proposal recurrence, not broad production-corpus semantic
+      clustering or live-provider wall-clock recurrence.
       This slice adds shared cluster expansion via
       `arcwell knowledge expand-cluster` and queued
       `arcwell knowledge enqueue-cluster-expansion`: a deterministic

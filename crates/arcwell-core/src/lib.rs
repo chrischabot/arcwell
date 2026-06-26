@@ -13723,6 +13723,71 @@ impl Store {
         self.enqueue_wiki_job("knowledge_cluster_backlog", input)
     }
 
+    pub fn enqueue_knowledge_cluster_model_proposal_job(
+        &self,
+        query: &str,
+        model_provider: &str,
+        model_name: Option<&str>,
+        endpoint: Option<&str>,
+        timeout_seconds: Option<u64>,
+        max_source_cards: usize,
+        max_clusters: usize,
+    ) -> Result<WikiJob> {
+        self.enqueue_knowledge_cluster_model_proposal_job_with_lineage(
+            query,
+            model_provider,
+            model_name,
+            endpoint,
+            timeout_seconds,
+            max_source_cards,
+            max_clusters,
+            None,
+        )
+    }
+
+    fn enqueue_knowledge_cluster_model_proposal_job_with_lineage(
+        &self,
+        query: &str,
+        model_provider: &str,
+        model_name: Option<&str>,
+        endpoint: Option<&str>,
+        timeout_seconds: Option<u64>,
+        max_source_cards: usize,
+        max_clusters: usize,
+        lineage: Option<Value>,
+    ) -> Result<WikiJob> {
+        validate_query(query)?;
+        let provider = model_provider.trim().to_ascii_lowercase();
+        if !matches!(provider.as_str(), "mock" | "openai") {
+            bail!("unsupported knowledge cluster proposal model provider: {provider}");
+        }
+        let model_name = model_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if let Some(model_name) = &model_name {
+            validate_key(model_name)?;
+        }
+        if let Some(endpoint) = endpoint {
+            validated_endpoint(Some(endpoint), "https://api.openai.com/v1/responses")?;
+        }
+        let mut input = json!({
+            "query": query,
+            "model_provider": provider,
+            "model_name": model_name,
+            "endpoint": endpoint,
+            "timeout_seconds": timeout_seconds,
+            "max_source_cards": max_source_cards.clamp(1, 80),
+            "max_clusters": max_clusters.clamp(1, 12),
+        });
+        if let Some(lineage) = lineage
+            && let Some(object) = input.as_object_mut()
+        {
+            object.insert("lineage".to_string(), lineage);
+        }
+        self.enqueue_wiki_job("knowledge_cluster_model_propose", input)
+    }
+
     pub fn schedule_knowledge_cluster_backlog(
         &self,
         max_source_cards: usize,
@@ -13742,6 +13807,53 @@ impl Store {
                 "min_group_size": min_group_size.clamp(1, 20),
                 "max_clusters": max_clusters.clamp(1, 50),
                 "origin": "knowledge_backlog_schedule",
+            }),
+        })
+    }
+
+    pub fn schedule_knowledge_cluster_model_proposals(
+        &self,
+        query: &str,
+        model_provider: &str,
+        model_name: Option<&str>,
+        endpoint: Option<&str>,
+        timeout_seconds: Option<u64>,
+        max_source_cards: usize,
+        max_clusters: usize,
+        cadence: &str,
+        status: &str,
+    ) -> Result<WatchSource> {
+        validate_query(query)?;
+        let provider = model_provider.trim().to_ascii_lowercase();
+        if !matches!(provider.as_str(), "mock" | "openai") {
+            bail!("unsupported knowledge cluster proposal model provider: {provider}");
+        }
+        let model_name = model_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if let Some(model_name) = &model_name {
+            validate_key(model_name)?;
+        }
+        if let Some(endpoint) = endpoint {
+            validated_endpoint(Some(endpoint), "https://api.openai.com/v1/responses")?;
+        }
+        self.upsert_watch_source(WatchSourceInput {
+            source_kind: "knowledge_model_clusters".to_string(),
+            locator: query.to_string(),
+            label: format!("Knowledge model clusters: {query}"),
+            cadence: cadence.to_string(),
+            status: status.to_string(),
+            metadata: json!({
+                "query": query,
+                "model_provider": provider,
+                "model_name": model_name,
+                "endpoint": endpoint,
+                "timeout_seconds": timeout_seconds,
+                "max_source_cards": max_source_cards.clamp(1, 80),
+                "max_clusters": max_clusters.clamp(1, 12),
+                "origin": "knowledge_model_cluster_schedule",
+                "boundary": "Scheduled model clustering writes review-only candidate clusters; wiki/report/digest expansion still requires promotion."
             }),
         })
     }
@@ -13971,6 +14083,24 @@ impl Store {
                   AND status IN ('pending', 'running', 'deferred')
                 "#,
                 [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .map_err(Into::into)
+    }
+
+    fn knowledge_cluster_model_proposal_has_active_job(&self, query: &str) -> Result<bool> {
+        validate_query(query)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM wiki_jobs
+                WHERE kind = 'knowledge_cluster_model_propose'
+                  AND status IN ('pending', 'running', 'deferred')
+                  AND json_extract(input_json, '$.query') = ?1
+                "#,
+                params![query],
                 |row| row.get::<_, i64>(0),
             )
             .map(|count| count > 0)
@@ -14397,6 +14527,56 @@ impl Store {
                     self.enqueue_knowledge_cluster_backlog_job_with_lineage(
                         max_source_cards,
                         min_group_size,
+                        max_clusters,
+                        Some(json!({
+                            "trigger": "watch_source_due",
+                            "watch_source_id": source.id,
+                            "watch_source_key": source_key,
+                            "source_kind": source.source_kind,
+                            "locator": source.locator,
+                            "cadence": source.cadence,
+                            "metadata": source.metadata,
+                        })),
+                    )
+                }
+                "knowledge_model_clusters" => {
+                    let query = source
+                        .metadata
+                        .get("query")
+                        .and_then(Value::as_str)
+                        .unwrap_or(source.locator.as_str());
+                    if self.knowledge_cluster_model_proposal_has_active_job(query)? {
+                        report.skipped += 1;
+                        continue;
+                    }
+                    let model_provider = source
+                        .metadata
+                        .get("model_provider")
+                        .and_then(Value::as_str)
+                        .unwrap_or("mock");
+                    let model_name = source.metadata.get("model_name").and_then(Value::as_str);
+                    let endpoint = source.metadata.get("endpoint").and_then(Value::as_str);
+                    let timeout_seconds = source
+                        .metadata
+                        .get("timeout_seconds")
+                        .and_then(Value::as_u64);
+                    let max_source_cards = source
+                        .metadata
+                        .get("max_source_cards")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(24) as usize;
+                    let max_clusters = source
+                        .metadata
+                        .get("max_clusters")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(6) as usize;
+                    self.enqueue_knowledge_cluster_model_proposal_job_with_lineage(
+                        query,
+                        model_provider,
+                        model_name,
+                        endpoint,
+                        timeout_seconds,
+                        max_source_cards,
                         max_clusters,
                         Some(json!({
                             "trigger": "watch_source_due",
@@ -30986,6 +31166,9 @@ impl Store {
                 "knowledge_cluster_backlog" => {
                     self.execute_knowledge_cluster_backlog(&job.input_json)
                 }
+                "knowledge_cluster_model_propose" => {
+                    self.execute_knowledge_cluster_model_propose(&job.input_json)
+                }
                 "knowledge_cluster_investigate" => {
                     self.execute_knowledge_cluster_investigate(&job.input_json)
                 }
@@ -32752,6 +32935,108 @@ impl Store {
             "clusters_created": cluster_ids.len(),
             "cluster_ids": cluster_ids,
             "warnings": report.warnings,
+        }))
+    }
+
+    fn execute_knowledge_cluster_model_propose(&self, input: &Value) -> Result<Value> {
+        let query = input
+            .get("query")
+            .and_then(Value::as_str)
+            .context("knowledge_cluster_model_propose missing query")?;
+        validate_query(query)?;
+        let model_provider = input
+            .get("model_provider")
+            .and_then(Value::as_str)
+            .unwrap_or("mock");
+        let model_name = input
+            .get("model_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let endpoint = input
+            .get("endpoint")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let timeout_seconds = input.get("timeout_seconds").and_then(Value::as_u64);
+        let max_source_cards = input
+            .get("max_source_cards")
+            .and_then(Value::as_u64)
+            .unwrap_or(24) as usize;
+        let max_clusters = input
+            .get("max_clusters")
+            .and_then(Value::as_u64)
+            .unwrap_or(6) as usize;
+        let source_cards = self
+            .search_source_cards(query)?
+            .into_iter()
+            .take(max_source_cards.clamp(1, 80))
+            .collect::<Vec<_>>();
+        let source_card_ids = source_cards
+            .iter()
+            .map(|card| card.id.clone())
+            .collect::<Vec<_>>();
+        if source_card_ids.is_empty() {
+            self.record_source_success(SourceHealthUpdate {
+                key: &format!("knowledge:model-clusters:{query}"),
+                provider: "arcwell",
+                source_kind: "knowledge_model_clusters",
+                locator: query,
+                last_item_id: None,
+                last_item_date: None,
+                cursor_key: None,
+                cursor_value: None,
+                next_run_at: Some(&now_plus_seconds(3600)),
+            })?;
+            return Ok(json!({
+                "status": "skipped_no_source_cards",
+                "query": query,
+                "source_card_count": 0,
+                "cluster_ids": [],
+                "boundary": "No model provider was invoked because no source-card evidence matched the query."
+            }));
+        }
+        let invocation =
+            self.invoke_knowledge_cluster_model(KnowledgeClusterProposalModelInput {
+                source_card_ids: source_card_ids.clone(),
+                model_provider: model_provider.to_string(),
+                model_name,
+                endpoint,
+                timeout_seconds,
+                max_clusters,
+            })?;
+        let cluster_ids = invocation
+            .clusters
+            .iter()
+            .map(|cluster| cluster.id.clone())
+            .collect::<Vec<_>>();
+        let last_item_id = source_card_ids.last().map(String::as_str);
+        let last_item_date = source_cards
+            .iter()
+            .map(|card| card.retrieved_at.as_str())
+            .max();
+        self.record_source_success(SourceHealthUpdate {
+            key: &format!("knowledge:model-clusters:{query}"),
+            provider: "arcwell",
+            source_kind: "knowledge_model_clusters",
+            locator: query,
+            last_item_id,
+            last_item_date,
+            cursor_key: None,
+            cursor_value: None,
+            next_run_at: Some(&now_plus_seconds(3600)),
+        })?;
+        Ok(json!({
+            "status": "completed",
+            "query": query,
+            "model_provider": invocation.model_provider,
+            "model_name": invocation.model_name,
+            "prompt_version": invocation.prompt_version,
+            "proof_level": invocation.proof_level,
+            "cost_decision_id": invocation.cost_decision_id,
+            "source_card_count": source_card_ids.len(),
+            "source_cards": source_card_ids,
+            "clusters_created": cluster_ids.len(),
+            "cluster_ids": cluster_ids,
+            "boundary": "Scheduled model clustering writes review-only candidate clusters; promotion is required before wiki/report/digest expansion."
         }))
     }
 
@@ -38084,6 +38369,15 @@ fn wiki_job_policy_context(
             Some("source-cards".to_string()),
             None,
         ),
+        "knowledge_cluster_model_propose" => (
+            "arcwell-knowledge",
+            None,
+            input
+                .get("query")
+                .and_then(Value::as_str)
+                .map(|value| excerpt(value, 240)),
+            None,
+        ),
         "knowledge_cluster_investigate" => (
             "arcwell-knowledge",
             None,
@@ -39453,6 +39747,7 @@ fn validate_job_kind(kind: &str) -> Result<()> {
         | "digest_scheduled_alert"
         | "knowledge_cluster_expand"
         | "knowledge_cluster_backlog"
+        | "knowledge_cluster_model_propose"
         | "knowledge_cluster_investigate"
         | "knowledge_cluster_investigation_execute"
         | "research_convergence_run" => Ok(()),
@@ -50889,6 +51184,7 @@ fn validate_watch_source_input(input: &WatchSourceInput) -> Result<()> {
                 bail!("knowledge_backlog watch source locator must be source-cards");
             }
         }
+        "knowledge_model_clusters" => validate_query(&input.locator)?,
         _ => unreachable!("source kind validated above"),
     }
     Ok(())
@@ -50896,8 +51192,16 @@ fn validate_watch_source_input(input: &WatchSourceInput) -> Result<()> {
 
 fn validate_watch_source_kind(kind: &str) -> Result<()> {
     match kind {
-        "rss" | "blog" | "github_owner" | "arxiv_query" | "hackernews" | "reddit"
-        | "x_bookmarks" | "x_handle" | "knowledge_backlog" => Ok(()),
+        "rss"
+        | "blog"
+        | "github_owner"
+        | "arxiv_query"
+        | "hackernews"
+        | "reddit"
+        | "x_bookmarks"
+        | "x_handle"
+        | "knowledge_backlog"
+        | "knowledge_model_clusters" => Ok(()),
         other => bail!("unsupported watch source kind: {other}"),
     }
 }
@@ -50949,6 +51253,7 @@ fn watch_source_health_key(source: &WatchSource) -> Result<String> {
         "x_bookmarks" => Ok("x:bookmarks".to_string()),
         "x_handle" => Ok(format!("x:watch:{}", source.locator)),
         "knowledge_backlog" => Ok("knowledge:source-card-backlog".to_string()),
+        "knowledge_model_clusters" => Ok(format!("knowledge:model-clusters:{}", source.locator)),
         other => bail!("unsupported watch source kind: {other}"),
     }
 }
@@ -60928,6 +61233,251 @@ priority = 20
                     && decision.status == "completed"
                     && decision.cluster_id == promotion.cluster.id)
         );
+    }
+
+    #[test]
+    fn severe_scheduled_model_cluster_worker_writes_candidates_without_expansion() {
+        // CLAIM: resident scheduled model clustering can run from source-card
+        // evidence without treating model output as publication authority.
+        // ORACLE: a due watch source enqueues and completes a
+        // knowledge_cluster_model_propose job, writes source-card-backed
+        // candidate clusters, updates source health, and a follow-up worker
+        // pass skips expansion until promotion.
+        // SEVERITY: Severe because scheduled semantic clustering can otherwise
+        // look autonomous while quietly writing reports/digests from model JSON.
+        let store = test_store("knowledge-model-cluster-worker");
+        let first = seed_knowledge_source_card(
+            &store,
+            "scheduled-model-mcp",
+            "Scheduled model clustering evidence says a new MCP agent SDK shipped for developer workflows.",
+        );
+        let second = seed_knowledge_source_card(
+            &store,
+            "scheduled-model-release",
+            "Scheduled model clustering evidence says a new open source model release shipped benchmark details.",
+        );
+        let source = store
+            .schedule_knowledge_cluster_model_proposals(
+                "Scheduled model clustering evidence",
+                "mock",
+                None,
+                None,
+                None,
+                12,
+                6,
+                "warm",
+                "active",
+            )
+            .unwrap();
+        assert_eq!(source.source_kind, "knowledge_model_clusters");
+        assert_eq!(source.locator, "Scheduled model clustering evidence");
+        let wiki_count_before = store.list_wiki_pages().unwrap().len();
+        let report_count_before = store.list_knowledge_reports(10).unwrap().len();
+        let digest_count_before = store.list_digest_candidates().unwrap().len();
+
+        let first_run = store.run_worker_once(1).unwrap();
+        assert_eq!(first_run.processed, 1, "{first_run:#?}");
+        assert_eq!(first_run.jobs[0].kind, "knowledge_cluster_model_propose");
+        assert_eq!(first_run.jobs[0].status, "completed");
+        let result = first_run.jobs[0].result_json.as_ref().unwrap();
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            result.get("source_card_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        let cluster_ids = result
+            .get("cluster_ids")
+            .and_then(Value::as_array)
+            .expect("cluster ids");
+        assert!(!cluster_ids.is_empty(), "{result:#?}");
+        for cluster_id in cluster_ids.iter().filter_map(Value::as_str) {
+            let cluster = store.get_knowledge_cluster(cluster_id).unwrap().unwrap();
+            assert_eq!(cluster.status, "candidate");
+            assert_eq!(
+                cluster.metadata.get("origin").and_then(Value::as_str),
+                Some("model_cluster_proposal_v1")
+            );
+            assert!(
+                cluster.source_card_ids.contains(&first.id)
+                    || cluster.source_card_ids.contains(&second.id)
+            );
+        }
+        assert_eq!(
+            store.list_knowledge_reports(10).unwrap().len(),
+            report_count_before
+        );
+        assert_eq!(store.list_wiki_pages().unwrap().len(), wiki_count_before);
+        assert_eq!(
+            store.list_digest_candidates().unwrap().len(),
+            digest_count_before
+        );
+        let health = store
+            .get_source_health("knowledge:model-clusters:Scheduled model clustering evidence")
+            .unwrap()
+            .expect("source health");
+        assert_eq!(health.status, "healthy");
+        assert_eq!(health.source_kind, "knowledge_model_clusters");
+        assert!(health.next_run_at.is_some());
+
+        let second_run = store.run_worker_once(5).unwrap();
+        assert_eq!(second_run.processed, 0, "{second_run:#?}");
+        assert!(
+            second_run
+                .knowledge_cluster_expansion
+                .as_ref()
+                .is_some_and(|report| report.inspected >= cluster_ids.len()
+                    && report.enqueued == 0),
+            "{second_run:#?}"
+        );
+        assert_eq!(
+            store.list_knowledge_reports(10).unwrap().len(),
+            report_count_before
+        );
+        assert_eq!(
+            store.list_digest_candidates().unwrap().len(),
+            digest_count_before
+        );
+    }
+
+    #[test]
+    fn severe_model_cluster_worker_skips_empty_query_without_provider_or_retry_storm() {
+        // CLAIM: scheduled model clustering with no source-card evidence is a
+        // bounded no-op, not a provider call or retry storm.
+        // ORACLE: worker job completes with skipped_no_source_cards, writes no
+        // clusters/cost decisions, and records healthy source state with a
+        // next run time.
+        // SEVERITY: Severe because sparse production topics are normal and
+        // must not burn model calls or create failing recurring jobs.
+        let store = test_store("knowledge-model-cluster-empty-worker");
+        store
+            .enqueue_knowledge_cluster_model_proposal_job(
+                "no matching model cluster evidence",
+                "openai",
+                Some("gpt-4.1-mini"),
+                Some("https://api.openai.com/v1/responses"),
+                Some(5),
+                12,
+                6,
+            )
+            .unwrap();
+        let worker = store.run_worker_once(1).unwrap();
+        assert_eq!(worker.processed, 1);
+        assert_eq!(worker.jobs[0].status, "completed");
+        let result = worker.jobs[0].result_json.as_ref().unwrap();
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("skipped_no_source_cards")
+        );
+        assert!(store.list_knowledge_clusters(10).unwrap().is_empty());
+        assert!(store.list_cost_decisions(10).unwrap().is_empty());
+        let health = store
+            .get_source_health("knowledge:model-clusters:no matching model cluster evidence")
+            .unwrap()
+            .expect("source health");
+        assert_eq!(health.status, "healthy");
+        assert!(health.next_run_at.is_some());
+    }
+
+    #[test]
+    fn severe_model_cluster_worker_provider_policy_denial_writes_no_clusters() {
+        // CLAIM: queued model clustering obeys the same provider policy gate as
+        // foreground model proposals and fails before credentials or writes.
+        // ORACLE: explicit provider denial fails the worker job, writes an
+        // audited policy decision, creates no clusters/reports/digests, and
+        // does not require OPENAI_API_KEY.
+        // SEVERITY: Severe because unattended model clustering must not bypass
+        // network/spend policy just because it runs inside the worker.
+        let store = test_store("knowledge-model-cluster-worker-policy-deny");
+        seed_knowledge_source_card(
+            &store,
+            "worker-policy-deny",
+            "Worker policy denial model clustering evidence should match a source card.",
+        );
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "allow-worker-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+reason = "allow local worker enqueue for policy denial test"
+
+[[rules]]
+id = "deny-openai-cluster-proposal"
+effect = "deny"
+action = "provider.network"
+package = "arcwell-knowledge"
+provider = "openai"
+source = "knowledge_cluster_proposal"
+reason = "scheduled model cluster proposals disabled"
+"#,
+        );
+        store
+            .enqueue_knowledge_cluster_model_proposal_job(
+                "Worker policy denial model clustering evidence",
+                "openai",
+                Some("gpt-4.1-mini"),
+                Some("https://api.openai.com/v1/responses"),
+                Some(5),
+                12,
+                6,
+            )
+            .unwrap();
+        let worker = store.run_worker_once(1).unwrap();
+        assert_eq!(worker.processed, 1);
+        assert_eq!(worker.jobs[0].kind, "knowledge_cluster_model_propose");
+        assert_eq!(worker.jobs[0].status, "failed");
+        let error = worker.jobs[0].error.as_deref().unwrap_or("");
+        assert!(error.contains("policy denied provider.network"), "{error}");
+        assert!(!error.contains("OPENAI_API_KEY"), "{error}");
+        assert!(store.list_knowledge_clusters(10).unwrap().is_empty());
+        assert!(store.list_knowledge_reports(10).unwrap().is_empty());
+        assert!(store.list_digest_candidates().unwrap().is_empty());
+        assert!(
+            store
+                .list_policy_decisions(10)
+                .unwrap()
+                .iter()
+                .any(|decision| !decision.allowed
+                    && decision.action == "provider.network"
+                    && decision.source.as_deref() == Some("knowledge_cluster_proposal"))
+        );
+    }
+
+    #[test]
+    fn severe_model_cluster_worker_rejects_invalid_enqueue_input_without_job() {
+        // CLAIM: model-cluster worker enqueue validates query/provider shape
+        // before a durable job exists.
+        // ORACLE: malformed query/provider return errors and the queue remains
+        // empty.
+        // SEVERITY: Severe because malformed scheduled inputs should not create
+        // retrying poison jobs.
+        let store = test_store("knowledge-model-cluster-worker-invalid");
+        let bad_query = store
+            .enqueue_knowledge_cluster_model_proposal_job("", "mock", None, None, None, 12, 6)
+            .unwrap_err()
+            .to_string();
+        assert!(bad_query.contains("query"), "{bad_query}");
+        let bad_provider = store
+            .enqueue_knowledge_cluster_model_proposal_job(
+                "valid query",
+                "anthropic",
+                None,
+                None,
+                None,
+                12,
+                6,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            bad_provider.contains("unsupported knowledge cluster proposal model provider"),
+            "{bad_provider}"
+        );
+        assert!(store.list_wiki_jobs().unwrap().is_empty());
     }
 
     #[test]

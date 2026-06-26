@@ -1809,6 +1809,40 @@ enum KnowledgeSubcommand {
         #[arg(long, default_value = "active")]
         status: String,
     },
+    EnqueueModelClusters {
+        query: String,
+        #[arg(long, default_value = "mock")]
+        provider: String,
+        #[arg(long)]
+        model_name: Option<String>,
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        #[arg(long, default_value_t = 24)]
+        max_source_cards: usize,
+        #[arg(long, default_value_t = 6)]
+        max_clusters: usize,
+    },
+    ScheduleModelClusters {
+        query: String,
+        #[arg(long, default_value = "mock")]
+        provider: String,
+        #[arg(long)]
+        model_name: Option<String>,
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        #[arg(long, default_value_t = 24)]
+        max_source_cards: usize,
+        #[arg(long, default_value_t = 6)]
+        max_clusters: usize,
+        #[arg(long, default_value = "warm")]
+        cadence: String,
+        #[arg(long, default_value = "active")]
+        status: String,
+    },
     ProposeClusters {
         query: String,
         #[arg(long, default_value = "mock")]
@@ -3892,6 +3926,44 @@ fn knowledge(store: Store, args: KnowledgeCommand) -> Result<()> {
         } => print_json(&store.schedule_knowledge_cluster_backlog(
             max_source_cards,
             min_group_size,
+            max_clusters,
+            &cadence,
+            &status,
+        )?),
+        KnowledgeSubcommand::EnqueueModelClusters {
+            query,
+            provider,
+            model_name,
+            endpoint,
+            timeout_seconds,
+            max_source_cards,
+            max_clusters,
+        } => print_json(&store.enqueue_knowledge_cluster_model_proposal_job(
+            &query,
+            &provider,
+            model_name.as_deref(),
+            endpoint.as_deref(),
+            timeout_seconds,
+            max_source_cards,
+            max_clusters,
+        )?),
+        KnowledgeSubcommand::ScheduleModelClusters {
+            query,
+            provider,
+            model_name,
+            endpoint,
+            timeout_seconds,
+            max_source_cards,
+            max_clusters,
+            cadence,
+            status,
+        } => print_json(&store.schedule_knowledge_cluster_model_proposals(
+            &query,
+            &provider,
+            model_name.as_deref(),
+            endpoint.as_deref(),
+            timeout_seconds,
+            max_source_cards,
             max_clusters,
             &cadence,
             &status,
