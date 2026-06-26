@@ -213,6 +213,23 @@ PR, implementation note, or final report:
       cover idempotent replay, manual and automatic worker execution, prompt
       injection as labeled evidence, blocked-cluster non-retry, active-job
       dedupe, and rejection of the empty metadata/link-dump shape.
+      This slice adds the first durable shared editorial-decision worker via
+      `arcwell knowledge decide-cluster-editorial`,
+      `arcwell knowledge enqueue-cluster-editorial-decision`, and the resident
+      `knowledge_cluster_editorial_decide` job. The decider records a
+      source-card-backed `editorial_decide` decision and chooses
+      `expand_wiki_and_digest`, `digest_only`, `update_existing_wiki`,
+      `monitor_only`, or `block_for_review`; eligible expansion decisions can
+      enqueue exactly one local `knowledge_cluster_expand` follow-up, and due
+      expansion now skips clusters while an editorial-decision job is active.
+      Severe tests prove weak/single-source clusters do not alert or create
+      pages, matching wiki pages avoid duplicate cluster-authored pages,
+      unpromoted model-origin clusters remain blocked, and worker execution
+      chains editorial decision into wiki/report/digest-candidate expansion
+      without authorizing external delivery. Remaining work is model-assisted
+      editorial explanation, robust semantic duplicate-page detection, broad
+      corpus quality review, live recurring service proof, and external digest
+      delivery proof.
       This slice adds deterministic broad source-card backlog clustering via
       `arcwell knowledge cluster-backlog`,
       `arcwell knowledge enqueue-backlog-clustering`,

@@ -960,6 +960,18 @@ pub struct KnowledgeClusterBacklogReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeClusterEditorialDecisionReport {
+    pub cluster: KnowledgeCluster,
+    pub editorial_decision: KnowledgeEditorialDecision,
+    pub recommended_action: String,
+    pub matched_wiki_page: Option<WikiPageSummary>,
+    pub enqueued_job: Option<WikiJob>,
+    pub source_card_count: usize,
+    pub proof_level: String,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeClusterExpansionReport {
     pub cluster: KnowledgeCluster,
     pub source_cards: Vec<SourceCard>,
@@ -13650,6 +13662,41 @@ impl Store {
         self.enqueue_knowledge_cluster_expansion_job_with_lineage(cluster_id, create_digest, None)
     }
 
+    pub fn enqueue_knowledge_cluster_editorial_decision_job(
+        &self,
+        cluster_id: &str,
+        auto_enqueue: bool,
+    ) -> Result<WikiJob> {
+        self.enqueue_knowledge_cluster_editorial_decision_job_with_lineage(
+            cluster_id,
+            auto_enqueue,
+            None,
+        )
+    }
+
+    fn enqueue_knowledge_cluster_editorial_decision_job_with_lineage(
+        &self,
+        cluster_id: &str,
+        auto_enqueue: bool,
+        lineage: Option<Value>,
+    ) -> Result<WikiJob> {
+        validate_id(cluster_id)?;
+        self.get_knowledge_cluster(cluster_id)?
+            .with_context(|| format!("knowledge cluster not found: {cluster_id}"))?;
+        if self.knowledge_cluster_editorial_decision_has_active_job(cluster_id)? {
+            bail!(
+                "knowledge cluster editorial decision job already active for cluster {cluster_id}"
+            );
+        }
+        let mut input = json!({ "cluster_id": cluster_id, "auto_enqueue": auto_enqueue });
+        if let Some(lineage) = lineage
+            && let Some(object) = input.as_object_mut()
+        {
+            object.insert("lineage".to_string(), lineage);
+        }
+        self.enqueue_wiki_job("knowledge_cluster_editorial_decide", input)
+    }
+
     fn enqueue_knowledge_cluster_expansion_job_with_lineage(
         &self,
         cluster_id: &str,
@@ -14091,6 +14138,10 @@ impl Store {
                 report.skipped += 1;
                 continue;
             }
+            if self.knowledge_cluster_editorial_decision_has_active_job(&cluster.id)? {
+                report.skipped += 1;
+                continue;
+            }
             if self.knowledge_cluster_model_writer_has_active_job(&cluster.id)? {
                 report.skipped += 1;
                 continue;
@@ -14340,6 +14391,30 @@ impl Store {
                 SELECT COUNT(*)
                 FROM wiki_jobs
                 WHERE kind = 'knowledge_cluster_model_write'
+                  AND (
+                    status IN ('pending', 'running', 'deferred')
+                    OR (status = 'failed' AND attempts < max_attempts)
+                  )
+                  AND json_extract(input_json, '$.cluster_id') = ?1
+                "#,
+                params![cluster_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .map_err(Into::into)
+    }
+
+    fn knowledge_cluster_editorial_decision_has_active_job(
+        &self,
+        cluster_id: &str,
+    ) -> Result<bool> {
+        validate_id(cluster_id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM wiki_jobs
+                WHERE kind = 'knowledge_cluster_editorial_decide'
                   AND (
                     status IN ('pending', 'running', 'deferred')
                     OR (status = 'failed' AND attempts < max_attempts)
@@ -17584,6 +17659,219 @@ impl Store {
                 "Local Proof: policy-gated promotion from model proposal to active shared cluster"
                     .to_string(),
         })
+    }
+
+    pub fn decide_knowledge_cluster_editorial(
+        &self,
+        cluster_id: &str,
+        auto_enqueue: bool,
+    ) -> Result<KnowledgeClusterEditorialDecisionReport> {
+        validate_id(cluster_id)?;
+        let cluster = self
+            .get_knowledge_cluster(cluster_id)?
+            .with_context(|| format!("knowledge cluster not found: {cluster_id}"))?;
+        let replay_source_card_count = cluster.source_card_ids.len();
+        if let Some(existing) =
+            self.get_knowledge_editorial_decision_for_cluster(&cluster.id, "editorial_decide")?
+            && matches!(existing.status.as_str(), "completed" | "blocked")
+        {
+            let action = existing
+                .metadata
+                .get("recommended_action")
+                .and_then(Value::as_str)
+                .unwrap_or(existing.decision.as_str())
+                .to_string();
+            let enqueued_job =
+                self.maybe_enqueue_editorial_decision_followup(&cluster, &action, auto_enqueue)?;
+            return Ok(KnowledgeClusterEditorialDecisionReport {
+                cluster,
+                editorial_decision: existing,
+                recommended_action: action,
+                matched_wiki_page: None,
+                enqueued_job,
+                source_card_count: replay_source_card_count,
+                proof_level: "Local Proof: replayed durable deterministic editorial decision"
+                    .to_string(),
+                metadata: json!({
+                    "origin": "knowledge_cluster_editorial_decider_v1",
+                    "replayed_existing_decision": true,
+                    "auto_enqueue": auto_enqueue,
+                }),
+            });
+        }
+
+        let source_card_count = cluster.source_card_ids.len();
+        let mut quality_findings = Vec::new();
+        let (recommended_action, status, reason, matched_wiki_page, digest_candidate_id) =
+            if source_card_count == 0 {
+                (
+                    "block_for_review".to_string(),
+                    "blocked".to_string(),
+                    "Blocked shared knowledge editorial decision because the cluster has no source-card evidence.".to_string(),
+                    None,
+                    None,
+                )
+            } else if knowledge_cluster_requires_model_promotion(&cluster) {
+                quality_findings.push("model_cluster_requires_promotion".to_string());
+                (
+                    "block_for_review".to_string(),
+                    "blocked".to_string(),
+                    format!(
+                        "Blocked editorial action for review-only model-origin cluster {}; explicit knowledge_cluster.promote policy is required before wiki/report/digest work.",
+                        cluster.id
+                    ),
+                    None,
+                    None,
+                )
+            } else if let Some(page) = self.find_existing_wiki_page_for_cluster(&cluster)? {
+                if source_card_count >= 2
+                    && cluster.momentum_score >= 0.55
+                    && cluster.stale_score < 0.8
+                {
+                    let candidate =
+                        self.create_digest_candidate(&cluster.topic, &cluster.source_card_ids)?;
+                    (
+                        "digest_only".to_string(),
+                        "completed".to_string(),
+                        format!(
+                            "Matched existing wiki page {} for cluster {}; created digest candidate {} instead of a duplicate wiki page.",
+                            page.id, cluster.id, candidate.id
+                        ),
+                        Some(page),
+                        Some(candidate.id),
+                    )
+                } else {
+                    (
+                        "update_existing_wiki".to_string(),
+                        "completed".to_string(),
+                        format!(
+                            "Matched existing wiki page {} for cluster {}; selected update_existing_wiki and did not create a duplicate page.",
+                            page.id, cluster.id
+                        ),
+                        Some(page),
+                        None,
+                    )
+                }
+            } else if source_card_count < 2
+                || cluster.novelty_score < 0.35
+                || cluster.momentum_score < 0.20
+                || cluster.stale_score >= 0.85
+            {
+                quality_findings.push("insufficient_editorial_signal".to_string());
+                (
+                    "monitor_only".to_string(),
+                    "completed".to_string(),
+                    format!(
+                        "Cluster {} remains monitor-only: source_card_count={}, novelty={:.2}, momentum={:.2}, stale={:.2}.",
+                        cluster.id,
+                        source_card_count,
+                        cluster.novelty_score,
+                        cluster.momentum_score,
+                        cluster.stale_score
+                    ),
+                    None,
+                    None,
+                )
+            } else {
+                (
+                    "expand_wiki_and_digest".to_string(),
+                    "completed".to_string(),
+                    format!(
+                        "Cluster {} has enough source-card-backed novelty and momentum for wiki expansion plus digest-candidate creation; delivery remains separately gated.",
+                        cluster.id
+                    ),
+                    None,
+                    None,
+                )
+            };
+
+        let matched_wiki_page_id = matched_wiki_page.as_ref().map(|page| page.id.clone());
+        let decision = self.record_knowledge_editorial_decision(KnowledgeEditorialDecisionInput {
+            cluster_id: cluster.id.clone(),
+            decision: "editorial_decide".to_string(),
+            status,
+            wiki_page_id: matched_wiki_page_id.clone(),
+            digest_candidate_id: digest_candidate_id.clone(),
+            source_card_ids: cluster.source_card_ids.clone(),
+            reason: reason.clone(),
+            quality_findings: quality_findings.clone(),
+            metadata: json!({
+                "origin": "knowledge_cluster_editorial_decider_v1",
+                "recommended_action": recommended_action,
+                "auto_enqueue": auto_enqueue,
+                "source_card_count": source_card_count,
+                "novelty_score": cluster.novelty_score,
+                "momentum_score": cluster.momentum_score,
+                "stale_score": cluster.stale_score,
+                "matched_wiki_page_id": matched_wiki_page_id,
+                "digest_candidate_id": digest_candidate_id,
+                "delivery_authorized": false,
+                "boundary": "This decision may create or enqueue local wiki/report/digest-candidate work, but it never authorizes external delivery.",
+            }),
+        })?;
+        let enqueued_job = self.maybe_enqueue_editorial_decision_followup(
+            &cluster,
+            &recommended_action,
+            auto_enqueue,
+        )?;
+        Ok(KnowledgeClusterEditorialDecisionReport {
+            cluster,
+            editorial_decision: decision,
+            recommended_action,
+            matched_wiki_page,
+            enqueued_job,
+            source_card_count,
+            proof_level: "Local Proof: deterministic source-card-backed editorial decision"
+                .to_string(),
+            metadata: json!({
+                "origin": "knowledge_cluster_editorial_decider_v1",
+                "auto_enqueue": auto_enqueue,
+                "quality_findings": quality_findings,
+            }),
+        })
+    }
+
+    fn maybe_enqueue_editorial_decision_followup(
+        &self,
+        cluster: &KnowledgeCluster,
+        recommended_action: &str,
+        auto_enqueue: bool,
+    ) -> Result<Option<WikiJob>> {
+        if !auto_enqueue || recommended_action != "expand_wiki_and_digest" {
+            return Ok(None);
+        }
+        if let Some(status) = self.knowledge_cluster_expansion_decision_status(&cluster.id)?
+            && matches!(status.as_str(), "completed" | "blocked")
+        {
+            return Ok(None);
+        }
+        if self.knowledge_cluster_expansion_has_active_job(&cluster.id)? {
+            return Ok(None);
+        }
+        self.enqueue_knowledge_cluster_expansion_job_with_lineage(
+            &cluster.id,
+            true,
+            Some(json!({
+                "trigger": "editorial_decide",
+                "cluster_id": cluster.id,
+                "topic": cluster.topic,
+                "source_card_count": cluster.source_card_ids.len(),
+                "source_card_ids": cluster.source_card_ids,
+                "boundary": "Expansion is a local wiki/report/digest-candidate follow-up; delivery remains separately reviewed and policy-gated."
+            })),
+        )
+        .map(Some)
+    }
+
+    fn find_existing_wiki_page_for_cluster(
+        &self,
+        cluster: &KnowledgeCluster,
+    ) -> Result<Option<WikiPageSummary>> {
+        let own_source = format!("knowledge-cluster:{}", cluster.id);
+        Ok(self
+            .search_wiki_pages_for_research(&cluster.topic)?
+            .into_iter()
+            .find(|page| page.source != own_source))
     }
 
     pub fn expand_knowledge_cluster(
@@ -31779,6 +32067,9 @@ impl Store {
                     self.execute_radar_scheduled_delivery(&job.input_json)
                 }
                 "digest_scheduled_alert" => self.execute_digest_scheduled_alert(&job.input_json),
+                "knowledge_cluster_editorial_decide" => {
+                    self.execute_knowledge_cluster_editorial_decide(&job.input_json)
+                }
                 "knowledge_cluster_expand" => {
                     self.execute_knowledge_cluster_expand(&job.input_json)
                 }
@@ -33507,6 +33798,31 @@ impl Store {
             "investigation_reused_existing": report.investigation.reused_existing,
             "source_card_count": report.source_cards.len(),
             "quality_findings": report.quality_findings,
+            "status": "completed"
+        }))
+    }
+
+    fn execute_knowledge_cluster_editorial_decide(&self, input: &Value) -> Result<Value> {
+        let cluster_id = input
+            .get("cluster_id")
+            .and_then(Value::as_str)
+            .context("knowledge_cluster_editorial_decide missing cluster_id")?;
+        let auto_enqueue = input
+            .get("auto_enqueue")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let report = self.decide_knowledge_cluster_editorial(cluster_id, auto_enqueue)?;
+        Ok(json!({
+            "cluster_id": report.cluster.id,
+            "editorial_decision_id": report.editorial_decision.id,
+            "recommended_action": report.recommended_action,
+            "decision_status": report.editorial_decision.status,
+            "matched_wiki_page_id": report.matched_wiki_page.as_ref().map(|page| page.id.clone()),
+            "digest_candidate_id": report.editorial_decision.digest_candidate_id,
+            "enqueued_job_id": report.enqueued_job.as_ref().map(|job| job.id.clone()),
+            "enqueued_job_kind": report.enqueued_job.as_ref().map(|job| job.kind.clone()),
+            "source_card_count": report.source_card_count,
+            "proof_level": report.proof_level,
             "status": "completed"
         }))
     }
@@ -39229,6 +39545,15 @@ fn wiki_job_policy_context(
                 .map(|value| excerpt(value, 240)),
             None,
         ),
+        "knowledge_cluster_editorial_decide" => (
+            "arcwell-knowledge",
+            None,
+            input
+                .get("cluster_id")
+                .and_then(Value::as_str)
+                .map(|value| excerpt(value, 240)),
+            None,
+        ),
         "knowledge_cluster_expand" => (
             "arcwell-knowledge",
             None,
@@ -40636,6 +40961,7 @@ fn validate_job_kind(kind: &str) -> Result<()> {
         | "radar_run"
         | "radar_scheduled_delivery"
         | "digest_scheduled_alert"
+        | "knowledge_cluster_editorial_decide"
         | "knowledge_cluster_expand"
         | "knowledge_cluster_model_write"
         | "knowledge_cluster_backlog"
@@ -59795,6 +60121,289 @@ mod tests {
         assert_eq!(second.investigation.tasks.len(), 4);
         assert_eq!(wiki_count, wiki_count_after);
         assert_eq!(digest_count, digest_count_after);
+    }
+
+    #[test]
+    fn severe_knowledge_editorial_decider_selects_safe_actions_without_fake_writes() {
+        // CLAIM: The shared editorial decider records a durable source-card
+        // backed action choice before writer/digest work, and weak/duplicate/
+        // unpromoted clusters do not create new wiki pages by accident.
+        // ORACLE: empty clusters are rejected at cluster creation; a weak
+        // single-source cluster is monitor-only; a cluster matching an existing
+        // wiki page selects update_existing_wiki; and an unpromoted model-origin
+        // cluster blocks for review without queued expansion.
+        // SEVERITY: Severe because this is the seam that prevents "every
+        // cluster auto-expands" from masquerading as editorial judgment.
+        let store = test_store("knowledge-editorial-decider-safe-actions");
+
+        let empty_cluster = store
+            .create_knowledge_cluster(KnowledgeClusterInput {
+                topic: "Empty editorial cluster".to_string(),
+                status: "candidate".to_string(),
+                event_ids: Vec::new(),
+                source_card_ids: Vec::new(),
+                first_seen_at: None,
+                last_seen_at: None,
+                novelty_score: 0.5,
+                momentum_score: 0.5,
+                stale_score: 0.0,
+                reason: "An empty cluster must never reach editorial action.".to_string(),
+                duplicate_groups: json!({}),
+                metadata: json!({}),
+            })
+            .unwrap_err();
+        assert!(empty_cluster.to_string().contains("source-card evidence"));
+
+        let weak = seed_knowledge_source_card(
+            &store,
+            "weak-editorial-rumor",
+            "Weak editorial evidence is a single anecdotal reaction and should not create an alert.",
+        );
+        let weak_cluster = store
+            .create_knowledge_cluster(KnowledgeClusterInput {
+                topic: "Weak single-source rumor".to_string(),
+                status: "candidate".to_string(),
+                event_ids: Vec::new(),
+                source_card_ids: vec![weak.id.clone()],
+                first_seen_at: None,
+                last_seen_at: None,
+                novelty_score: 0.2,
+                momentum_score: 0.1,
+                stale_score: 0.0,
+                reason: "One weak source is not enough for autonomous writing.".to_string(),
+                duplicate_groups: json!({}),
+                metadata: json!({ "fixture": "weak" }),
+            })
+            .unwrap();
+        let weak_decision = store
+            .decide_knowledge_cluster_editorial(&weak_cluster.id, true)
+            .unwrap();
+        assert_eq!(weak_decision.recommended_action, "monitor_only");
+        assert_eq!(weak_decision.editorial_decision.status, "completed");
+        assert!(weak_decision.enqueued_job.is_none());
+        assert!(
+            store
+                .list_wiki_pages()
+                .unwrap()
+                .iter()
+                .all(|page| !page.source.starts_with("knowledge-cluster:"))
+        );
+        assert!(store.list_digest_candidates().unwrap().is_empty());
+
+        let existing_a = seed_knowledge_source_card(
+            &store,
+            "existing-page-a",
+            "Existing wiki evidence says an agent SDK topic already has a page.",
+        );
+        let existing_b = seed_knowledge_source_card(
+            &store,
+            "existing-page-b",
+            "Existing wiki evidence says the same topic has a new source-card update.",
+        );
+        let existing_page_id = store
+            .add_wiki_page(
+                "Knowledge: Existing agent SDK topic",
+                "Existing agent SDK topic already has a human-written page that should be updated instead of duplicated.",
+                "manual-existing-page",
+            )
+            .unwrap();
+        let existing_cluster = store
+            .create_knowledge_cluster(KnowledgeClusterInput {
+                topic: "Existing agent SDK topic".to_string(),
+                status: "candidate".to_string(),
+                event_ids: Vec::new(),
+                source_card_ids: vec![existing_a.id.clone(), existing_b.id.clone()],
+                first_seen_at: None,
+                last_seen_at: None,
+                novelty_score: 0.7,
+                momentum_score: 0.25,
+                stale_score: 0.0,
+                reason: "This should update an existing page instead of making a duplicate."
+                    .to_string(),
+                duplicate_groups: json!({}),
+                metadata: json!({ "fixture": "existing_page" }),
+            })
+            .unwrap();
+        let existing_decision = store
+            .decide_knowledge_cluster_editorial(&existing_cluster.id, true)
+            .unwrap();
+        assert_eq!(existing_decision.recommended_action, "update_existing_wiki");
+        assert_eq!(
+            existing_decision
+                .matched_wiki_page
+                .as_ref()
+                .map(|page| page.id.as_str()),
+            Some(existing_page_id.as_str())
+        );
+        assert_eq!(
+            existing_decision.editorial_decision.wiki_page_id.as_deref(),
+            Some(existing_page_id.as_str())
+        );
+        assert!(existing_decision.enqueued_job.is_none());
+
+        let model_a = seed_knowledge_source_card(
+            &store,
+            "model-review-a",
+            "Model proposal evidence says a source-backed candidate still needs promotion.",
+        );
+        let model_b = seed_knowledge_source_card(
+            &store,
+            "model-review-b",
+            "Model proposal evidence says another source supports the same candidate.",
+        );
+        let model = store
+            .invoke_knowledge_cluster_model(KnowledgeClusterProposalModelInput {
+                source_card_ids: vec![model_a.id.clone(), model_b.id.clone()],
+                model_provider: "mock".to_string(),
+                model_name: None,
+                endpoint: None,
+                timeout_seconds: None,
+                max_clusters: 3,
+            })
+            .unwrap();
+        let model_cluster = model.clusters.first().unwrap();
+        let blocked = store
+            .decide_knowledge_cluster_editorial(&model_cluster.id, true)
+            .unwrap();
+        assert_eq!(blocked.recommended_action, "block_for_review");
+        assert_eq!(blocked.editorial_decision.status, "blocked");
+        assert!(blocked.enqueued_job.is_none());
+        assert!(
+            blocked
+                .editorial_decision
+                .quality_findings
+                .contains(&"model_cluster_requires_promotion".to_string())
+        );
+        assert!(
+            store
+                .list_wiki_jobs()
+                .unwrap()
+                .iter()
+                .all(|job| job.kind != "knowledge_cluster_expand")
+        );
+    }
+
+    #[test]
+    fn severe_knowledge_editorial_decider_worker_enqueues_expansion_once() {
+        // CLAIM: The queued editorial_decide worker is a real autonomous seam:
+        // it suppresses direct due expansion while active, records a durable
+        // action decision, and enqueues exactly one expansion follow-up.
+        // ORACLE: run_worker_once processes editorial_decide then the expansion
+        // job in one pass, writes one wiki/report/digest set, and replaying the
+        // decision does not enqueue another expansion after the terminal write.
+        // SEVERITY: Severe because otherwise the worker job could be a hollow
+        // wrapper around the old direct auto-expand path.
+        let store = test_store("knowledge-editorial-decider-worker");
+        let release = seed_knowledge_source_card(
+            &store,
+            "editorial-worker-release",
+            "Editorial worker evidence says OpenAI published an agent package release.",
+        );
+        let reaction = seed_knowledge_source_card(
+            &store,
+            "editorial-worker-reaction",
+            "Editorial worker evidence says developers connected the release to MCP workflows.",
+        );
+        let cluster = store
+            .create_knowledge_cluster(KnowledgeClusterInput {
+                topic: "Editorial worker agent package launch".to_string(),
+                status: "candidate".to_string(),
+                event_ids: Vec::new(),
+                source_card_ids: vec![release.id.clone(), reaction.id.clone()],
+                first_seen_at: None,
+                last_seen_at: None,
+                novelty_score: 0.82,
+                momentum_score: 0.66,
+                stale_score: 0.0,
+                reason: "Two source-card-backed signals are enough for local editorial expansion."
+                    .to_string(),
+                duplicate_groups: json!({}),
+                metadata: json!({ "fixture": "editorial_worker" }),
+            })
+            .unwrap();
+        let editorial_job = store
+            .enqueue_knowledge_cluster_editorial_decision_job(&cluster.id, true)
+            .unwrap();
+        assert_eq!(editorial_job.kind, "knowledge_cluster_editorial_decide");
+
+        let due_expansion = store
+            .enqueue_due_knowledge_cluster_expansion_jobs(10)
+            .unwrap();
+        assert_eq!(due_expansion.enqueued, 0, "{due_expansion:?}");
+        assert_eq!(due_expansion.skipped, 1, "{due_expansion:?}");
+
+        let worker = store.run_worker_once(2).unwrap();
+        assert_eq!(worker.processed, 2, "{worker:#?}");
+        assert_eq!(worker.jobs[0].kind, "knowledge_cluster_editorial_decide");
+        assert_eq!(worker.jobs[0].status, "completed");
+        assert_eq!(worker.jobs[1].kind, "knowledge_cluster_expand");
+        assert_eq!(worker.jobs[1].status, "completed");
+        let editorial_result = worker.jobs[0].result_json.as_ref().unwrap();
+        assert_eq!(
+            editorial_result
+                .get("recommended_action")
+                .and_then(Value::as_str),
+            Some("expand_wiki_and_digest")
+        );
+        assert_eq!(
+            editorial_result
+                .get("enqueued_job_kind")
+                .and_then(Value::as_str),
+            Some("knowledge_cluster_expand")
+        );
+        assert_eq!(
+            store
+                .list_wiki_pages()
+                .unwrap()
+                .iter()
+                .filter(|page| page.source == format!("knowledge-cluster:{}", cluster.id))
+                .count(),
+            1
+        );
+        assert_eq!(store.list_digest_candidates().unwrap().len(), 1);
+        assert!(
+            store
+                .list_knowledge_editorial_decisions(20)
+                .unwrap()
+                .iter()
+                .any(|decision| decision.cluster_id == cluster.id
+                    && decision.decision == "editorial_decide"
+                    && decision.status == "completed"
+                    && decision.metadata["recommended_action"] == "expand_wiki_and_digest")
+        );
+        assert!(
+            store
+                .list_knowledge_editorial_decisions(20)
+                .unwrap()
+                .iter()
+                .any(|decision| decision.cluster_id == cluster.id
+                    && decision.decision == "expand_wiki_and_digest"
+                    && decision.status == "completed")
+        );
+
+        let replay = store
+            .decide_knowledge_cluster_editorial(&cluster.id, true)
+            .unwrap();
+        assert!(replay.enqueued_job.is_none(), "{replay:#?}");
+        assert_eq!(
+            store
+                .list_wiki_pages()
+                .unwrap()
+                .iter()
+                .filter(|page| page.source == format!("knowledge-cluster:{}", cluster.id))
+                .count(),
+            1
+        );
+        assert_eq!(store.list_digest_candidates().unwrap().len(), 1);
+        assert_eq!(
+            store
+                .list_wiki_jobs()
+                .unwrap()
+                .iter()
+                .filter(|job| job.kind == "knowledge_cluster_expand")
+                .count(),
+            1
+        );
     }
 
     #[test]

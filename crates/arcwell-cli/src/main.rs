@@ -1786,6 +1786,11 @@ enum KnowledgeSubcommand {
         #[arg(long)]
         reason: Option<String>,
     },
+    DecideClusterEditorial {
+        cluster_id: String,
+        #[arg(long)]
+        no_enqueue: bool,
+    },
     InvestigateCluster {
         cluster_id: String,
     },
@@ -1796,6 +1801,11 @@ enum KnowledgeSubcommand {
         cluster_id: String,
         #[arg(long)]
         skip_digest: bool,
+    },
+    EnqueueClusterEditorialDecision {
+        cluster_id: String,
+        #[arg(long)]
+        no_enqueue: bool,
     },
     EnqueueClusterModelWrite {
         cluster_id: String,
@@ -3953,6 +3963,10 @@ fn knowledge(store: Store, args: KnowledgeCommand) -> Result<()> {
             reviewer.as_deref(),
             reason.as_deref(),
         )?),
+        KnowledgeSubcommand::DecideClusterEditorial {
+            cluster_id,
+            no_enqueue,
+        } => print_json(&store.decide_knowledge_cluster_editorial(&cluster_id, !no_enqueue)?),
         KnowledgeSubcommand::InvestigateCluster { cluster_id } => {
             print_json(&store.create_knowledge_cluster_investigation(&cluster_id)?)
         }
@@ -3963,6 +3977,12 @@ fn knowledge(store: Store, args: KnowledgeCommand) -> Result<()> {
             cluster_id,
             skip_digest,
         } => print_json(&store.enqueue_knowledge_cluster_expansion_job(&cluster_id, !skip_digest)?),
+        KnowledgeSubcommand::EnqueueClusterEditorialDecision {
+            cluster_id,
+            no_enqueue,
+        } => print_json(
+            &store.enqueue_knowledge_cluster_editorial_decision_job(&cluster_id, !no_enqueue)?,
+        ),
         KnowledgeSubcommand::EnqueueClusterModelWrite {
             cluster_id,
             provider,

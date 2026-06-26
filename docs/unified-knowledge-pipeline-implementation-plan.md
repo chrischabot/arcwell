@@ -1231,22 +1231,44 @@ Refuting tests:
 
 ### Milestone 5: Editorial Decision Worker
 
-- [ ] Add `editorial_decide` worker job.
+- [x] Add first deterministic `editorial_decide` worker job for shared
+      knowledge clusters.
 - [x] Add first foreground deterministic decision rule for source-card/radar
       projection reports.
 - [ ] Add model-assisted decision explanation behind policy/cost.
-- [ ] Add duplicate page detection.
-- [ ] Add update-vs-new-page selection.
-- [ ] Add digest-only selection.
-- [ ] Add block-for-review path.
+- [x] Add first local duplicate-page avoidance by matching an existing wiki
+      page before creating a new cluster-authored page.
+- [x] Add first update-vs-new-page selection.
+- [x] Add digest-only selection for high-momentum clusters that already have a
+      matching wiki page.
+- [x] Add block-for-review path for review-only model-origin clusters.
 
 Refuting tests:
 
-- [ ] Empty cluster cannot create page.
-- [ ] Weak single-source rumor becomes monitor or research, not alert.
-- [ ] Known page update is chosen over duplicate page.
-- [ ] High-confidence launch creates report candidate.
-- [ ] Unsupported model decision cannot authorize delivery.
+- [x] Empty cluster cannot create page.
+- [x] Weak single-source rumor becomes monitor or research, not alert.
+- [x] Known page update is chosen over duplicate page.
+- [x] High-confidence launch creates report candidate through the worker
+      follow-up path.
+- [x] Unsupported model-origin cluster cannot authorize delivery or write
+      wiki/report/digest rows before promotion.
+
+Current local proof boundary:
+
+- `knowledge_cluster_editorial_decide` records a durable
+  `editorial_decide` decision with source-card evidence and chooses
+  `expand_wiki_and_digest`, `digest_only`, `update_existing_wiki`,
+  `monitor_only`, or `block_for_review`.
+- A completed `editorial_decide` decision can enqueue exactly one local
+  `knowledge_cluster_expand` follow-up for eligible clusters, while due
+  expansion skips clusters that already have an active editorial-decision job.
+- The worker never authorizes external delivery. Digest delivery remains behind
+  recipient, quiet-hours, dedupe, idempotency, retry/dead-letter, and provider
+  proof gates.
+- Remaining gaps: model-assisted editorial explanation, robust semantic
+  duplicate-page detection beyond first-pass wiki search, broad production
+  corpus quality review, live recurring service proof, and external delivery
+  proof.
 
 ### Milestone 6: Research Fanout
 
