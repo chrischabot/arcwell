@@ -153,7 +153,7 @@ are not treated as live.
 
 The librarian package turns source cards into expanded topic pages and creates digest candidates for interesting launches, releases, papers, repos, and social/news signals.
 
-Current scoring and backlog clustering are intentionally transparent and simple. `arcwell knowledge cluster-backlog` can split unclustered source cards into deterministic entity/theme clusters, and `arcwell knowledge schedule-backlog-clustering` can let the resident worker run that local clustering before the existing wiki/report/digest expansion path. Copied-home production-corpus proofs over 500 real source cards produced 12 source-backed human-readable reports and now require each report to include explicit next-investigation steps; production-data semantic clustering, autonomous primary-source investigation, model-backed synthesis, and wall-clock recurrence remain later proof gates.
+Current scoring and backlog clustering are intentionally transparent and simple. `arcwell knowledge cluster-backlog` can split unclustered source cards into deterministic entity/theme clusters, and `arcwell knowledge schedule-backlog-clustering` can let the resident worker run that local clustering before the existing wiki/report/digest expansion path. Copied-home production-corpus proofs over 500 real source cards produced 12 source-backed human-readable reports, require each report to include explicit next-investigation steps, and now create source-card-linked pending research workflows when a cluster is expanded; production-data semantic clustering, autonomous primary-source execution, model-backed synthesis, and wall-clock recurrence remain later proof gates.
 
 ### Radar
 

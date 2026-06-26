@@ -223,7 +223,15 @@ PR, implementation note, or final report:
       and confidence/uncertainty sections. The gate now rejects readable prose
       that cites source cards but does not name follow-up verification,
       corroboration, comparison, or wiki-expansion work.
-      Remaining work is investigation jobs, broad production-data
+      Investigation proof
+      `.arcwell-dev/proofs/knowledge-cluster-investigation-production-proof-20260626T053631Z/artifacts/proof-packet.md`
+      expanded a copied-production 65-source cluster into a wiki page, report,
+      digest candidate, `deep_open` research run, four pending research tasks,
+      and 65 research-run source links. This promotes durable investigation
+      planning from shared clusters only; task execution, autonomous primary
+      source acquisition, accepted model synthesis, and recurrence proofs remain
+      open.
+      Remaining work is investigation task execution, broad production-data
       semantic/model clustering, X credential-refresh live proof, wall-clock
       scheduled source recurrence, external delivery recurrence, richer
       model-backed writer/editor synthesis, and broader ops UI repair controls.
