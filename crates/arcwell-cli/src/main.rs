@@ -6180,6 +6180,22 @@ async fn serve(paths: AppPaths, args: ServeArgs) -> Result<()> {
             post(http_ops_knowledge_backlog_enqueue),
         )
         .route(
+            "/ops/actions/knowledge/model-clusters/schedule",
+            post(http_ops_knowledge_model_clusters_schedule),
+        )
+        .route(
+            "/ops/actions/knowledge/model-clusters/enqueue",
+            post(http_ops_knowledge_model_clusters_enqueue),
+        )
+        .route(
+            "/ops/actions/knowledge/model-writes/schedule",
+            post(http_ops_knowledge_model_write_schedule),
+        )
+        .route(
+            "/ops/actions/knowledge/model-writes/enqueue",
+            post(http_ops_knowledge_model_write_enqueue),
+        )
+        .route(
             "/ops/actions/knowledge/clusters/enqueue-expansions",
             post(http_ops_knowledge_cluster_expansions_enqueue),
         )
@@ -6359,6 +6375,60 @@ struct OpsKnowledgeBacklogEnqueueForm {
     max_source_cards: usize,
     min_group_size: usize,
     max_clusters: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsKnowledgeModelClustersScheduleForm {
+    csrf_token: String,
+    idempotency_key: String,
+    query: String,
+    model_provider: String,
+    model_name: Option<String>,
+    endpoint: Option<String>,
+    timeout_seconds: Option<u64>,
+    max_source_cards: usize,
+    max_clusters: usize,
+    cadence: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsKnowledgeModelClustersEnqueueForm {
+    csrf_token: String,
+    idempotency_key: String,
+    query: String,
+    model_provider: String,
+    model_name: Option<String>,
+    endpoint: Option<String>,
+    timeout_seconds: Option<u64>,
+    max_source_cards: usize,
+    max_clusters: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsKnowledgeModelWriteScheduleForm {
+    csrf_token: String,
+    idempotency_key: String,
+    cluster_id: String,
+    model_provider: String,
+    model_name: Option<String>,
+    endpoint: Option<String>,
+    timeout_seconds: Option<u64>,
+    create_digest: bool,
+    cadence: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsKnowledgeModelWriteEnqueueForm {
+    csrf_token: String,
+    idempotency_key: String,
+    cluster_id: String,
+    model_provider: String,
+    model_name: Option<String>,
+    endpoint: Option<String>,
+    timeout_seconds: Option<u64>,
+    create_digest: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -6832,6 +6902,368 @@ async fn http_ops_knowledge_backlog_enqueue(
     match result {
         Ok(id) => redirect_to_ops_ui(&format!(
             "/ops/ui?detail=job:{}&notice=knowledge_backlog_enqueued",
+            url_component(&id)
+        )),
+        Err(error) => http_error_response(HttpError::bad_request(
+            "ops_action_failed",
+            error.to_string(),
+        )),
+    }
+}
+
+async fn http_ops_knowledge_model_clusters_schedule(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = validate_http_mutation_request(&state, &headers, &uri) {
+        return http_error_response(error);
+    }
+    if body.len() as u64 > state.max_body_bytes {
+        return http_error_response(HttpError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        ));
+    }
+    let form = match parse_ops_knowledge_model_clusters_schedule_form(&body) {
+        Ok(form) => form,
+        Err(error) => return http_error_response(error),
+    };
+    if let Err(error) =
+        validate_ops_csrf_and_idempotency(&state, &form.csrf_token, &form.idempotency_key)
+    {
+        return http_error_response(error);
+    }
+    let idempotency_scope = format!("knowledge-model-clusters-schedule:{}", form.idempotency_key);
+    let inserted = match reserve_ops_idempotency(&state, idempotency_scope) {
+        Ok(inserted) => inserted,
+        Err(error) => return http_error_response(error),
+    };
+    if !inserted {
+        return redirect_to_ops_ui("/ops/ui?q=knowledge_model_clusters&notice=duplicate");
+    }
+
+    let result = (|| -> Result<String> {
+        let store = Store::open(state.paths.clone())?;
+        let cadence = validate_ops_x_schedule_word(&form.cadence, "cadence")?;
+        let status = validate_ops_x_schedule_word(&form.status, "status")?;
+        let max_source_cards = form.max_source_cards.clamp(1, 80);
+        let max_clusters = form.max_clusters.clamp(1, 12);
+        let provider = form.model_provider.trim().to_ascii_lowercase();
+        let decision = store.policy_check(PolicyRequest {
+            action: "ops.knowledge_model_clusters.schedule".to_string(),
+            package: Some("arcwell-cli".to_string()),
+            provider: Some(provider.clone()),
+            source: Some("ops-ui".to_string()),
+            channel: Some("http".to_string()),
+            subject: Some("local-operator".to_string()),
+            target: Some("knowledge_model_clusters".to_string()),
+            projected_usd: None,
+            metadata: json!({
+                "query": form.query.clone(),
+                "model_provider": provider.clone(),
+                "model_name": form.model_name.clone(),
+                "endpoint_configured": form.endpoint.is_some(),
+                "timeout_seconds": form.timeout_seconds,
+                "max_source_cards": max_source_cards,
+                "max_clusters": max_clusters,
+                "cadence": cadence,
+                "status": status,
+                "idempotency_key": form.idempotency_key.clone(),
+            }),
+            untrusted_excerpt: None,
+        })?;
+        if !decision.allowed {
+            bail!(
+                "policy denied ops.knowledge_model_clusters.schedule: {}",
+                decision.reason
+            );
+        }
+        let source = store.schedule_knowledge_cluster_model_proposals(
+            &form.query,
+            &provider,
+            form.model_name.as_deref(),
+            form.endpoint.as_deref(),
+            form.timeout_seconds,
+            max_source_cards,
+            max_clusters,
+            &cadence,
+            &status,
+        )?;
+        Ok(source.id)
+    })();
+
+    match result {
+        Ok(_) => redirect_to_ops_ui(
+            "/ops/ui?q=knowledge_model_clusters&notice=knowledge_model_clusters_scheduled",
+        ),
+        Err(error) => http_error_response(HttpError::bad_request(
+            "ops_action_failed",
+            error.to_string(),
+        )),
+    }
+}
+
+async fn http_ops_knowledge_model_clusters_enqueue(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = validate_http_mutation_request(&state, &headers, &uri) {
+        return http_error_response(error);
+    }
+    if body.len() as u64 > state.max_body_bytes {
+        return http_error_response(HttpError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        ));
+    }
+    let form = match parse_ops_knowledge_model_clusters_enqueue_form(&body) {
+        Ok(form) => form,
+        Err(error) => return http_error_response(error),
+    };
+    if let Err(error) =
+        validate_ops_csrf_and_idempotency(&state, &form.csrf_token, &form.idempotency_key)
+    {
+        return http_error_response(error);
+    }
+    let idempotency_scope = format!("knowledge-model-clusters-enqueue:{}", form.idempotency_key);
+    let inserted = match reserve_ops_idempotency(&state, idempotency_scope) {
+        Ok(inserted) => inserted,
+        Err(error) => return http_error_response(error),
+    };
+    if !inserted {
+        return redirect_to_ops_ui("/ops/ui?q=knowledge_cluster_model_propose&notice=duplicate");
+    }
+
+    let result = (|| -> Result<String> {
+        let store = Store::open(state.paths.clone())?;
+        let max_source_cards = form.max_source_cards.clamp(1, 80);
+        let max_clusters = form.max_clusters.clamp(1, 12);
+        let provider = form.model_provider.trim().to_ascii_lowercase();
+        let decision = store.policy_check(PolicyRequest {
+            action: "ops.knowledge_model_clusters.enqueue".to_string(),
+            package: Some("arcwell-cli".to_string()),
+            provider: Some(provider.clone()),
+            source: Some("ops-ui".to_string()),
+            channel: Some("http".to_string()),
+            subject: Some("local-operator".to_string()),
+            target: Some("knowledge_cluster_model_propose".to_string()),
+            projected_usd: None,
+            metadata: json!({
+                "query": form.query.clone(),
+                "model_provider": provider.clone(),
+                "model_name": form.model_name.clone(),
+                "endpoint_configured": form.endpoint.is_some(),
+                "timeout_seconds": form.timeout_seconds,
+                "max_source_cards": max_source_cards,
+                "max_clusters": max_clusters,
+                "idempotency_key": form.idempotency_key.clone(),
+            }),
+            untrusted_excerpt: None,
+        })?;
+        if !decision.allowed {
+            bail!(
+                "policy denied ops.knowledge_model_clusters.enqueue: {}",
+                decision.reason
+            );
+        }
+        let job = store.enqueue_knowledge_cluster_model_proposal_job(
+            &form.query,
+            &provider,
+            form.model_name.as_deref(),
+            form.endpoint.as_deref(),
+            form.timeout_seconds,
+            max_source_cards,
+            max_clusters,
+        )?;
+        Ok(job.id)
+    })();
+
+    match result {
+        Ok(id) => redirect_to_ops_ui(&format!(
+            "/ops/ui?detail=job:{}&notice=knowledge_model_clusters_enqueued",
+            url_component(&id)
+        )),
+        Err(error) => http_error_response(HttpError::bad_request(
+            "ops_action_failed",
+            error.to_string(),
+        )),
+    }
+}
+
+async fn http_ops_knowledge_model_write_schedule(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = validate_http_mutation_request(&state, &headers, &uri) {
+        return http_error_response(error);
+    }
+    if body.len() as u64 > state.max_body_bytes {
+        return http_error_response(HttpError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        ));
+    }
+    let form = match parse_ops_knowledge_model_write_schedule_form(&body) {
+        Ok(form) => form,
+        Err(error) => return http_error_response(error),
+    };
+    if let Err(error) =
+        validate_ops_csrf_and_idempotency(&state, &form.csrf_token, &form.idempotency_key)
+    {
+        return http_error_response(error);
+    }
+    let idempotency_scope = format!("knowledge-model-write-schedule:{}", form.idempotency_key);
+    let inserted = match reserve_ops_idempotency(&state, idempotency_scope) {
+        Ok(inserted) => inserted,
+        Err(error) => return http_error_response(error),
+    };
+    if !inserted {
+        return redirect_to_ops_ui("/ops/ui?q=knowledge_model_write&notice=duplicate");
+    }
+
+    let result = (|| -> Result<String> {
+        let store = Store::open(state.paths.clone())?;
+        let cadence = validate_ops_x_schedule_word(&form.cadence, "cadence")?;
+        let status = validate_ops_x_schedule_word(&form.status, "status")?;
+        let provider = form.model_provider.trim().to_ascii_lowercase();
+        let decision = store.policy_check(PolicyRequest {
+            action: "ops.knowledge_model_write.schedule".to_string(),
+            package: Some("arcwell-cli".to_string()),
+            provider: Some(provider.clone()),
+            source: Some("ops-ui".to_string()),
+            channel: Some("http".to_string()),
+            subject: Some("local-operator".to_string()),
+            target: Some(form.cluster_id.clone()),
+            projected_usd: None,
+            metadata: json!({
+                "cluster_id": form.cluster_id.clone(),
+                "model_provider": provider.clone(),
+                "model_name": form.model_name.clone(),
+                "endpoint_configured": form.endpoint.is_some(),
+                "timeout_seconds": form.timeout_seconds,
+                "create_digest": form.create_digest,
+                "cadence": cadence,
+                "status": status,
+                "idempotency_key": form.idempotency_key.clone(),
+            }),
+            untrusted_excerpt: None,
+        })?;
+        if !decision.allowed {
+            bail!(
+                "policy denied ops.knowledge_model_write.schedule: {}",
+                decision.reason
+            );
+        }
+        let source = store.schedule_knowledge_cluster_model_write(
+            &form.cluster_id,
+            &provider,
+            form.model_name.as_deref(),
+            form.endpoint.as_deref(),
+            form.timeout_seconds,
+            form.create_digest,
+            &cadence,
+            &status,
+        )?;
+        Ok(source.id)
+    })();
+
+    match result {
+        Ok(_) => redirect_to_ops_ui(
+            "/ops/ui?q=knowledge_model_write&notice=knowledge_model_write_scheduled",
+        ),
+        Err(error) => http_error_response(HttpError::bad_request(
+            "ops_action_failed",
+            error.to_string(),
+        )),
+    }
+}
+
+async fn http_ops_knowledge_model_write_enqueue(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = validate_http_mutation_request(&state, &headers, &uri) {
+        return http_error_response(error);
+    }
+    if body.len() as u64 > state.max_body_bytes {
+        return http_error_response(HttpError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        ));
+    }
+    let form = match parse_ops_knowledge_model_write_enqueue_form(&body) {
+        Ok(form) => form,
+        Err(error) => return http_error_response(error),
+    };
+    if let Err(error) =
+        validate_ops_csrf_and_idempotency(&state, &form.csrf_token, &form.idempotency_key)
+    {
+        return http_error_response(error);
+    }
+    let idempotency_scope = format!("knowledge-model-write-enqueue:{}", form.idempotency_key);
+    let inserted = match reserve_ops_idempotency(&state, idempotency_scope) {
+        Ok(inserted) => inserted,
+        Err(error) => return http_error_response(error),
+    };
+    if !inserted {
+        return redirect_to_ops_ui("/ops/ui?q=knowledge_cluster_model_write&notice=duplicate");
+    }
+
+    let result = (|| -> Result<String> {
+        let store = Store::open(state.paths.clone())?;
+        let provider = form.model_provider.trim().to_ascii_lowercase();
+        let decision = store.policy_check(PolicyRequest {
+            action: "ops.knowledge_model_write.enqueue".to_string(),
+            package: Some("arcwell-cli".to_string()),
+            provider: Some(provider.clone()),
+            source: Some("ops-ui".to_string()),
+            channel: Some("http".to_string()),
+            subject: Some("local-operator".to_string()),
+            target: Some(form.cluster_id.clone()),
+            projected_usd: None,
+            metadata: json!({
+                "cluster_id": form.cluster_id.clone(),
+                "model_provider": provider.clone(),
+                "model_name": form.model_name.clone(),
+                "endpoint_configured": form.endpoint.is_some(),
+                "timeout_seconds": form.timeout_seconds,
+                "create_digest": form.create_digest,
+                "idempotency_key": form.idempotency_key.clone(),
+            }),
+            untrusted_excerpt: None,
+        })?;
+        if !decision.allowed {
+            bail!(
+                "policy denied ops.knowledge_model_write.enqueue: {}",
+                decision.reason
+            );
+        }
+        let job = store.enqueue_knowledge_cluster_model_writer_job(
+            &form.cluster_id,
+            &provider,
+            form.model_name.as_deref(),
+            form.endpoint.as_deref(),
+            form.timeout_seconds,
+            form.create_digest,
+        )?;
+        Ok(job.id)
+    })();
+
+    match result {
+        Ok(id) => redirect_to_ops_ui(&format!(
+            "/ops/ui?detail=job:{}&notice=knowledge_model_write_enqueued",
             url_component(&id)
         )),
         Err(error) => http_error_response(HttpError::bad_request(
@@ -7592,6 +8024,130 @@ fn parse_ops_knowledge_backlog_enqueue_form(
     })
 }
 
+fn parse_ops_knowledge_model_clusters_schedule_form(
+    body: &[u8],
+) -> std::result::Result<OpsKnowledgeModelClustersScheduleForm, HttpError> {
+    let mut values = parse_ops_form_fields(
+        body,
+        &[
+            "csrf_token",
+            "idempotency_key",
+            "query",
+            "model_provider",
+            "model_name",
+            "endpoint",
+            "timeout_seconds",
+            "max_source_cards",
+            "max_clusters",
+            "cadence",
+            "status",
+        ],
+    )?;
+    Ok(OpsKnowledgeModelClustersScheduleForm {
+        csrf_token: take_required_form_string(&mut values, "csrf_token")?,
+        idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
+        query: take_required_form_string(&mut values, "query")?,
+        model_provider: take_required_form_string(&mut values, "model_provider")?,
+        model_name: take_optional_form_string(&mut values, "model_name"),
+        endpoint: take_optional_form_string(&mut values, "endpoint"),
+        timeout_seconds: take_optional_form_u64(&mut values, "timeout_seconds", 1, 600)?,
+        max_source_cards: take_required_form_usize(&mut values, "max_source_cards", 1, 80)?,
+        max_clusters: take_required_form_usize(&mut values, "max_clusters", 1, 12)?,
+        cadence: take_required_form_string(&mut values, "cadence")?,
+        status: take_required_form_string(&mut values, "status")?,
+    })
+}
+
+fn parse_ops_knowledge_model_clusters_enqueue_form(
+    body: &[u8],
+) -> std::result::Result<OpsKnowledgeModelClustersEnqueueForm, HttpError> {
+    let mut values = parse_ops_form_fields(
+        body,
+        &[
+            "csrf_token",
+            "idempotency_key",
+            "query",
+            "model_provider",
+            "model_name",
+            "endpoint",
+            "timeout_seconds",
+            "max_source_cards",
+            "max_clusters",
+        ],
+    )?;
+    Ok(OpsKnowledgeModelClustersEnqueueForm {
+        csrf_token: take_required_form_string(&mut values, "csrf_token")?,
+        idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
+        query: take_required_form_string(&mut values, "query")?,
+        model_provider: take_required_form_string(&mut values, "model_provider")?,
+        model_name: take_optional_form_string(&mut values, "model_name"),
+        endpoint: take_optional_form_string(&mut values, "endpoint"),
+        timeout_seconds: take_optional_form_u64(&mut values, "timeout_seconds", 1, 600)?,
+        max_source_cards: take_required_form_usize(&mut values, "max_source_cards", 1, 80)?,
+        max_clusters: take_required_form_usize(&mut values, "max_clusters", 1, 12)?,
+    })
+}
+
+fn parse_ops_knowledge_model_write_schedule_form(
+    body: &[u8],
+) -> std::result::Result<OpsKnowledgeModelWriteScheduleForm, HttpError> {
+    let mut values = parse_ops_form_fields(
+        body,
+        &[
+            "csrf_token",
+            "idempotency_key",
+            "cluster_id",
+            "model_provider",
+            "model_name",
+            "endpoint",
+            "timeout_seconds",
+            "create_digest",
+            "cadence",
+            "status",
+        ],
+    )?;
+    Ok(OpsKnowledgeModelWriteScheduleForm {
+        csrf_token: take_required_form_string(&mut values, "csrf_token")?,
+        idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
+        cluster_id: take_required_form_string(&mut values, "cluster_id")?,
+        model_provider: take_required_form_string(&mut values, "model_provider")?,
+        model_name: take_optional_form_string(&mut values, "model_name"),
+        endpoint: take_optional_form_string(&mut values, "endpoint"),
+        timeout_seconds: take_optional_form_u64(&mut values, "timeout_seconds", 1, 600)?,
+        create_digest: take_required_form_bool(&mut values, "create_digest")?,
+        cadence: take_required_form_string(&mut values, "cadence")?,
+        status: take_required_form_string(&mut values, "status")?,
+    })
+}
+
+fn parse_ops_knowledge_model_write_enqueue_form(
+    body: &[u8],
+) -> std::result::Result<OpsKnowledgeModelWriteEnqueueForm, HttpError> {
+    let mut values = parse_ops_form_fields(
+        body,
+        &[
+            "csrf_token",
+            "idempotency_key",
+            "cluster_id",
+            "model_provider",
+            "model_name",
+            "endpoint",
+            "timeout_seconds",
+            "create_digest",
+        ],
+    )?;
+    Ok(OpsKnowledgeModelWriteEnqueueForm {
+        csrf_token: take_required_form_string(&mut values, "csrf_token")?,
+        idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
+        cluster_id: take_required_form_string(&mut values, "cluster_id")?,
+        model_provider: take_required_form_string(&mut values, "model_provider")?,
+        model_name: take_optional_form_string(&mut values, "model_name"),
+        endpoint: take_optional_form_string(&mut values, "endpoint"),
+        timeout_seconds: take_optional_form_u64(&mut values, "timeout_seconds", 1, 600)?,
+        create_digest: take_required_form_bool(&mut values, "create_digest")?,
+    })
+}
+
 fn parse_ops_knowledge_due_clusters_form(
     body: &[u8],
 ) -> std::result::Result<OpsKnowledgeDueClustersForm, HttpError> {
@@ -7715,6 +8271,55 @@ fn take_required_form_usize(
         ));
     }
     Ok(parsed)
+}
+
+fn take_optional_form_string(
+    values: &mut BTreeMap<String, String>,
+    key: &'static str,
+) -> Option<String> {
+    values
+        .remove(key)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn take_optional_form_u64(
+    values: &mut BTreeMap<String, String>,
+    key: &'static str,
+    min: u64,
+    max: u64,
+) -> std::result::Result<Option<u64>, HttpError> {
+    let Some(value) = values.remove(key) else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let parsed = value.parse::<u64>().map_err(|_| {
+        HttpError::bad_request("bad_form", format!("form field {key} must be an integer"))
+    })?;
+    if parsed < min || parsed > max {
+        return Err(HttpError::bad_request(
+            "bad_form",
+            format!("form field {key} must be between {min} and {max}"),
+        ));
+    }
+    Ok(Some(parsed))
+}
+
+fn take_required_form_bool(
+    values: &mut BTreeMap<String, String>,
+    key: &'static str,
+) -> std::result::Result<bool, HttpError> {
+    match take_required_form_string(values, key)?.as_str() {
+        "true" | "1" | "yes" | "on" => Ok(true),
+        "false" | "0" | "no" | "off" => Ok(false),
+        _ => Err(HttpError::bad_request(
+            "bad_form",
+            format!("form field {key} must be true or false"),
+        )),
+    }
 }
 
 fn validate_ops_x_schedule_word(value: &str, label: &str) -> Result<String> {
@@ -9268,6 +9873,50 @@ fn render_knowledge_ops_control_panel(csrf_token: Option<&str>, controls_enabled
         html_escape(&ops_control_idempotency_key("knowledge-backlog-enqueue")),
     ));
     html.push_str(&format!(
+        r#"<form method="post" action="/ops/actions/knowledge/model-clusters/schedule">
+<input type="hidden" name="csrf_token" value="{}">
+<input type="hidden" name="idempotency_key" value="{}">
+<div><b>Schedule model clustering</b><p class="muted">Create or update a review-only model-cluster proposal watch source.</p></div>
+<div class="fields">
+<label>Query<input name="query" maxlength="200" value="agent infrastructure MCP"></label>
+<label>Provider<select name="model_provider"><option value="mock">mock</option><option value="openai">openai</option></select></label>
+<label>Model<input name="model_name" maxlength="80" placeholder="gpt-4.1-mini"></label>
+<label>Endpoint<input name="endpoint" maxlength="300" placeholder="optional"></label>
+<label>Timeout<input name="timeout_seconds" type="number" min="1" max="600" placeholder="optional"></label>
+<label>Max cards<input name="max_source_cards" type="number" min="1" max="80" value="24"></label>
+<label>Max clusters<input name="max_clusters" type="number" min="1" max="12" value="6"></label>
+<label>Status<select name="status"><option value="active">active</option><option value="paused">paused</option></select></label>
+<label>Cadence<input name="cadence" maxlength="40" value="warm"></label>
+</div>
+<button type="submit">Schedule models</button>
+</form>"#,
+        html_escape(csrf_token),
+        html_escape(&ops_control_idempotency_key(
+            "knowledge-model-clusters-schedule"
+        )),
+    ));
+    html.push_str(&format!(
+        r#"<form method="post" action="/ops/actions/knowledge/model-clusters/enqueue">
+<input type="hidden" name="csrf_token" value="{}">
+<input type="hidden" name="idempotency_key" value="{}">
+<div><b>Queue model clustering</b><p class="muted">Enqueue one review-only model-cluster proposal job.</p></div>
+<div class="fields">
+<label>Query<input name="query" maxlength="200" value="agent infrastructure MCP"></label>
+<label>Provider<select name="model_provider"><option value="mock">mock</option><option value="openai">openai</option></select></label>
+<label>Model<input name="model_name" maxlength="80" placeholder="gpt-4.1-mini"></label>
+<label>Endpoint<input name="endpoint" maxlength="300" placeholder="optional"></label>
+<label>Timeout<input name="timeout_seconds" type="number" min="1" max="600" placeholder="optional"></label>
+<label>Max cards<input name="max_source_cards" type="number" min="1" max="80" value="24"></label>
+<label>Max clusters<input name="max_clusters" type="number" min="1" max="12" value="6"></label>
+</div>
+<button type="submit">Queue models</button>
+</form>"#,
+        html_escape(csrf_token),
+        html_escape(&ops_control_idempotency_key(
+            "knowledge-model-clusters-enqueue"
+        )),
+    ));
+    html.push_str(&format!(
         r#"<form method="post" action="/ops/actions/knowledge/clusters/enqueue-editorial-decisions">
 <input type="hidden" name="csrf_token" value="{}">
 <input type="hidden" name="idempotency_key" value="{}">
@@ -9296,6 +9945,48 @@ fn render_knowledge_ops_control_panel(csrf_token: Option<&str>, controls_enabled
 </form>"#,
         html_escape(csrf_token),
         html_escape(&ops_control_idempotency_key("knowledge-cluster-promote")),
+    ));
+    html.push_str(&format!(
+        r#"<form method="post" action="/ops/actions/knowledge/model-writes/schedule">
+<input type="hidden" name="csrf_token" value="{}">
+<input type="hidden" name="idempotency_key" value="{}">
+<div><b>Schedule model writer</b><p class="muted">Create or update a cluster-scoped model writer watch source for a promoted cluster.</p></div>
+<div class="fields">
+<label>Cluster id<input name="cluster_id" maxlength="120" placeholder="kcl-..."></label>
+<label>Provider<select name="model_provider"><option value="mock">mock</option><option value="openai">openai</option></select></label>
+<label>Model<input name="model_name" maxlength="80" placeholder="gpt-4.1-mini"></label>
+<label>Endpoint<input name="endpoint" maxlength="300" placeholder="optional"></label>
+<label>Timeout<input name="timeout_seconds" type="number" min="1" max="600" placeholder="optional"></label>
+<label>Digest<select name="create_digest"><option value="true">create</option><option value="false">skip</option></select></label>
+<label>Status<select name="status"><option value="active">active</option><option value="paused">paused</option></select></label>
+<label>Cadence<input name="cadence" maxlength="40" value="warm"></label>
+</div>
+<button type="submit">Schedule writer</button>
+</form>"#,
+        html_escape(csrf_token),
+        html_escape(&ops_control_idempotency_key(
+            "knowledge-model-write-schedule"
+        )),
+    ));
+    html.push_str(&format!(
+        r#"<form method="post" action="/ops/actions/knowledge/model-writes/enqueue">
+<input type="hidden" name="csrf_token" value="{}">
+<input type="hidden" name="idempotency_key" value="{}">
+<div><b>Queue model writer</b><p class="muted">Enqueue one cluster-scoped model writer job for a promoted cluster.</p></div>
+<div class="fields">
+<label>Cluster id<input name="cluster_id" maxlength="120" placeholder="kcl-..."></label>
+<label>Provider<select name="model_provider"><option value="mock">mock</option><option value="openai">openai</option></select></label>
+<label>Model<input name="model_name" maxlength="80" placeholder="gpt-4.1-mini"></label>
+<label>Endpoint<input name="endpoint" maxlength="300" placeholder="optional"></label>
+<label>Timeout<input name="timeout_seconds" type="number" min="1" max="600" placeholder="optional"></label>
+<label>Digest<select name="create_digest"><option value="true">create</option><option value="false">skip</option></select></label>
+</div>
+<button type="submit">Queue writer</button>
+</form>"#,
+        html_escape(csrf_token),
+        html_escape(&ops_control_idempotency_key(
+            "knowledge-model-write-enqueue"
+        )),
     ));
     html.push_str(&format!(
         r#"<form method="post" action="/ops/actions/knowledge/investigations/enqueue-execution">
@@ -10124,6 +10815,12 @@ fn ops_notice_text(notice: &str) -> String {
             "Knowledge backlog clustering schedule updated.".to_string()
         }
         "knowledge_backlog_enqueued" => "Knowledge backlog clustering job queued.".to_string(),
+        "knowledge_model_clusters_scheduled" => {
+            "Knowledge model clustering schedule updated.".to_string()
+        }
+        "knowledge_model_clusters_enqueued" => "Knowledge model clustering job queued.".to_string(),
+        "knowledge_model_write_scheduled" => "Knowledge model writer schedule updated.".to_string(),
+        "knowledge_model_write_enqueued" => "Knowledge model writer job queued.".to_string(),
         "knowledge_cluster_expansions_enqueued" => {
             "Due knowledge cluster expansion jobs queued.".to_string()
         }
@@ -21219,6 +21916,28 @@ reason = "ops controls may enqueue local worker jobs"
             bad_form_json.pointer("/error/type").and_then(Value::as_str),
             Some("bad_form")
         );
+        let (bad_model_form_status, bad_model_form_json) = response_json(
+            http_ops_knowledge_model_clusters_enqueue(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-clusters/enqueue"),
+                Bytes::from(format!(
+                    "csrf_token={}&idempotency_key={}&query={}&model_provider=mock&model_name=&endpoint=&timeout_seconds=&max_source_cards=0&max_clusters=2",
+                    url_component(&state.csrf_token),
+                    url_component("ops-ui-knowledge-model-bad-form"),
+                    url_component("Ops due expansion evidence")
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(bad_model_form_status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            bad_model_form_json
+                .pointer("/error/type")
+                .and_then(Value::as_str),
+            Some("bad_form")
+        );
 
         let html = render_ops_ui_with_options(
             &store.ops_snapshot().unwrap(),
@@ -21318,6 +22037,34 @@ reason = "ops controls may enqueue local worker jobs"
             Some("ops_action_failed")
         );
         assert!(store.list_wiki_jobs().unwrap().is_empty());
+
+        let (denied_model_schedule_status, denied_model_schedule_json) = response_json(
+            http_ops_knowledge_model_clusters_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-clusters/schedule"),
+                Bytes::from(knowledge_model_clusters_schedule_body(
+                    &state.csrf_token,
+                    "ops-ui-knowledge-model-clusters-denied",
+                    "agent infrastructure MCP",
+                    "mock",
+                    24,
+                    6,
+                    "warm",
+                    "active",
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(denied_model_schedule_status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            denied_model_schedule_json
+                .pointer("/error/type")
+                .and_then(Value::as_str),
+            Some("ops_action_failed")
+        );
+        assert!(store.list_watch_sources().unwrap().is_empty());
 
         let (denied_investigation_status, denied_investigation_json) = response_json(
             http_ops_knowledge_investigation_execution_enqueue(
@@ -21442,6 +22189,18 @@ action = "ops.knowledge_backlog.enqueue"
 reason = "local operator may enqueue knowledge backlog clustering"
 
 [[rules]]
+id = "allow-ops-knowledge-model-clusters-schedule"
+effect = "allow"
+action = "ops.knowledge_model_clusters.schedule"
+reason = "local operator may schedule review-only model cluster proposals"
+
+[[rules]]
+id = "allow-ops-knowledge-model-clusters-enqueue"
+effect = "allow"
+action = "ops.knowledge_model_clusters.enqueue"
+reason = "local operator may enqueue review-only model cluster proposals"
+
+[[rules]]
 id = "allow-ops-knowledge-cluster-editorial"
 effect = "allow"
 action = "ops.knowledge_clusters.enqueue_editorial_decisions"
@@ -21452,6 +22211,18 @@ id = "allow-ops-knowledge-cluster-promote"
 effect = "allow"
 action = "ops.knowledge_clusters.promote"
 reason = "local operator may promote reviewed model-origin clusters"
+
+[[rules]]
+id = "allow-ops-knowledge-model-write-schedule"
+effect = "allow"
+action = "ops.knowledge_model_write.schedule"
+reason = "local operator may schedule promoted cluster model writer jobs"
+
+[[rules]]
+id = "allow-ops-knowledge-model-write-enqueue"
+effect = "allow"
+action = "ops.knowledge_model_write.enqueue"
+reason = "local operator may enqueue promoted cluster model writer jobs"
 
 [[rules]]
 id = "allow-core-knowledge-cluster-promote"
@@ -21543,6 +22314,106 @@ reason = "ops controls may enqueue local worker jobs"
             && job.input_json["max_source_cards"] == 88
             && job.input_json["min_group_size"] == 4
             && job.input_json["max_clusters"] == 10));
+
+        let model_schedule_body = knowledge_model_clusters_schedule_body(
+            &state.csrf_token,
+            "ops-ui-knowledge-model-clusters-schedule-allowed",
+            "Ops due expansion evidence",
+            "mock",
+            12,
+            3,
+            "warm",
+            "active",
+        );
+        let (model_schedule_status, _) = response_text(
+            http_ops_knowledge_model_clusters_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-clusters/schedule"),
+                Bytes::from(model_schedule_body.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(model_schedule_status, StatusCode::SEE_OTHER);
+        let sources = store.list_watch_sources().unwrap();
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.source_kind == "knowledge_model_clusters"
+                    && source.locator == "Ops due expansion evidence"
+                    && source.metadata["model_provider"] == "mock"
+                    && source.metadata["max_source_cards"] == 12
+                    && source.metadata["max_clusters"] == 3)
+        );
+        let decisions_after_model_schedule = store.list_policy_decisions(20).unwrap().len();
+        let (model_schedule_duplicate_status, _) = response_text(
+            http_ops_knowledge_model_clusters_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-clusters/schedule"),
+                Bytes::from(model_schedule_body),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(model_schedule_duplicate_status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            store.list_policy_decisions(20).unwrap().len(),
+            decisions_after_model_schedule
+        );
+
+        let model_enqueue_body = knowledge_model_clusters_enqueue_body(
+            &state.csrf_token,
+            "ops-ui-knowledge-model-clusters-enqueue-allowed",
+            "Ops due expansion evidence",
+            "mock",
+            8,
+            2,
+        );
+        let (model_enqueue_status, _) = response_text(
+            http_ops_knowledge_model_clusters_enqueue(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-clusters/enqueue"),
+                Bytes::from(model_enqueue_body.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(model_enqueue_status, StatusCode::SEE_OTHER);
+        assert!(store.list_wiki_jobs().unwrap().iter().any(|job| job.kind
+            == "knowledge_cluster_model_propose"
+            && job.input_json.get("query").and_then(Value::as_str)
+                == Some("Ops due expansion evidence")
+            && job.input_json["max_source_cards"] == 8
+            && job.input_json["max_clusters"] == 2));
+        let model_proposal_job_count = store
+            .list_wiki_jobs()
+            .unwrap()
+            .iter()
+            .filter(|job| job.kind == "knowledge_cluster_model_propose")
+            .count();
+        let (model_enqueue_duplicate_status, _) = response_text(
+            http_ops_knowledge_model_clusters_enqueue(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-clusters/enqueue"),
+                Bytes::from(model_enqueue_body),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(model_enqueue_duplicate_status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            store
+                .list_wiki_jobs()
+                .unwrap()
+                .iter()
+                .filter(|job| job.kind == "knowledge_cluster_model_propose")
+                .count(),
+            model_proposal_job_count
+        );
 
         let (cluster_enqueue_status, _) = response_text(
             http_ops_knowledge_cluster_editorial_decisions_enqueue(
@@ -21671,6 +22542,102 @@ reason = "ops controls may enqueue local worker jobs"
             editorial_count_after_promote
         );
 
+        let model_write_schedule_body = knowledge_model_write_schedule_body(
+            &state.csrf_token,
+            "ops-ui-knowledge-model-write-schedule-allowed",
+            &model_cluster.id,
+            "mock",
+            true,
+            "warm",
+            "active",
+        );
+        let (model_write_schedule_status, _) = response_text(
+            http_ops_knowledge_model_write_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-writes/schedule"),
+                Bytes::from(model_write_schedule_body.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(model_write_schedule_status, StatusCode::SEE_OTHER);
+        let sources = store.list_watch_sources().unwrap();
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.source_kind == "knowledge_model_write"
+                    && source.locator == model_cluster.id
+                    && source.metadata["model_provider"] == "mock"
+                    && source.metadata["create_digest"] == true)
+        );
+        let decisions_after_model_write_schedule = store.list_policy_decisions(30).unwrap().len();
+        let (model_write_schedule_duplicate_status, _) = response_text(
+            http_ops_knowledge_model_write_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-writes/schedule"),
+                Bytes::from(model_write_schedule_body),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(model_write_schedule_duplicate_status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            store.list_policy_decisions(30).unwrap().len(),
+            decisions_after_model_write_schedule
+        );
+
+        let model_write_enqueue_body = knowledge_model_write_enqueue_body(
+            &state.csrf_token,
+            "ops-ui-knowledge-model-write-enqueue-allowed",
+            &model_cluster.id,
+            "mock",
+            false,
+        );
+        let (model_write_enqueue_status, _) = response_text(
+            http_ops_knowledge_model_write_enqueue(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-writes/enqueue"),
+                Bytes::from(model_write_enqueue_body.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(model_write_enqueue_status, StatusCode::SEE_OTHER);
+        assert!(store.list_wiki_jobs().unwrap().iter().any(|job| job.kind
+            == "knowledge_cluster_model_write"
+            && job.input_json.get("cluster_id").and_then(Value::as_str)
+                == Some(model_cluster.id.as_str())
+            && job.input_json["create_digest"] == false));
+        let model_write_job_count = store
+            .list_wiki_jobs()
+            .unwrap()
+            .iter()
+            .filter(|job| job.kind == "knowledge_cluster_model_write")
+            .count();
+        let (model_write_enqueue_duplicate_status, _) = response_text(
+            http_ops_knowledge_model_write_enqueue(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-writes/enqueue"),
+                Bytes::from(model_write_enqueue_body),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(model_write_enqueue_duplicate_status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            store
+                .list_wiki_jobs()
+                .unwrap()
+                .iter()
+                .filter(|job| job.kind == "knowledge_cluster_model_write")
+                .count(),
+            model_write_job_count
+        );
+
         store
             .create_knowledge_cluster_investigation(&projected.cluster.id)
             .unwrap();
@@ -21758,12 +22725,20 @@ reason = "ops controls may enqueue local worker jobs"
         assert!(html.contains("Knowledge Controls"));
         assert!(html.contains("/ops/actions/knowledge/backlog/schedule"));
         assert!(html.contains("/ops/actions/knowledge/backlog/enqueue"));
+        assert!(html.contains("/ops/actions/knowledge/model-clusters/schedule"));
+        assert!(html.contains("/ops/actions/knowledge/model-clusters/enqueue"));
         assert!(html.contains("/ops/actions/knowledge/clusters/enqueue-editorial-decisions"));
         assert!(!html.contains("/ops/actions/knowledge/clusters/enqueue-expansions"));
         assert!(html.contains("/ops/actions/knowledge/clusters/promote"));
+        assert!(html.contains("/ops/actions/knowledge/model-writes/schedule"));
+        assert!(html.contains("/ops/actions/knowledge/model-writes/enqueue"));
         assert!(html.contains("/ops/actions/knowledge/investigations/enqueue-execution"));
+        assert!(html.contains("Schedule model clustering"));
+        assert!(html.contains("Queue model clustering"));
         assert!(html.contains("Queue cluster editorial review"));
         assert!(html.contains("Promote model cluster"));
+        assert!(html.contains("Schedule model writer"));
+        assert!(html.contains("Queue model writer"));
         assert!(html.contains("knowledge_backlog"));
     }
 
@@ -22051,6 +23026,86 @@ reason = "local operator may dead-letter reviewed edge events"
             max_source_cards,
             min_group_size,
             max_clusters
+        )
+    }
+
+    fn knowledge_model_clusters_schedule_body(
+        csrf_token: &str,
+        idempotency_key: &str,
+        query: &str,
+        provider: &str,
+        max_source_cards: usize,
+        max_clusters: usize,
+        cadence: &str,
+        status: &str,
+    ) -> String {
+        format!(
+            "csrf_token={}&idempotency_key={}&query={}&model_provider={}&model_name=&endpoint=&timeout_seconds=&max_source_cards={}&max_clusters={}&cadence={}&status={}",
+            url_component(csrf_token),
+            url_component(idempotency_key),
+            url_component(query),
+            url_component(provider),
+            max_source_cards,
+            max_clusters,
+            url_component(cadence),
+            url_component(status)
+        )
+    }
+
+    fn knowledge_model_clusters_enqueue_body(
+        csrf_token: &str,
+        idempotency_key: &str,
+        query: &str,
+        provider: &str,
+        max_source_cards: usize,
+        max_clusters: usize,
+    ) -> String {
+        format!(
+            "csrf_token={}&idempotency_key={}&query={}&model_provider={}&model_name=&endpoint=&timeout_seconds=&max_source_cards={}&max_clusters={}",
+            url_component(csrf_token),
+            url_component(idempotency_key),
+            url_component(query),
+            url_component(provider),
+            max_source_cards,
+            max_clusters
+        )
+    }
+
+    fn knowledge_model_write_schedule_body(
+        csrf_token: &str,
+        idempotency_key: &str,
+        cluster_id: &str,
+        provider: &str,
+        create_digest: bool,
+        cadence: &str,
+        status: &str,
+    ) -> String {
+        format!(
+            "csrf_token={}&idempotency_key={}&cluster_id={}&model_provider={}&model_name=&endpoint=&timeout_seconds=&create_digest={}&cadence={}&status={}",
+            url_component(csrf_token),
+            url_component(idempotency_key),
+            url_component(cluster_id),
+            url_component(provider),
+            create_digest,
+            url_component(cadence),
+            url_component(status)
+        )
+    }
+
+    fn knowledge_model_write_enqueue_body(
+        csrf_token: &str,
+        idempotency_key: &str,
+        cluster_id: &str,
+        provider: &str,
+        create_digest: bool,
+    ) -> String {
+        format!(
+            "csrf_token={}&idempotency_key={}&cluster_id={}&model_provider={}&model_name=&endpoint=&timeout_seconds=&create_digest={}",
+            url_component(csrf_token),
+            url_component(idempotency_key),
+            url_component(cluster_id),
+            url_component(provider),
+            create_digest
         )
     }
 

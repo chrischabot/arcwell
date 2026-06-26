@@ -174,6 +174,14 @@ Current implemented bridge slice:
   path runs the writer/editor decision loop before any wiki/report/digest
   expansion; direct expansion enqueue remains a lower-level repair path, not
   the primary UI control.
+- Authenticated `/ops/ui` Knowledge Controls can schedule or enqueue
+  review-only model-cluster proposals and promoted-cluster model-writer jobs.
+  These HTTP actions are CSRF/idempotency protected and policy-gated through
+  `ops.knowledge_model_clusters.schedule`,
+  `ops.knowledge_model_clusters.enqueue`,
+  `ops.knowledge_model_write.schedule`, and
+  `ops.knowledge_model_write.enqueue`; they reuse the existing worker paths and
+  do not promote model-cluster quality, wiki writes, or delivery readiness.
 - Source-card-gated model cluster writing through
   `arcwell knowledge write-cluster-model`,
   `arcwell knowledge enqueue-cluster-model-write`, and the resident

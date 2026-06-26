@@ -409,8 +409,14 @@ PR, implementation note, or final report:
       The authenticated `/ops/ui` Knowledge Controls now also expose a
       CSRF/idempotency-protected model-cluster promotion action, double-gated by
       `ops.knowledge_clusters.promote` and core `knowledge_cluster.promote`
-      policy. This is an operator control for the promotion seam, not the full
-      broad repair/control surface.
+      policy. The same control panel now has CSRF/idempotency-protected,
+      policy-gated schedule/enqueue actions for review-only model-cluster
+      proposal jobs and promoted-cluster model-writer jobs; severe HTTP tests
+      prove denied policy, durable watch-source/job writes, duplicate
+      idempotency suppression, and rendered routes. This is an operator
+      control surface for already-scoped model clustering/writing paths, not
+      broad production-corpus clustering quality or a full repair/control
+      surface.
       X provider fetches now share a local-proof bearer freshness path: recent
       search, bookmark import, following/watch rebuild, and watch-source
       monitor refresh an expired stored `X_BEARER_TOKEN` through stored
