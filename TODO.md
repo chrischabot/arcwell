@@ -269,9 +269,17 @@ PR, implementation note, or final report:
       when `worker.enqueue` policy allows it, while also proving fail-closed
       policy denial and replay suppression. This is still copied-home
       foreground recurrence, not wall-clock resident-service proof.
+      X provider fetches now share a local-proof bearer freshness path: recent
+      search, bookmark import, following/watch rebuild, and watch-source
+      monitor refresh an expired stored `X_BEARER_TOKEN` through stored
+      `X_REFRESH_TOKEN`/`X_CLIENT_ID` before provider fetches. Severe tests
+      prove recent-search and bookmark refresh success, refresh failure
+      redaction without cursor advancement, old secret preservation on refresh
+      failure, and provider-network policy denial before any auto-refresh or
+      secret mutation.
       Remaining work is broad live fresh primary-source acquisition,
-      production-data semantic/model clustering, X credential-refresh live
-      proof, wall-clock scheduled source recurrence, external delivery
+      production-data semantic/model clustering, fresh X credential-refresh
+      live proof, wall-clock scheduled source recurrence, external delivery
       recurrence, richer model-backed writer/editor synthesis, and broader ops
       UI repair controls.
 - [ ] Complete the Arcwell X anti-mirage plan in
@@ -302,10 +310,10 @@ PR, implementation note, or final report:
       overlay -> durable multi-cluster buckets -> editorial wiki quality gate ->
       editorial-created digest candidate -> reviewed scheduled delivery ->
       duplicate suppression and ops visibility. Remaining work before calling
-      this operationally done: refresh/reauthorize X OAuth credentials for
-      current live provider proof, semantic/model-assisted topic clustering,
-      scheduled real external recurrence proof over wall-clock time, and
-      multi-day monitoring.
+      this operationally done: rerun live X smoke against current credentials
+      after the locally proven shared auto-refresh path, semantic/model-assisted
+      topic clustering, scheduled real external recurrence proof over wall-clock
+      time, and multi-day monitoring.
 - [ ] Expand canonical X storage beyond the first local-search stage. Local
       JSON/X API imports now write conversation/reply/quote/retweet fields and
       `x_tweet_refs`; local archive import now records an `import_archive`
@@ -430,8 +438,9 @@ PR, implementation note, or final report:
 - [ ] Extend X worker/scheduled sync beyond implemented watch-source monitor
       jobs and locally proven `x_bookmarks` scheduled import, with
       heartbeat-specific health, bounded retries/dead letters, explicit config
-      for any default schedule, live cron/callback proof, current live X OAuth
-      credentials, wall-clock external recurrence proof, and delivery
+      for any default schedule, live cron/callback proof, fresh live X smoke
+      using current OAuth refresh/client credentials, wall-clock external
+      recurrence proof, and delivery
       integration.
 - [ ] Add X performance/stress fixtures: large archive, many duplicate tweets,
       large follow graph, FTS rebuild over a large corpus, export/import over
@@ -902,6 +911,10 @@ PR, implementation note, or final report:
       without leaking secret values.
 - [ ] Add provider-side revocation/rotation helpers where provider APIs make
       that safe and useful.
+- [ ] Add a live X credential probe that exercises the shared stored-token
+      auto-refresh path, records redacted source-health/sync-run state, and
+      distinguishes missing refresh material, provider revocation, scope
+      mismatch, quota/tier denial, and successful current-provider fetch.
 - [ ] Add scheduled credential rotation reminders and stale-scope warnings.
 - [ ] Add ops UI burn-down and override controls for budgets only after
       idempotency, policy, and audit behavior are tested.

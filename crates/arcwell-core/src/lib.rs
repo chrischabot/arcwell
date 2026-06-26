@@ -15412,7 +15412,7 @@ impl Store {
         let mut previous_cursor_for_run: Option<String> = None;
         let mut new_cursor_for_run: Option<String> = None;
         let result = (|| -> Result<XImportReport> {
-            let token = self.x_bearer_token()?;
+            let token = self.x_bearer_token_for_endpoint(endpoint)?;
             let previous_cursor = self.get_cursor(&cursor_key)?.map(|cursor| cursor.value);
             previous_cursor_for_run = previous_cursor.clone();
             let base = validated_x_api_base(endpoint)?;
@@ -15571,7 +15571,7 @@ impl Store {
         let started_at = now();
         let mut account_id_for_run: Option<String> = None;
         let result = (|| -> Result<XImportReport> {
-            let token = self.x_bearer_token()?;
+            let token = self.x_bearer_token_for_endpoint(endpoint)?;
             let base = validated_x_api_base(endpoint)?;
             let user_id = self.x_user_id(&base, &token)?;
             account_id_for_run = Some(user_id.clone());
@@ -18468,7 +18468,7 @@ impl Store {
             estimated_x_following_cost(max_users),
             "X following watch import",
         )?;
-        let token = self.x_bearer_token()?;
+        let token = self.x_bearer_token_for_endpoint(endpoint)?;
         let base = validated_x_api_base(endpoint)?;
         let me_url = base.join("/2/users/me?user.fields=username,name")?;
         let me = fetch_x_json(me_url.as_str(), Some(&token))?;
@@ -18583,7 +18583,7 @@ impl Store {
             estimated_x_definitive_watch_cost(max_bookmarks, max_recent_follows),
             "X definitive watch rebuild",
         )?;
-        let token = self.x_bearer_token()?;
+        let token = self.x_bearer_token_for_endpoint(endpoint)?;
         let base = validated_x_api_base(endpoint)?;
         let user_id = self.x_user_id(&base, &token)?;
         let bookmark_days = bookmark_days.clamp(1, 36_500);
@@ -18833,7 +18833,7 @@ impl Store {
         )?;
 
         let monitor_started_at = now();
-        let token = match self.x_bearer_token() {
+        let token = match self.x_bearer_token_for_endpoint(endpoint) {
             Ok(token) => token,
             Err(error) => {
                 let completed_at = now();
@@ -19132,14 +19132,66 @@ impl Store {
         })
     }
 
-    fn x_bearer_token(&self) -> Result<String> {
+    fn x_bearer_token_for_endpoint(&self, endpoint: &str) -> Result<String> {
         if let Ok(token) = std::env::var("X_BEARER_TOKEN")
             && !token.trim().is_empty()
         {
             return Ok(token);
         }
+        match self.get_usable_secret_value("X_BEARER_TOKEN") {
+            Ok(Some(token)) => Ok(token),
+            Ok(None) => {
+                if self.get_usable_secret_value("X_REFRESH_TOKEN")?.is_some() {
+                    self.refresh_x_bearer_token_for_endpoint(endpoint)
+                } else {
+                    bail!("X_BEARER_TOKEN is required")
+                }
+            }
+            Err(error) => {
+                let error_text = error.to_string();
+                if error_text.contains("X_BEARER_TOKEN") && error_text.contains("expired") {
+                    if self.get_usable_secret_value("X_REFRESH_TOKEN")?.is_some() {
+                        self.refresh_x_bearer_token_for_endpoint(endpoint).map_err(
+                            |refresh_error| {
+                                anyhow::anyhow!(
+                                    "refreshing expired X_BEARER_TOKEN failed: {}",
+                                    redact_secret_like_text(&refresh_error.to_string())
+                                )
+                            },
+                        )
+                    } else {
+                        Err(error)
+                    }
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
+
+    fn refresh_x_bearer_token_for_endpoint(&self, endpoint: &str) -> Result<String> {
+        let client_id = self
+            .resolve_x_client_id()?
+            .context("X_CLIENT_ID is required to refresh X_BEARER_TOKEN")?;
+        self.x_oauth_refresh_with_base(&client_id, None, endpoint)?;
         self.get_usable_secret_value("X_BEARER_TOKEN")?
-            .context("X_BEARER_TOKEN is required")
+            .context("X OAuth refresh did not store a usable X_BEARER_TOKEN")
+    }
+
+    fn resolve_x_client_id(&self) -> Result<Option<String>> {
+        let client_id = if let Ok(value) = std::env::var("X_CLIENT_ID")
+            && !value.trim().is_empty()
+        {
+            Some(value.trim().to_string())
+        } else {
+            self.get_usable_secret_value("X_CLIENT_ID")?
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        if let Some(client_id) = &client_id {
+            validate_key(client_id)?;
+        }
+        Ok(client_id)
     }
 
     fn x_user_id(&self, base: &Url, token: &str) -> Result<String> {
@@ -54254,6 +54306,11 @@ fn x_id_is_newer(candidate: &str, previous: &str) -> bool {
 fn x_failure_should_release_budget(error: &anyhow::Error) -> bool {
     let text = error.to_string().to_ascii_lowercase();
     text.contains("x_bearer_token is required")
+        || text.contains("x_refresh_token is required")
+        || text.contains("x_client_id is required")
+        || text.contains("refreshing expired x_bearer_token failed")
+        || text.contains("budget blocked x oauth refresh")
+        || text.contains("policy denied provider.oauth")
         || text.contains("expired")
         || text.contains("token rejected")
         || text.contains("rate limit")
@@ -63003,6 +63060,80 @@ reason = "X recent search is disabled for this test policy"
         let decisions = store.list_policy_decisions(10).unwrap();
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].effect, "deny");
+        assert_eq!(
+            decisions[0].matched_rule_id.as_deref(),
+            Some("deny-x-recent")
+        );
+    }
+
+    #[test]
+    fn severe_policy_denied_x_network_blocks_auto_refresh_and_secret_mutation() {
+        // CLAIM: X network policy denial is evaluated before automatic OAuth refresh or secret mutation.
+        // PRECONDITIONS: Stored X credentials are refreshable, but provider.network for recent search is denied.
+        // POSTCONDITIONS: no OAuth request/cost occurs, bearer and refresh tokens remain unchanged, and no cursor/items are written.
+        // ORACLE: policy decision ledger plus secret/cost/cursor/item state.
+        // SEVERITY: Severe because automatic credential repair must not bypass explicit provider-network policy controls.
+        clear_x_bearer_env();
+        let store = test_store("policy-deny-x-auto-refresh");
+        let expired_token = format!("expired-policy-{}", "p".repeat(48));
+        let refresh_token = format!("refresh-policy-{}", "q".repeat(48));
+        let expired_at = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+        store
+            .set_secret_value_with_metadata(
+                "X_BEARER_TOKEN",
+                &expired_token,
+                "x",
+                Some("x"),
+                Some(&expired_at),
+            )
+            .unwrap();
+        store
+            .set_secret_value("X_REFRESH_TOKEN", &refresh_token, "x")
+            .unwrap();
+        store
+            .set_secret_value("X_CLIENT_ID", "client-id", "x")
+            .unwrap();
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "deny-x-recent"
+effect = "deny"
+action = "provider.network"
+provider = "x"
+source = "x_recent_search"
+reason = "X recent search is disabled before credential refresh"
+"#,
+        );
+
+        let error = store
+            .x_recent_search_with_base("agents", 10, "https://api.x.com")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("policy denied provider.network"), "{error}");
+        assert!(!error.contains(&expired_token), "{error}");
+        assert!(!error.contains(&refresh_token), "{error}");
+        assert_eq!(
+            store.get_secret_value("X_BEARER_TOKEN").unwrap().as_deref(),
+            Some(expired_token.as_str())
+        );
+        assert_eq!(
+            store
+                .get_secret_value("X_REFRESH_TOKEN")
+                .unwrap()
+                .as_deref(),
+            Some(refresh_token.as_str())
+        );
+        assert!(
+            store
+                .get_cursor("x:recent-search:agents")
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.list_x_items(None).unwrap().is_empty());
+        assert_eq!(store.cost_summary().unwrap().2, 0);
+        let decisions = store.list_policy_decisions(10).unwrap();
+        assert_eq!(decisions.len(), 1);
         assert_eq!(
             decisions[0].matched_rule_id.as_deref(),
             Some("deny-x-recent")
@@ -78849,6 +78980,106 @@ reason = "test denies X link expansion"
     }
 
     #[test]
+    fn severe_x_recent_search_refreshes_expired_bearer_before_provider_fetch() {
+        // CLAIM: X provider fetches can recover from an expired stored bearer by refreshing OAuth first.
+        // PRECONDITIONS: The environment has no bearer override, SQLite has an expired bearer, a refresh token, and a client id.
+        // POSTCONDITIONS: refresh happens before recent-search fetch, the fresh bearer is stored/used, and cursor advances only after import.
+        // ORACLE: local endpoint request order/Authorization header plus durable token, item, cursor, and sync-run state.
+        // SEVERITY: Severe because scheduled X ingestion otherwise looks configured while every live fetch fails on stale credentials.
+        clear_x_bearer_env();
+        let store = test_store("x-recent-refresh-expired-bearer");
+        let expired_token = format!("expired-{}", "a".repeat(48));
+        let expired_at = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+        store
+            .set_secret_value_with_metadata(
+                "X_BEARER_TOKEN",
+                &expired_token,
+                "x",
+                Some("x"),
+                Some(&expired_at),
+            )
+            .unwrap();
+        store
+            .set_secret_value("X_REFRESH_TOKEN", "refresh-token", "x")
+            .unwrap();
+        store
+            .set_secret_value("X_CLIENT_ID", "client-id", "x")
+            .unwrap();
+        let search_body = r#"{
+          "data": [
+            {
+              "id": "220",
+              "author_id": "u1",
+              "text": "Fresh search after OAuth refresh.",
+              "created_at": "2026-06-20T00:00:00Z"
+            }
+          ],
+          "includes": { "users": [{ "id": "u1", "username": "openai", "name": "OpenAI" }] },
+          "meta": { "newest_id": "220" }
+        }"#;
+        let (base, requests) = mock_recording_sequence_server(vec![
+            (
+                "200 OK",
+                "",
+                r#"{"token_type":"bearer","expires_in":7200,"access_token":"fresh-access-token","refresh_token":"fresh-refresh-token"}"#,
+                "application/json",
+            ),
+            ("200 OK", "", search_body, "application/json"),
+        ]);
+
+        let report = store
+            .x_recent_search_with_base("agents", 10, &base)
+            .unwrap();
+        assert_eq!(report.imported, 1);
+        assert_eq!(
+            store.get_secret_value("X_BEARER_TOKEN").unwrap().as_deref(),
+            Some("fresh-access-token")
+        );
+        assert_eq!(
+            store
+                .get_secret_value("X_REFRESH_TOKEN")
+                .unwrap()
+                .as_deref(),
+            Some("fresh-refresh-token")
+        );
+        assert_eq!(
+            store
+                .get_cursor("x:recent-search:agents")
+                .unwrap()
+                .unwrap()
+                .value,
+            "220"
+        );
+        let captured = requests.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert!(
+            captured[0].contains("POST /2/oauth2/token "),
+            "{}",
+            captured[0]
+        );
+        assert!(
+            captured[0].contains("grant_type=refresh_token"),
+            "{}",
+            captured[0]
+        );
+        assert!(
+            captured[1].contains("GET /2/tweets/search/recent?"),
+            "{}",
+            captured[1]
+        );
+        assert!(
+            captured[1].contains("authorization: Bearer fresh-access-token")
+                || captured[1].contains("Authorization: Bearer fresh-access-token"),
+            "{}",
+            captured[1]
+        );
+        assert!(!captured[1].contains(&expired_token), "{}", captured[1]);
+        let stats = store.x_stats().unwrap();
+        assert_eq!(stats.sync_runs_by_status.get("completed").copied(), Some(1));
+        assert_eq!(stats.latest_sync_runs[0].new_cursor.as_deref(), Some("220"));
+    }
+
+    #[test]
     fn x_import_bookmarks_preserves_body_metrics_and_source() {
         let store = test_store("x-bookmark-import");
         store
@@ -78970,6 +79201,108 @@ reason = "test denies X link expansion"
         assert_eq!(stats.latest_sync_runs[0].transport, "x_api");
         assert_eq!(stats.latest_sync_runs[0].account_id.as_deref(), Some("me"));
         assert_eq!(stats.latest_sync_runs[0].seen, 2);
+        assert_eq!(stats.latest_sync_runs[0].inserted, 1);
+    }
+
+    #[test]
+    fn severe_x_import_bookmarks_refreshes_expired_bearer_before_pagination() {
+        // CLAIM: Bookmark import refreshes stale local X credentials before user-context fetches and pagination.
+        // PRECONDITIONS: The stored bearer is expired and refresh/client credentials are stored locally.
+        // POSTCONDITIONS: OAuth refresh precedes /users/me and bookmark page fetches; imported rows/source cards are durable.
+        // ORACLE: captured HTTP request order, Authorization headers, token store, import report, and sync-run metadata.
+        // SEVERITY: Severe because bookmarks are critical infrastructure and a stale bearer must not masquerade as provider emptiness.
+        clear_x_bearer_env();
+        let store = test_store("x-bookmarks-refresh-expired-bearer");
+        let expired_token = format!("expired-bookmarks-{}", "b".repeat(48));
+        let expired_at = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+        store
+            .set_secret_value_with_metadata(
+                "X_BEARER_TOKEN",
+                &expired_token,
+                "x",
+                Some("x"),
+                Some(&expired_at),
+            )
+            .unwrap();
+        store
+            .set_secret_value("X_REFRESH_TOKEN", "refresh-token", "x")
+            .unwrap();
+        store
+            .set_secret_value("X_CLIENT_ID", "client-id", "x")
+            .unwrap();
+        let recent = (Utc::now() - chrono::Duration::days(2))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let bookmarks_body = Box::leak(
+            format!(
+                r#"{{
+                  "data": [
+                    {{
+                      "id": "brefresh1",
+                      "author_id": "u1",
+                      "text": "Bookmark fetched after OAuth refresh.",
+                      "created_at": "{recent}"
+                    }}
+                  ],
+                  "includes": {{
+                    "users": [
+                      {{ "id": "u1", "username": "openai", "name": "OpenAI" }}
+                    ]
+                  }},
+                  "meta": {{}}
+                }}"#
+            )
+            .into_boxed_str(),
+        );
+        let (base, requests) = mock_recording_sequence_server(vec![
+            (
+                "200 OK",
+                "",
+                r#"{"token_type":"bearer","expires_in":7200,"access_token":"fresh-bookmark-access","refresh_token":"fresh-bookmark-refresh"}"#,
+                "application/json",
+            ),
+            (
+                "200 OK",
+                "",
+                r#"{"data":{"id":"me","username":"me","name":"Me"}}"#,
+                "application/json",
+            ),
+            ("200 OK", "", bookmarks_body, "application/json"),
+        ]);
+
+        let report = store.x_import_bookmarks_with_base(92, 10, &base).unwrap();
+        assert_eq!(report.seen, 1);
+        assert_eq!(report.imported, 1);
+        assert_eq!(report.pages_fetched, Some(1));
+        assert_eq!(report.exhausted, Some(true));
+        assert_eq!(report.source_card_projections, Some(1));
+        assert_eq!(
+            store.get_secret_value("X_BEARER_TOKEN").unwrap().as_deref(),
+            Some("fresh-bookmark-access")
+        );
+        let captured = requests.lock().unwrap();
+        assert_eq!(captured.len(), 3);
+        assert!(
+            captured[0].contains("POST /2/oauth2/token "),
+            "{}",
+            captured[0]
+        );
+        assert!(captured[1].contains("GET /2/users/me?"), "{}", captured[1]);
+        assert!(
+            captured[2].contains("GET /2/users/me/bookmarks?"),
+            "{}",
+            captured[2]
+        );
+        for request in captured.iter().skip(1) {
+            assert!(
+                request.contains("authorization: Bearer fresh-bookmark-access")
+                    || request.contains("Authorization: Bearer fresh-bookmark-access"),
+                "{request}"
+            );
+            assert!(!request.contains(&expired_token), "{request}");
+        }
+        let stats = store.x_stats().unwrap();
+        assert_eq!(stats.latest_sync_runs[0].stream, "bookmarks");
+        assert_eq!(stats.latest_sync_runs[0].status, "completed");
         assert_eq!(stats.latest_sync_runs[0].inserted, 1);
     }
 
@@ -79563,6 +79896,102 @@ reason = "test denies X link expansion"
                 .unwrap()
                 .as_deref(),
             Some(refresh_token.as_str())
+        );
+    }
+
+    #[test]
+    fn severe_x_provider_auto_refresh_failure_is_redacted_and_preserves_cursor() {
+        // CLAIM: Automatic pre-fetch X OAuth refresh failures fail closed without leaking secrets or advancing provider cursors.
+        // PRECONDITIONS: X recent search has an expired bearer and a refresh token, but the token endpoint rejects refresh.
+        // POSTCONDITIONS: no search request is made, the old cursor/items remain absent, and the failed sync is operator-visible.
+        // ORACLE: captured request count, durable secret/cursor/item/sync-run state, and redacted error text.
+        // SEVERITY: Severe because a broken refresh token is a normal production outage and must not corrupt ingestion state.
+        clear_x_bearer_env();
+        let store = test_store("x-auto-refresh-failure-redacted");
+        let expired_token = format!("expired-auto-{}", "c".repeat(48));
+        let refresh_token = format!("refresh-auto-{}", "d".repeat(48));
+        let expired_at = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+        store
+            .set_secret_value_with_metadata(
+                "X_BEARER_TOKEN",
+                &expired_token,
+                "x",
+                Some("x"),
+                Some(&expired_at),
+            )
+            .unwrap();
+        store
+            .set_secret_value("X_REFRESH_TOKEN", &refresh_token, "x")
+            .unwrap();
+        store
+            .set_secret_value("X_CLIENT_ID", "client-id", "x")
+            .unwrap();
+        let body = Box::leak(
+            format!(
+                r#"{{"error":"invalid_grant","detail":"refresh_token={refresh_token} expired"}}"#
+            )
+            .into_boxed_str(),
+        );
+        let (base, requests) = mock_recording_sequence_server(vec![(
+            "401 Unauthorized",
+            "",
+            body,
+            "application/json",
+        )]);
+
+        let error = store
+            .x_recent_search_with_base("agents", 10, &base)
+            .expect_err("failed OAuth refresh must stop the provider fetch")
+            .to_string();
+        assert!(
+            error.contains("refreshing expired X_BEARER_TOKEN failed"),
+            "{error}"
+        );
+        assert!(error.contains("X OAuth token endpoint failed"), "{error}");
+        assert!(!error.contains(&expired_token), "{error}");
+        assert!(!error.contains(&refresh_token), "{error}");
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        assert!(
+            store
+                .get_cursor("x:recent-search:agents")
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.list_x_items(None).unwrap().is_empty());
+        assert_eq!(
+            store.get_secret_value("X_BEARER_TOKEN").unwrap().as_deref(),
+            Some(expired_token.as_str())
+        );
+        assert_eq!(
+            store
+                .get_secret_value("X_REFRESH_TOKEN")
+                .unwrap()
+                .as_deref(),
+            Some(refresh_token.as_str())
+        );
+        let health = store
+            .get_source_health("x:recent-search:agents")
+            .unwrap()
+            .expect("failed auto-refresh must be visible in source health");
+        let health_json = serde_json::to_string(&health).unwrap();
+        assert_eq!(health.status, "failed");
+        assert!(health_json.contains("X_BEARER_TOKEN"), "{health_json}");
+        assert!(!health_json.contains(&expired_token), "{health_json}");
+        assert!(!health_json.contains(&refresh_token), "{health_json}");
+        let stats = store.x_stats().unwrap();
+        assert_eq!(stats.latest_sync_runs[0].stream, "recent_search");
+        assert_eq!(stats.latest_sync_runs[0].status, "failed");
+        assert!(
+            !stats.latest_sync_runs[0]
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains(&refresh_token)
+        );
+        assert_eq!(
+            store.cost_summary().unwrap().2,
+            1,
+            "the OAuth refresh provider call is budgeted, but the original search reservation is released"
         );
     }
 
