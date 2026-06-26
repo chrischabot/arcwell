@@ -1750,6 +1750,16 @@ enum KnowledgeSubcommand {
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
+    ExpandCluster {
+        cluster_id: String,
+        #[arg(long)]
+        skip_digest: bool,
+    },
+    EnqueueClusterExpansion {
+        cluster_id: String,
+        #[arg(long)]
+        skip_digest: bool,
+    },
     ProposeClusters {
         query: String,
         #[arg(long, default_value = "mock")]
@@ -3742,6 +3752,14 @@ fn knowledge(store: Store, args: KnowledgeCommand) -> Result<()> {
         KnowledgeSubcommand::Clusters { limit } => {
             print_json(&store.list_knowledge_clusters(limit)?)
         }
+        KnowledgeSubcommand::ExpandCluster {
+            cluster_id,
+            skip_digest,
+        } => print_json(&store.expand_knowledge_cluster(&cluster_id, !skip_digest)?),
+        KnowledgeSubcommand::EnqueueClusterExpansion {
+            cluster_id,
+            skip_digest,
+        } => print_json(&store.enqueue_knowledge_cluster_expansion_job(&cluster_id, !skip_digest)?),
         KnowledgeSubcommand::ProposeClusters {
             query,
             provider,

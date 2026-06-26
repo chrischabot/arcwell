@@ -183,10 +183,18 @@ PR, implementation note, or final report:
       policy denial, cost denial, and no writer/digest side effects, plus
       repeatable mock and live OpenAI browser proof at
       `.arcwell-dev/proofs/knowledge-cluster-proposal-production-proof-20260626T042922Z-52005/artifacts/proof-packet.json`.
+      This slice adds shared cluster expansion via
+      `arcwell knowledge expand-cluster` and queued
+      `arcwell knowledge enqueue-cluster-expansion`: a deterministic
+      source-card-backed editor writes a stable wiki page, quality-gated
+      knowledge report, durable editorial decision, and optional deduped digest
+      candidate through the resident `knowledge_cluster_expand` worker job.
+      Severe tests cover idempotent replay, worker execution, prompt injection
+      as labeled evidence, and rejection of the empty metadata/link-dump shape.
       Remaining work is investigation jobs, broad production-data clustering,
-      wiki/digest worker integration, X credential-refresh live proof,
-      scheduled recurrence, external delivery recurrence, and broader ops UI
-      controls.
+      X credential-refresh live proof, scheduled recurrence, external delivery
+      recurrence, richer model-backed writer/editor synthesis, and broader ops
+      UI controls.
 - [ ] Complete the Arcwell X anti-mirage plan in
       `docs/arcwell-x-architecture-implementation-plan.md` before marking X
       beyond `Partial`.
