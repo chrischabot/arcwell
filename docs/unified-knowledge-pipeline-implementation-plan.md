@@ -1230,13 +1230,14 @@ Add preserved proof scripts:
 - [ ] `scripts/knowledge-wiki-quality-proof`
 - [x] `scripts/knowledge-digest-recurrence-proof`
       passed at
-      `.arcwell-dev/proofs/knowledge-digest-recurrence-proof-20260626T074625Z-58137/proof-packet.json`:
+      `.arcwell-dev/proofs/knowledge-digest-recurrence-proof-20260626T075355Z-75160/proof-packet.json`:
       copied real source cards -> backlog cluster -> wiki/report expansion ->
       editorial-linked digest candidate -> reviewed scheduled controlled
       provider delivery -> duplicate suppression -> quiet-hours deferral -> ops
-      visibility. It is not wall-clock external recurrence, and it currently
-      bounds the selected proof cluster to 2-24 source cards because oversized
-      clusters can exceed report body limits.
+      visibility. The current proof uses the largest selected backlog cluster
+      with 295 source cards and verifies large-cluster prose bounding plus a
+      complete source-card id audit index. It is not wall-clock external
+      recurrence.
 - [ ] `scripts/knowledge-ops-browser-smoke`
 
 Cross-source proof must show:

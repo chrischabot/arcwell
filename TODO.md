@@ -280,17 +280,16 @@ PR, implementation note, or final report:
       policy denial and replay suppression. This is still copied-home
       foreground recurrence, not wall-clock resident-service proof.
       Shared knowledge digest recurrence proof
-      `.arcwell-dev/proofs/knowledge-digest-recurrence-proof-20260626T074625Z-58137/proof-packet.json`
+      `.arcwell-dev/proofs/knowledge-digest-recurrence-proof-20260626T075355Z-75160/proof-packet.json`
       then proved copied real source cards -> backlog cluster -> wiki/report
       expansion -> editorial-linked digest candidate -> reviewed scheduled
       controlled-provider email delivery -> duplicate suppression ->
       quiet-hours deferral -> ops visibility, with a human-readable digest body
-      gate. This closes the local/copied-home seam between shared clusters and
-      scheduled digest routing, but it still is not wall-clock resident-service
-      recurrence or live external inbox delivery. The proof also exposed and
-      documents a real limit: oversized copied clusters can exceed report-body
-      limits, so the script selects a bounded 2-24 source-card cluster until
-      large-cluster summarization/splitting is improved.
+      gate. The current proof expands the largest selected backlog cluster with
+      295 source cards and verifies large-cluster prose bounding plus complete
+      source-card id citations. This closes the local/copied-home seam between
+      shared clusters and scheduled digest routing, but it still is not
+      wall-clock resident-service recurrence or live external inbox delivery.
       X provider fetches now share a local-proof bearer freshness path: recent
       search, bookmark import, following/watch rebuild, and watch-source
       monitor refresh an expired stored `X_BEARER_TOKEN` through stored

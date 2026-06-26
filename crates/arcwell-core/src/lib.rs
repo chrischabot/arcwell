@@ -35443,6 +35443,8 @@ fn render_knowledge_cluster_wiki_page(
     cluster: &KnowledgeCluster,
     source_cards: &[SourceCard],
 ) -> Result<String> {
+    const RENDERED_SOURCE_DETAIL_LIMIT: usize = 24;
+
     if source_cards.is_empty() {
         bail!("knowledge cluster wiki page requires source cards");
     }
@@ -35498,7 +35500,11 @@ fn render_knowledge_cluster_wiki_page(
         String::new(),
         "## Evidence Synthesis".to_string(),
     ];
-    for (index, card) in source_cards.iter().enumerate() {
+    for (index, card) in source_cards
+        .iter()
+        .take(RENDERED_SOURCE_DETAIL_LIMIT)
+        .enumerate()
+    {
         lines.push(format!(
             "- [S{}] `{}` from `{}` / `{}`: **{}**. {}",
             index + 1,
@@ -35510,6 +35516,12 @@ fn render_knowledge_cluster_wiki_page(
                 &html_unescape_basic(&escape_markdown_line(&card.summary)),
                 420
             )
+        ));
+    }
+    if source_cards.len() > RENDERED_SOURCE_DETAIL_LIMIT {
+        lines.push(format!(
+            "- {} additional source cards are omitted from this prose synthesis to keep the page readable; every omitted source-card id remains listed in the complete `source_cards:` audit index below.",
+            source_cards.len() - RENDERED_SOURCE_DETAIL_LIMIT
         ));
     }
     lines.extend([
@@ -35530,12 +35542,22 @@ fn render_knowledge_cluster_wiki_page(
         String::new(),
         "## Sources".to_string(),
     ]);
-    for (index, card) in source_cards.iter().enumerate() {
+    for (index, card) in source_cards
+        .iter()
+        .take(RENDERED_SOURCE_DETAIL_LIMIT)
+        .enumerate()
+    {
         lines.push(format!(
             "- [S{}] `{}` {}",
             index + 1,
             card.id,
             escape_markdown_line(&card.url)
+        ));
+    }
+    if source_cards.len() > RENDERED_SOURCE_DETAIL_LIMIT {
+        lines.push(format!(
+            "- {} additional source URLs omitted here; see the complete source-card id index below.",
+            source_cards.len() - RENDERED_SOURCE_DETAIL_LIMIT
         ));
     }
     lines.push(String::new());
@@ -58205,6 +58227,120 @@ mod tests {
         assert_eq!(second.investigation.tasks.len(), 4);
         assert_eq!(wiki_count, wiki_count_after);
         assert_eq!(digest_count, digest_count_after);
+    }
+
+    #[test]
+    fn severe_large_knowledge_cluster_expansion_bounds_prose_without_losing_citations() {
+        // CLAIM: A production-sized shared cluster should expand into a bounded
+        // human-readable wiki/report artifact instead of failing with an
+        // overlong body, while still preserving every source-card citation.
+        // ORACLE: detailed prose/source URL lists are capped with an explicit
+        // omitted-source note, the complete source_cards audit index contains
+        // every id, the quality gate passes, and the report body remains below
+        // the durable storage limit.
+        // SEVERITY: Severe because copied production backlog proof found a
+        // 295-source cluster that looked schedulable but failed expansion with
+        // `knowledge report body is too long`.
+        let store = test_store("knowledge-cluster-large-expansion");
+        let mut source_card_ids = Vec::new();
+        for idx in 0..80 {
+            let card = store
+                .add_source_card(SourceCardInput {
+                    title: format!("Large cluster evidence item {idx:02}"),
+                    url: format!("https://example.com/large-cluster/{idx:02}"),
+                    source_type: if idx % 3 == 0 {
+                        "github_release".to_string()
+                    } else {
+                        "rss".to_string()
+                    },
+                    provider: if idx % 3 == 0 {
+                        "github".to_string()
+                    } else {
+                        "rss".to_string()
+                    },
+                    summary: format!(
+                        "Large cluster evidence item {idx:02} says an agent workflow tool, MCP integration, or package release should be tracked without making the expansion body unbounded."
+                    ),
+                    claims: vec![SourceClaim {
+                        claim: format!(
+                            "Large cluster evidence item {idx:02} describes the agent workflow topic."
+                        ),
+                        kind: "fact".to_string(),
+                        confidence: 0.7,
+                    }],
+                    retrieved_at: Some(format!("2026-06-25T{:02}:00:00Z", idx % 24)),
+                    metadata: json!({ "large_cluster_fixture": true, "idx": idx }),
+                })
+                .unwrap();
+            source_card_ids.push(card.id);
+        }
+        let cluster = store
+            .create_knowledge_cluster(KnowledgeClusterInput {
+                topic: "Large shared agent workflow cluster".to_string(),
+                status: "candidate".to_string(),
+                event_ids: Vec::new(),
+                source_card_ids: source_card_ids.clone(),
+                first_seen_at: Some("2026-06-25T00:00:00Z".to_string()),
+                last_seen_at: Some("2026-06-25T23:00:00Z".to_string()),
+                novelty_score: 1.0,
+                momentum_score: 1.0,
+                stale_score: 0.0,
+                reason: "Large source-backed cluster should render bounded prose and complete citation index.".to_string(),
+                duplicate_groups: json!({}),
+                metadata: json!({
+                    "origin": "large_cluster_severe_test",
+                    "proof_level": "Local Proof",
+                    "source_family": "large_cluster_fixture",
+                }),
+            })
+            .unwrap();
+
+        let expansion = store.expand_knowledge_cluster(&cluster.id, true).unwrap();
+        assert!(expansion.quality_findings.is_empty());
+        assert!(expansion.report.body_markdown.len() < 100_000);
+        assert!(
+            expansion
+                .wiki_page
+                .content
+                .contains("additional source cards are omitted from this prose synthesis")
+        );
+        assert!(
+            expansion
+                .wiki_page
+                .content
+                .contains("additional source URLs omitted here")
+        );
+        assert!(expansion.wiki_page.content.contains("source_cards:"));
+        for source_card_id in &source_card_ids {
+            assert!(
+                expansion.wiki_page.content.contains(source_card_id),
+                "missing source-card id {source_card_id}"
+            );
+            assert!(
+                expansion.report.body_markdown.contains(source_card_id),
+                "missing report source-card id {source_card_id}"
+            );
+        }
+        assert!(
+            !expansion
+                .wiki_page
+                .content
+                .contains("Large cluster evidence item 30"),
+            "detailed prose should be bounded rather than listing every title"
+        );
+        assert_eq!(
+            expansion
+                .digest_candidate
+                .as_ref()
+                .unwrap()
+                .source_card_ids
+                .len(),
+            source_card_ids.len()
+        );
+        assert_eq!(
+            expansion.investigation.source_links.len(),
+            source_card_ids.len()
+        );
     }
 
     #[test]

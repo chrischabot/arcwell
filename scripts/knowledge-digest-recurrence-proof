@@ -141,15 +141,15 @@ const projections = Array.isArray(report.projections) ? report.projections : [];
 const projection = projections
   .filter((item) => {
     const count = (item.cluster?.source_card_ids || []).length;
-    return count >= 2 && count <= 24;
+    return count >= 2;
   })
   .sort((left, right) => {
     const leftCount = (left.cluster?.source_card_ids || []).length;
     const rightCount = (right.cluster?.source_card_ids || []).length;
-    return leftCount - rightCount;
+    return rightCount - leftCount;
   })[0];
 if (!projection) {
-  console.error(`expected at least one backlog projection with 2-24 source cards; saw ${projections.length}`);
+  console.error(`expected at least one backlog projection with at least two source cards; saw ${projections.length}`);
   process.exit(2);
 }
 process.stdout.write(projection.cluster.id);
@@ -357,6 +357,10 @@ for (const sourceCardId of expansion.cluster.source_card_ids) {
 assert(wikiText.includes(clusterId), "wiki page should link back to cluster", wikiText.slice(0, 1000));
 assert(wikiText.includes("Confidence And Uncertainty"), "wiki page should name uncertainty", wikiText.slice(0, 1000));
 assert(!wikiText.includes("source_cards: 0"), "wiki page must not be empty/generated-only", wikiText.slice(0, 1000));
+if (expansion.cluster.source_card_ids.length > 24) {
+  assert(wikiText.includes("additional source cards are omitted from this prose synthesis"), "large cluster wiki should explicitly account for omitted prose details", wikiText.slice(0, 2000));
+  assert(wikiText.includes("additional source URLs omitted here"), "large cluster wiki should explicitly account for omitted source URLs", wikiText.slice(0, 2000));
+}
 
 assert(schedule.id === scheduleId && schedule.status === "active", "schedule should be active", schedule);
 assert(first.digest_alert_schedule?.enqueued === 1, "first worker pass should enqueue one digest alert", first);
@@ -411,6 +415,7 @@ const proofPacket = {
     projections: backlog.projections.length,
   },
   cluster_id: clusterId,
+  selected_source_card_count: expansion.cluster.source_card_ids.length,
   wiki_page_id: expansion.wiki_page.id,
   report_id: expansion.report.id,
   editorial_decision_id: expansion.editorial_decision.id,
@@ -421,6 +426,7 @@ const proofPacket = {
   gates: {
     copied_real_source_cards_used: true,
     backlog_cluster_created: true,
+    large_cluster_prose_bounded: expansion.cluster.source_card_ids.length > 24,
     wiki_expansion_quality_gate_passed: true,
     editorial_decision_links_wiki_and_digest: true,
     digest_candidate_reviewed: true,
