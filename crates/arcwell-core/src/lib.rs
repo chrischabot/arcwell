@@ -3318,6 +3318,15 @@ pub struct XOAuthTokenStoreReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XOAuthRevocationReport {
+    pub secret_name: String,
+    pub token_type_hint: Option<String>,
+    pub provider_status: u16,
+    pub revoked_provider_side: bool,
+    pub deleted_local_secret: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeEvent {
     pub id: String,
     pub source: String,
@@ -16690,6 +16699,101 @@ impl Store {
         let endpoint =
             std::env::var("ARCWELL_X_API_BASE").unwrap_or_else(|_| "https://api.x.com".to_string());
         self.x_oauth_refresh_with_base(client_id, client_secret, &endpoint)
+    }
+
+    pub fn x_oauth_revoke(
+        &self,
+        name: &str,
+        client_id: &str,
+        client_secret: Option<&str>,
+        token_type_hint: Option<&str>,
+        delete_local: bool,
+    ) -> Result<XOAuthRevocationReport> {
+        let endpoint =
+            std::env::var("ARCWELL_X_API_BASE").unwrap_or_else(|_| "https://api.x.com".to_string());
+        self.x_oauth_revoke_with_base(
+            name,
+            client_id,
+            client_secret,
+            token_type_hint,
+            delete_local,
+            &endpoint,
+        )
+    }
+
+    fn x_oauth_revoke_with_base(
+        &self,
+        name: &str,
+        client_id: &str,
+        client_secret: Option<&str>,
+        token_type_hint: Option<&str>,
+        delete_local: bool,
+        endpoint: &str,
+    ) -> Result<XOAuthRevocationReport> {
+        validate_x_oauth_secret_name(name)?;
+        validate_key(client_id)?;
+        if let Some(hint) = token_type_hint {
+            validate_x_oauth_token_type_hint(hint)?;
+        }
+        self.policy_guard(PolicyRequest {
+            action: "provider.oauth".to_string(),
+            package: Some("arcwell-x".to_string()),
+            provider: Some("x".to_string()),
+            source: Some("x_oauth".to_string()),
+            channel: None,
+            subject: None,
+            target: Some(excerpt(endpoint, 240)),
+            projected_usd: Some(estimated_network_fetch_cost(1)),
+            metadata: json!({
+                "operation": "revoke",
+                "secret_name": name,
+                "token_type_hint": token_type_hint,
+                "delete_local": delete_local,
+                "has_explicit_client_secret": client_secret.is_some()
+            }),
+            untrusted_excerpt: None,
+        })?;
+        self.require_cost_budget(
+            "arcwell-x",
+            "x_oauth_revoke",
+            "x",
+            "oauth_revoke",
+            Some("x_oauth"),
+            estimated_network_fetch_cost(1),
+            "X OAuth revoke",
+        )?;
+        let token = self
+            .get_secret_value(name)?
+            .with_context(|| format!("{name} is required"))?;
+        validate_oauth_param(&token, "token")?;
+        let client_secret = self.resolve_x_client_secret(client_secret)?;
+        let mut form = vec![("token", token.as_str())];
+        if let Some(hint) = token_type_hint {
+            form.push(("token_type_hint", hint));
+        }
+        if client_secret.is_none() {
+            form.push(("client_id", client_id));
+        }
+        let provider_status =
+            post_x_oauth_revoke_form(endpoint, client_id, client_secret.as_deref(), &form)
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "{}",
+                        redact_secret_like_text(&error.to_string()).replace(&token, "[REDACTED]")
+                    )
+                })?;
+        let deleted_local_secret = if delete_local {
+            self.delete_secret_value(name)?
+        } else {
+            false
+        };
+        Ok(XOAuthRevocationReport {
+            secret_name: name.to_string(),
+            token_type_hint: token_type_hint.map(ToOwned::to_owned),
+            provider_status,
+            revoked_provider_side: true,
+            deleted_local_secret,
+        })
     }
 
     fn x_oauth_refresh_with_base(
@@ -41556,6 +41660,21 @@ fn validate_oauth_param(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_x_oauth_secret_name(value: &str) -> Result<()> {
+    validate_key(value)?;
+    match value {
+        "X_BEARER_TOKEN" | "X_REFRESH_TOKEN" => Ok(()),
+        _ => bail!("X OAuth revocation only supports X_BEARER_TOKEN or X_REFRESH_TOKEN"),
+    }
+}
+
+fn validate_x_oauth_token_type_hint(value: &str) -> Result<()> {
+    match value {
+        "access_token" | "refresh_token" => Ok(()),
+        _ => bail!("token_type_hint must be access_token or refresh_token"),
+    }
+}
+
 fn validate_channel_direction(direction: &str) -> Result<()> {
     match direction {
         "incoming" | "outgoing" => Ok(()),
@@ -58147,6 +58266,15 @@ fn post_x_oauth_form(
 ) -> Result<Value> {
     let base = validated_x_api_base(endpoint)?;
     let url = base.join("/2/oauth2/token")?;
+    post_x_oauth_json_form(url, client_id, client_secret, form)
+}
+
+fn post_x_oauth_json_form(
+    url: Url,
+    client_id: &str,
+    client_secret: Option<&str>,
+    form: &[(&str, &str)],
+) -> Result<Value> {
     let client = Client::builder().timeout(Duration::from_secs(20)).build()?;
     let mut request = client
         .post(url)
@@ -58166,6 +58294,35 @@ fn post_x_oauth_form(
         );
     }
     serde_json::from_str(&text).context("X OAuth token endpoint returned invalid JSON")
+}
+
+fn post_x_oauth_revoke_form(
+    endpoint: &str,
+    client_id: &str,
+    client_secret: Option<&str>,
+    form: &[(&str, &str)],
+) -> Result<u16> {
+    let base = validated_x_api_base(endpoint)?;
+    let url = base.join("/2/oauth2/revoke")?;
+    let client = Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let mut request = client
+        .post(url)
+        .header(ACCEPT, "application/json")
+        .header("user-agent", "arcwell/0.1")
+        .form(form);
+    if let Some(client_secret) = client_secret {
+        request = request.basic_auth(client_id, Some(client_secret));
+    }
+    let response = request.send().context("X OAuth revoke request failed")?;
+    let status = response.status();
+    let text = response.text().unwrap_or_default();
+    if !status.is_success() {
+        bail!(
+            "X OAuth revoke endpoint failed: {}",
+            classify_x_http_error(status, None, &text)
+        );
+    }
+    Ok(status.as_u16())
 }
 
 #[derive(Debug)]
@@ -87828,6 +87985,117 @@ reason = "test denies X link expansion"
     }
 
     #[test]
+    fn severe_x_oauth_public_revoke_includes_client_id_without_basic_auth() {
+        // CLAIM: X public-client OAuth revocation identifies the client in the
+        // form body and never uses Basic auth.
+        // PRECONDITIONS: a stored X bearer token exists and no client secret is supplied.
+        // POSTCONDITIONS: the revoke request hits /2/oauth2/revoke, carries the
+        // token/token_type_hint/client_id form fields, and leaves local state
+        // untouched unless explicitly requested.
+        // ORACLE: request bytes captured by a local revoke endpoint fixture and
+        // post-call local secret state.
+        // SEVERITY: Severe because request-shape drift would make live credential
+        // revocation look completed while the provider never accepted it.
+        let store = test_store("x-oauth-public-revoke-shape");
+        store
+            .set_secret_value("X_BEARER_TOKEN", "access-token-to-revoke", "x")
+            .unwrap();
+        let base = mock_oauth_request_assertion_server(|request| {
+            assert!(request.contains("POST /2/oauth2/revoke "), "{request}");
+            assert!(
+                !request
+                    .to_ascii_lowercase()
+                    .contains("authorization: basic "),
+                "{request}"
+            );
+            assert!(
+                request.contains("token=access-token-to-revoke"),
+                "{request}"
+            );
+            assert!(
+                request.contains("token_type_hint=access_token"),
+                "{request}"
+            );
+            assert!(request.contains("client_id=client-id"), "{request}");
+        });
+        let report = store
+            .x_oauth_revoke_with_base(
+                "X_BEARER_TOKEN",
+                "client-id",
+                None,
+                Some("access_token"),
+                false,
+                &base,
+            )
+            .unwrap();
+        assert_eq!(report.provider_status, 200);
+        assert!(report.revoked_provider_side);
+        assert!(!report.deleted_local_secret);
+        assert_eq!(
+            store.get_secret_value("X_BEARER_TOKEN").unwrap().as_deref(),
+            Some("access-token-to-revoke")
+        );
+    }
+
+    #[test]
+    fn severe_x_oauth_confidential_revoke_uses_basic_auth_without_client_id_body() {
+        // CLAIM: X confidential-client OAuth revocation uses Basic auth as
+        // client identity and does not also send client_id in the body.
+        // PRECONDITIONS: a stored X refresh token exists and a client secret is supplied.
+        // POSTCONDITIONS: provider success can delete only the selected local
+        // secret after the revoke call succeeds.
+        // ORACLE: captured request bytes and local secret inventory after success.
+        // SEVERITY: Severe because revoking the wrong token or deleting before a
+        // provider success is a credential recovery failure.
+        let store = test_store("x-oauth-confidential-revoke-shape");
+        store
+            .set_secret_value("X_REFRESH_TOKEN", "refresh-token-to-revoke", "x")
+            .unwrap();
+        store
+            .set_secret_value("X_BEARER_TOKEN", "access-token-to-keep", "x")
+            .unwrap();
+        let base = mock_oauth_request_assertion_server(|request| {
+            assert!(request.contains("POST /2/oauth2/revoke "), "{request}");
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: basic "),
+                "{request}"
+            );
+            assert!(
+                request.contains("token=refresh-token-to-revoke"),
+                "{request}"
+            );
+            assert!(
+                request.contains("token_type_hint=refresh_token"),
+                "{request}"
+            );
+            assert!(!request.contains("client_id=client-id"), "{request}");
+        });
+        let report = store
+            .x_oauth_revoke_with_base(
+                "X_REFRESH_TOKEN",
+                "client-id",
+                Some("client-secret"),
+                Some("refresh_token"),
+                true,
+                &base,
+            )
+            .unwrap();
+        assert_eq!(report.secret_name, "X_REFRESH_TOKEN");
+        assert!(report.revoked_provider_side);
+        assert!(report.deleted_local_secret);
+        assert!(store.get_secret_value("X_REFRESH_TOKEN").unwrap().is_none());
+        assert_eq!(
+            store.get_secret_value("X_BEARER_TOKEN").unwrap().as_deref(),
+            Some("access-token-to-keep")
+        );
+        let serialized = serde_json::to_string(&report).unwrap();
+        assert!(!serialized.contains("refresh-token-to-revoke"));
+        assert!(!serialized.contains("client-secret"));
+    }
+
+    #[test]
     fn severe_x_oauth_rejects_token_response_without_tokens() {
         let store = test_store("x-oauth-empty");
         let base = mock_base_server(
@@ -87892,6 +88160,144 @@ reason = "test denies X link expansion"
                 .unwrap()
                 .as_deref(),
             Some(refresh_token.as_str())
+        );
+    }
+
+    #[test]
+    fn severe_policy_denied_x_oauth_revoke_blocks_before_secret_or_cost_mutation() {
+        // CLAIM: X OAuth revocation requires provider.oauth policy before token
+        // lookup, network IO, local deletion, or cost reservation.
+        // PRECONDITIONS: a stored token exists but policy denies x_oauth.
+        // POSTCONDITIONS: the token remains present and no cost is recorded.
+        // ORACLE: denial reason, secret value state, and cost summary.
+        // SEVERITY: Severe because revocation is a destructive credential-control path.
+        let store = test_store("policy-x-oauth-revoke-deny");
+        let token = "access-token-denied-revoke";
+        store
+            .set_secret_value("X_BEARER_TOKEN", token, "x")
+            .unwrap();
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "deny-x-oauth-revoke"
+effect = "deny"
+action = "provider.oauth"
+provider = "x"
+source = "x_oauth"
+reason = "X OAuth disabled during revoke policy test"
+"#,
+        );
+
+        let error = store
+            .x_oauth_revoke_with_base(
+                "X_BEARER_TOKEN",
+                "client-id",
+                None,
+                Some("access_token"),
+                true,
+                "https://api.x.com",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("policy denied provider.oauth"), "{error}");
+        assert_eq!(
+            store.get_secret_value("X_BEARER_TOKEN").unwrap().as_deref(),
+            Some(token)
+        );
+        assert_eq!(store.cost_summary().unwrap().2, 0);
+    }
+
+    #[test]
+    fn severe_x_oauth_revoke_failure_is_redacted_and_preserves_local_secret() {
+        // CLAIM: provider-side revoke failures surface a classified error, never
+        // leak the token, and do not delete the local secret even when
+        // delete_local was requested.
+        // PRECONDITIONS: the revoke endpoint rejects a stored token.
+        // POSTCONDITIONS: raw token value is absent from errors/list output and
+        // the local token remains retryable.
+        // ORACLE: error text and local secret state.
+        // SEVERITY: Severe because failure-time deletion would turn transient
+        // provider errors into permanent credential loss.
+        let store = test_store("x-oauth-revoke-failure");
+        let token = format!("access-revoke-{}", "z".repeat(48));
+        store
+            .set_secret_value("X_BEARER_TOKEN", &token, "x")
+            .unwrap();
+        let body = Box::leak(
+            format!(r#"{{"error":"invalid_request","detail":"token={token} rejected"}}"#)
+                .into_boxed_str(),
+        );
+        let base = mock_status_server("400 Bad Request", "", body, "application/json");
+
+        let error = store
+            .x_oauth_revoke_with_base(
+                "X_BEARER_TOKEN",
+                "client-id",
+                None,
+                Some("access_token"),
+                true,
+                &base,
+            )
+            .expect_err("revoke rejection must be surfaced")
+            .to_string();
+        assert!(error.contains("X OAuth revoke endpoint failed"), "{error}");
+        assert!(!error.contains(&token), "{error}");
+        let listed = serde_json::to_string(&store.list_secret_values().unwrap()).unwrap();
+        assert!(listed.contains("X_BEARER_TOKEN"));
+        assert!(!listed.contains(&token));
+        assert_eq!(
+            store.get_secret_value("X_BEARER_TOKEN").unwrap().as_deref(),
+            Some(token.as_str())
+        );
+    }
+
+    #[test]
+    fn severe_x_oauth_revoke_rejects_unsupported_secret_names_and_hints() {
+        // CLAIM: OAuth revocation cannot be abused to post arbitrary local
+        // secrets or unsupported token hints to the provider.
+        // ORACLE: invalid names/hints fail before network IO and leave secrets intact.
+        // SEVERITY: Severe because token-control surfaces sit next to local secret storage.
+        let store = test_store("x-oauth-revoke-invalid-input");
+        store
+            .set_secret_value("OPENAI_API_KEY", "not-an-x-token", "openai")
+            .unwrap();
+        store
+            .set_secret_value("X_BEARER_TOKEN", "access-token", "x")
+            .unwrap();
+
+        let name_error = store
+            .x_oauth_revoke_with_base(
+                "OPENAI_API_KEY",
+                "client-id",
+                None,
+                Some("access_token"),
+                false,
+                "https://api.x.com",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(name_error.contains("only supports X_BEARER_TOKEN or X_REFRESH_TOKEN"));
+
+        let hint_error = store
+            .x_oauth_revoke_with_base(
+                "X_BEARER_TOKEN",
+                "client-id",
+                None,
+                Some("id_token"),
+                false,
+                "https://api.x.com",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(hint_error.contains("token_type_hint must be access_token or refresh_token"));
+        assert_eq!(
+            store.get_secret_value("OPENAI_API_KEY").unwrap().as_deref(),
+            Some("not-an-x-token")
+        );
+        assert_eq!(
+            store.get_secret_value("X_BEARER_TOKEN").unwrap().as_deref(),
+            Some("access-token")
         );
     }
 

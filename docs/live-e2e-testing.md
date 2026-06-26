@@ -168,6 +168,23 @@ The credential probe verifies:
 - live current credentials can run recent search and, when enabled, a tiny
   bookmark/follow watch-source rebuild.
 
+`scripts/x-oauth-revoke-proof` is the repeatable controlled-provider proof for
+the X OAuth revoke path. It uses a disposable `ARCWELL_HOME`, starts a local
+OAuth endpoint for `/2/oauth2/revoke`, seeds sentinel X access/refresh tokens,
+and runs the real `arcwell x oauth-revoke` CLI. The latest packet is
+`.arcwell-dev/proofs/x-oauth-revoke-proof-20260626T173212Z-91318/artifacts/proof-packet.json`.
+It proves:
+
+- public-client revoke sends `client_id` in the form body and no Basic auth;
+- confidential-client revoke uses Basic auth and omits `client_id` from the body;
+- `--delete-local` deletes the selected local secret only after provider
+  success;
+- provider failure preserves the local secret for retry;
+- proof artifacts do not contain the sentinel token values.
+
+The script intentionally does not revoke the real X token. Run a destructive
+live revoke only with explicit operator approval and fresh recovery material.
+
 `scripts/x-live-smoke` uses a disposable `ARCWELL_HOME` by default and verifies:
 
 - local replayed X JSON writes an item, source card, and wiki page with
@@ -190,8 +207,8 @@ Remaining limits:
   failures and report deferred sources without marking them failed, but the
   current real rows still need provider-plan capacity handling plus a
   policy-allowed repair/retry proof before strict health can be promoted.
-- Provider-side revocation is classifier-tested locally, not live-tested against
-  a deliberately revoked X refresh token.
+- X OAuth provider-side revocation is proven against a controlled local
+  endpoint, not live-tested against a deliberately revoked real X refresh token.
 - X plan/API tier changes can still alter bookmark/follow/watch behavior.
 
 Telegram `getMe` should be checked with a script that reads `TELEGRAM_BOT_TOKEN` from the environment rather than putting the token in shell history.

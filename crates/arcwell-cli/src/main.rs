@@ -884,6 +884,7 @@ fn resolve_dynamic_slash_alias(
                 "url" | "authorize-url" | "oauth-url" => &["x", "oauth-url"][..],
                 "exchange" | "exchange-code" | "oauth-exchange" => &["x", "oauth-exchange"][..],
                 "refresh" | "oauth-refresh" => &["x", "oauth-refresh"][..],
+                "revoke" | "oauth-revoke" => &["x", "oauth-revoke"][..],
                 _ => &["x"][..],
             };
             let rest = if parts == ["x"] { rest } else { &rest[1..] };
@@ -3457,6 +3458,18 @@ enum XSubcommand {
         #[arg(long)]
         client_secret: Option<String>,
     },
+    OauthRevoke {
+        #[arg(long, default_value = "X_BEARER_TOKEN")]
+        name: String,
+        #[arg(long)]
+        client_id: String,
+        #[arg(long)]
+        client_secret: Option<String>,
+        #[arg(long)]
+        token_type_hint: Option<String>,
+        #[arg(long)]
+        delete_local: bool,
+    },
     List {
         #[arg(long)]
         query: Option<String>,
@@ -5223,6 +5236,19 @@ fn x_command(store: Store, args: XCommand) -> Result<()> {
             client_id,
             client_secret,
         } => print_json(&store.x_oauth_refresh(&client_id, client_secret.as_deref())?),
+        XSubcommand::OauthRevoke {
+            name,
+            client_id,
+            client_secret,
+            token_type_hint,
+            delete_local,
+        } => print_json(&store.x_oauth_revoke(
+            &name,
+            &client_id,
+            client_secret.as_deref(),
+            token_type_hint.as_deref(),
+            delete_local,
+        )?),
         XSubcommand::List {
             query,
             source,
@@ -13886,6 +13912,26 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
             let client_secret = arguments.get("client_secret").and_then(Value::as_str);
             Ok(json!(store.x_oauth_refresh(&client_id, client_secret)?))
         }
+        "x_oauth_revoke" => {
+            let name = arguments
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("X_BEARER_TOKEN");
+            let client_id = required_string(&arguments, "client_id")?;
+            let client_secret = arguments.get("client_secret").and_then(Value::as_str);
+            let token_type_hint = arguments.get("token_type_hint").and_then(Value::as_str);
+            let delete_local = arguments
+                .get("delete_local")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Ok(json!(store.x_oauth_revoke(
+                name,
+                &client_id,
+                client_secret,
+                token_type_hint,
+                delete_local,
+            )?))
+        }
         "x_list" => {
             let query = arguments.get("query").and_then(Value::as_str);
             let source = arguments.get("source").and_then(Value::as_str);
@@ -15667,6 +15713,28 @@ fn mcp_tools() -> Vec<Value> {
             "x_oauth_refresh",
             "Refresh an X OAuth token from the stored X_REFRESH_TOKEN and store the new token response.",
             [("client_id", "string", "X OAuth client id.")],
+        ),
+        tool(
+            "x_oauth_revoke",
+            "Revoke a stored X OAuth token through the X revoke endpoint; optionally delete the local secret only after provider success.",
+            [
+                (
+                    "name",
+                    "string",
+                    "Stored secret name, either X_BEARER_TOKEN or X_REFRESH_TOKEN.",
+                ),
+                ("client_id", "string", "X OAuth client id."),
+                (
+                    "token_type_hint",
+                    "string",
+                    "Optional token hint: access_token or refresh_token.",
+                ),
+                (
+                    "delete_local",
+                    "boolean",
+                    "Delete the local secret after provider revocation succeeds.",
+                ),
+            ],
         ),
         tool(
             "x_list",

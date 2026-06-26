@@ -1136,6 +1136,13 @@ PR, implementation note, or final report:
       without leaking secret values.
 - [ ] Add provider-side revocation/rotation helpers where provider APIs make
       that safe and useful.
+      X OAuth now has `arcwell x oauth-revoke` and MCP `x_oauth_revoke` for
+      `X_BEARER_TOKEN` / `X_REFRESH_TOKEN`, with policy/cost gates, strict
+      token-type hints, redacted provider failures, delete-after-provider-success
+      semantics, and controlled-provider proof
+      `.arcwell-dev/proofs/x-oauth-revoke-proof-20260626T173212Z-91318/artifacts/proof-packet.json`.
+      Remaining work here is broader provider coverage and explicit operator
+      approval before any destructive live-token revocation proof.
 - [x] Add a live X credential probe that exercises the shared stored-token
       auto-refresh path, records redacted source-health/sync-run state, and
       distinguishes missing refresh material, provider revocation, scope
@@ -1191,8 +1198,9 @@ PR, implementation note, or final report:
       schedule `cfdb4004-f90e-4b85-9845-3d7988679915` delivered Gmail message
       `19f04ed94d54589c` at `2026-06-26T17:14:59+00:00` with human-readable
       Bottom line / What needs attention / Suggested follow-up sections.
-      Still not claimed: provider-side scope introspection, revocation APIs,
-      or multi-day/repeated external recurrence proof.
+      Still not claimed: provider-side scope introspection, destructive live
+      revocation of the real X token, or multi-day/repeated external recurrence
+      proof.
 - [ ] Add ops UI burn-down and override controls for budgets only after
       idempotency, policy, and audit behavior are tested.
 

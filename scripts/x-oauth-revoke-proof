@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in node; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for this proof." >&2
+    exit 2
+  fi
+done
+
+RUN_STAMP="${ARCWELL_X_OAUTH_REVOKE_PROOF_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_X_OAUTH_REVOKE_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/x-oauth-revoke-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_X_OAUTH_REVOKE_PROOF_HOME:-$PROOF_ROOT/home}"
+ACCESS_TOKEN="x-revoke-proof-access-SHOULD_NOT_LEAK-$RUN_STAMP"
+REFRESH_TOKEN="x-revoke-proof-refresh-SHOULD_NOT_LEAK-$RUN_STAMP"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[x-oauth-revoke-proof] %s\n' "$*"
+}
+
+fail() {
+  printf '[x-oauth-revoke-proof] BLOCKED: %s\n' "$*" >&2
+  exit 2
+}
+
+MOCK_BASE_FILE="$ARTIFACT_DIR/oauth-api-base.txt"
+MOCK_LOG_FILE="$ARTIFACT_DIR/oauth-provider-requests.jsonl"
+node - "$MOCK_BASE_FILE" "$MOCK_LOG_FILE" "$REFRESH_TOKEN" <<'NODE' &
+const fs = require("fs");
+const http = require("http");
+const [basePath, logPath, failingToken] = process.argv.slice(2);
+
+const server = http.createServer((req, res) => {
+  const chunks = [];
+  req.on("data", (chunk) => chunks.push(chunk));
+  req.on("end", () => {
+    const body = Buffer.concat(chunks).toString("utf8");
+    const containsFailingToken = body.includes(encodeURIComponent(failingToken));
+    const bodyRedacted = body
+      .replace(/token=[^&]*/g, "token=<redacted>")
+      .replace(/client_secret=[^&]*/g, "client_secret=<redacted>");
+    fs.appendFileSync(
+      logPath,
+      `${JSON.stringify({
+        method: req.method,
+        url: req.url,
+        authorization: req.headers.authorization ? "<present>" : null,
+        content_type: req.headers["content-type"] || null,
+        body_redacted: bodyRedacted,
+        has_token: /(?:^|&)token=/.test(body),
+        has_client_id: /(?:^|&)client_id=proof-client(?:&|$)/.test(body),
+        has_access_token: body.includes("x-revoke-proof-access-SHOULD_NOT_LEAK-"),
+        has_refresh_token: containsFailingToken,
+      })}\n`
+    );
+    if (req.url !== "/2/oauth2/revoke") {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "wrong endpoint" }));
+      return;
+    }
+    if (containsFailingToken) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid_request", detail: `token=${failingToken} rejected` }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ success: true }));
+  });
+});
+
+server.listen(0, "127.0.0.1", () => {
+  const address = server.address();
+  fs.writeFileSync(basePath, `http://127.0.0.1:${address.port}\n`);
+});
+
+process.on("SIGTERM", () => server.close(() => process.exit(0)));
+NODE
+MOCK_PID=$!
+trap 'kill "$MOCK_PID" >/dev/null 2>&1 || true' EXIT
+
+for _ in $(seq 1 50); do
+  [ -s "$MOCK_BASE_FILE" ] && break
+  sleep 0.1
+done
+[ -s "$MOCK_BASE_FILE" ] || fail "controlled X OAuth endpoint did not start"
+OAUTH_BASE="$(tr -d '\n' <"$MOCK_BASE_FILE")"
+
+cat >"$ARCWELL_HOME/arcwell-policy.toml" <<'POLICY'
+[[rules]]
+id = "allow-x-oauth-revoke-proof-secret-write"
+effect = "allow"
+action = "secret.write"
+provider = "x"
+reason = "allow disposable X OAuth proof secrets"
+priority = 20
+
+[[rules]]
+id = "allow-x-oauth-revoke-proof-secret-read"
+effect = "allow"
+action = "secret.read"
+reason = "allow proof inspection of disposable local secrets"
+priority = 20
+
+[[rules]]
+id = "allow-x-oauth-revoke-proof-provider"
+effect = "allow"
+action = "provider.oauth"
+package = "arcwell-x"
+provider = "x"
+source = "x_oauth"
+reason = "allow controlled X OAuth revoke endpoint"
+priority = 20
+POLICY
+
+log "proof root: $PROOF_ROOT"
+log "seeding disposable X OAuth secrets"
+"$ARCWELL_BIN" secrets set-value X_BEARER_TOKEN "$ACCESS_TOKEN" --scope x --provider x >"$ARTIFACT_DIR/set-access.json"
+"$ARCWELL_BIN" secrets set-value X_REFRESH_TOKEN "$REFRESH_TOKEN" --scope x --provider x >"$ARTIFACT_DIR/set-refresh.json"
+
+log "running successful access-token revoke with local deletion"
+ARCWELL_X_API_BASE="$OAUTH_BASE" "$ARCWELL_BIN" x oauth-revoke \
+  --name X_BEARER_TOKEN \
+  --client-id proof-client \
+  --token-type-hint access_token \
+  --delete-local >"$ARTIFACT_DIR/revoke-access.json" 2>"$ARTIFACT_DIR/revoke-access.err"
+
+if "$ARCWELL_BIN" secrets get-value X_BEARER_TOKEN >"$ARTIFACT_DIR/access-after-success.json"; then
+  if ! grep -qx 'null' "$ARTIFACT_DIR/access-after-success.json"; then
+    fail "X_BEARER_TOKEN remained after successful revoke --delete-local"
+  fi
+else
+  fail "failed to inspect X_BEARER_TOKEN after successful revoke"
+fi
+
+log "running rejected refresh-token revoke and proving local preservation"
+if ARCWELL_X_API_BASE="$OAUTH_BASE" "$ARCWELL_BIN" x oauth-revoke \
+  --name X_REFRESH_TOKEN \
+  --client-id proof-client \
+  --client-secret proof-secret \
+  --token-type-hint refresh_token \
+  --delete-local >"$ARTIFACT_DIR/revoke-refresh-failure.json" 2>"$ARTIFACT_DIR/revoke-refresh-failure.err"; then
+  fail "refresh-token revoke unexpectedly succeeded against rejecting endpoint"
+fi
+
+REFRESH_AFTER_FAILURE_JSON="$("$ARCWELL_BIN" secrets get-value X_REFRESH_TOKEN)"
+if [ "$REFRESH_AFTER_FAILURE_JSON" != "\"$REFRESH_TOKEN\"" ]; then
+  fail "X_REFRESH_TOKEN was not preserved after provider failure"
+fi
+printf '{"present":true,"value":"[REDACTED]"}\n' >"$ARTIFACT_DIR/refresh-after-failure.json"
+
+node - "$ARTIFACT_DIR/revoke-access.json" "$ARTIFACT_DIR/revoke-access.err" "$ARTIFACT_DIR/revoke-refresh-failure.err" "$MOCK_LOG_FILE" "$ACCESS_TOKEN" "$REFRESH_TOKEN" >"$ARTIFACT_DIR/assertions.json" <<'NODE'
+const fs = require("fs");
+const [
+  accessReportPath,
+  accessErrPath,
+  failureErrPath,
+  requestsPath,
+  accessToken,
+  refreshToken,
+] = process.argv.slice(2);
+
+function fail(message) {
+  console.error(message);
+  process.exit(2);
+}
+
+const accessReport = JSON.parse(fs.readFileSync(accessReportPath, "utf8"));
+if (accessReport.secret_name !== "X_BEARER_TOKEN") fail("wrong access revoke secret_name");
+if (accessReport.provider_status !== 200) fail("wrong access revoke provider_status");
+if (accessReport.revoked_provider_side !== true) fail("access revoke did not report provider success");
+if (accessReport.deleted_local_secret !== true) fail("access revoke did not report local deletion");
+
+for (const path of [accessReportPath, accessErrPath, failureErrPath]) {
+  const text = fs.readFileSync(path, "utf8");
+  if (text.includes(accessToken) || text.includes(refreshToken)) {
+    fail(`sentinel token leaked in ${path}`);
+  }
+}
+
+const requests = fs.readFileSync(requestsPath, "utf8").trim().split(/\n+/).map(JSON.parse);
+if (requests.length !== 2) fail(`expected exactly 2 revoke requests, got ${requests.length}`);
+if (!requests.every((request) => request.method === "POST" && request.url === "/2/oauth2/revoke")) {
+  fail("provider requests did not all hit POST /2/oauth2/revoke");
+}
+if (requests[0].authorization !== null) fail("public revoke unexpectedly sent Authorization header");
+if (!requests[0].has_access_token || !requests[0].has_token) {
+  fail("public revoke did not send access token");
+}
+if (!requests[0].has_client_id) {
+  fail("public revoke did not include client_id");
+}
+if (requests[1].authorization !== "<present>") fail("confidential revoke did not send Authorization header");
+if (requests[1].has_client_id) {
+  fail("confidential revoke body unexpectedly included client_id");
+}
+if (!requests[1].has_refresh_token || !requests[1].has_token) {
+  fail("confidential revoke did not send refresh token");
+}
+
+process.stdout.write(JSON.stringify({
+  ok: true,
+  requests: requests.length,
+  public_revoke_shape: "client_id_body_no_basic_auth",
+  confidential_revoke_shape: "basic_auth_no_client_id_body",
+  success_deleted_local_secret: true,
+  failure_preserved_local_secret: true,
+  sentinel_leak_check: "passed",
+}, null, 2));
+NODE
+
+node - "$PROOF_ROOT" "$ARTIFACT_DIR" "$OAUTH_BASE" <<'NODE' >"$ARTIFACT_DIR/proof-packet.json"
+const fs = require("fs");
+const [proofRoot, artifactDir, oauthBase] = process.argv.slice(2);
+const assertions = JSON.parse(fs.readFileSync(`${artifactDir}/assertions.json`, "utf8"));
+process.stdout.write(JSON.stringify({
+  feature: "x_oauth_revoke",
+  status: "local_controlled_provider_proof",
+  proof_root: proofRoot,
+  provider: "controlled local X OAuth revoke endpoint",
+  api_base: oauthBase,
+  claims: [
+    "public-client revoke posts to /2/oauth2/revoke with client_id in the form body and no Basic auth",
+    "confidential-client revoke uses Basic auth and omits client_id from the form body",
+    "delete_local removes the selected local secret only after provider success",
+    "provider failure preserves the local secret and redacts raw token values from outputs"
+  ],
+  assertions,
+  artifacts: [
+    "oauth-provider-requests.jsonl",
+    "revoke-access.json",
+    "revoke-refresh-failure.err",
+    "refresh-after-failure.json",
+    "assertions.json"
+  ],
+  live_provider_revocation_performed: false,
+  live_provider_revocation_reason: "Revoking the real X token is destructive and requires explicit operator approval.",
+  generated_at: new Date().toISOString()
+}, null, 2));
+NODE
+
+if grep -R -- "$ACCESS_TOKEN\\|$REFRESH_TOKEN" "$ARTIFACT_DIR" >/dev/null; then
+  fail "sentinel token leaked into proof artifacts"
+fi
+
+log "PASS: proof packet written to $ARTIFACT_DIR/proof-packet.json"
