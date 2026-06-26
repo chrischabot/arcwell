@@ -23,6 +23,7 @@ arcwell x rebuild-definitive-watch-sources --bookmark-days 92 --max-bookmarks 10
 arcwell x recent-search "from:openai" --max-results 25
 arcwell x enqueue-recent-search "from:openai" --max-results 25
 arcwell x monitor-watch-sources --max-sources 25 --max-results-per-source 10
+arcwell x repair-health --defer-rate-limited-hours 24 --limit 10000
 arcwell x search-tweets eve --limit 20
 arcwell x thread 123 --max-depth 50
 arcwell x extract-links --limit 1000
@@ -53,6 +54,7 @@ MCP tools:
 - `x_recent_search`
 - `x_enqueue_recent_search`
 - `x_monitor_watch_sources`
+- `x_repair_health`
 - `x_search_tweets`
 - `x_thread`
 - `x_research`
@@ -170,6 +172,11 @@ Boundary:
   monitor job for `x_handle` watch sources, rather than the weaker
   `x_recent_search from:<handle>` substitute.
 - X provider failures are classified for expired/rejected tokens, API tier/forbidden responses, and rate-limit/quota responses. Token-like text is redacted from errors and source-health.
+- `arcwell x repair-health` reconciles stale X source-health rows only when a
+  later successful sync proves the failure is obsolete. Stale `rate_limited`
+  rows are deferred to a future `next_run_at` without marking them healthy, so
+  operators can see quota pressure without strict health treating deferred
+  quota as local corruption.
 - Watch rebuild gathers bookmark/follow candidates before replacing existing `x_handle` rows, then swaps the list in one SQLite transaction.
 - Cursors advance only after accepted X items/source cards and source-health are durable. Partial X API errors, blocked/protected/deleted items, malformed tweet objects, quota/rate-limit responses, and duplicate newest-id pages do not corrupt cursors.
 - Imported items are treated as untrusted external source text.

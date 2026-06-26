@@ -19,6 +19,9 @@ Rules:
   artifact writer.
 - Use `x_extract_links`, `x_links`, and `x_expand_links` only according to the
   local-index versus explicit-network boundary.
+- Use `x_repair_health` when stale X source-health rows need reconciliation
+  after later successful syncs or when expired rate-limit backoff rows should
+  be deferred without marking them healthy.
 - Use `cursor_get` for `x:recent-search:<query>` when checking incremental state.
 - Use `secret_value_set` only for local provider/API tokens and do not print token values back to the user.
 - Search/list imported items before writing a report.
@@ -33,6 +36,7 @@ arcwell x oauth-url --client-id "$X_CLIENT_ID" --redirect-uri http://127.0.0.1/c
 arcwell x oauth-revoke --name X_BEARER_TOKEN --client-id "$X_CLIENT_ID" --token-type-hint access_token --delete-local
 arcwell x recent-search <query>
 arcwell x enqueue-recent-search <query>
+arcwell x repair-health --defer-rate-limited-hours 24 --limit 10000
 arcwell x search-tweets <query>
 arcwell x thread <x_id>
 arcwell x research <query>
@@ -49,6 +53,7 @@ MCP tools:
 - `x_oauth_revoke`
 - `x_recent_search`
 - `x_enqueue_recent_search`
+- `x_repair_health`
 - `x_search_tweets`
 - `x_thread`
 - `x_research`

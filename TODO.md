@@ -1172,11 +1172,15 @@ PR, implementation note, or final report:
 - [ ] Replace broad X watch-source retry storms with a quota-aware scheduler:
       the monitor now aborts a broad run after three classified quota/rate-limit
       failures, reports attempted/deferred/rate-limited source counts, and
-      leaves unattempted source health/cursors untouched. Remaining work:
-      provider-plan capacity estimates, adaptive per-window fanout, stale
-      rate-limit surfacing, and a policy-allowed repair/retry proof that clears
-      or downgrades current `rate_limited` rows only after successful durable
-      provider reads.
+      leaves unattempted source health/cursors untouched. `x repair-health`
+      now reconciles stale X source-health failures only when later successful
+      sync rows prove the failure obsolete, and defers stale `rate_limited`
+      rows without marking them healthy. Real-home run on 2026-06-26 repaired
+      one stale bookmark failure, deferred 724 rate-limited watch rows for 24
+      hours, and reduced X blocking stats to zero while keeping those 724 rows
+      visibly `rate_limited`. Remaining work: provider-plan capacity estimates,
+      adaptive per-window fanout, and successful durable provider reads for the
+      deferred rows.
 - [x] Add scheduled credential rotation reminders and stale-scope warnings.
       `secret_health`, `health`, `doctor`, and `ops_snapshot` warn when
       local/ref credentials expire within 72 hours, and active scheduled X

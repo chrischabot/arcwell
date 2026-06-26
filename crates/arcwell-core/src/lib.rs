@@ -3327,6 +3327,22 @@ pub struct XOAuthRevocationReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XRateLimitDeferReport {
+    pub scanned: usize,
+    pub deferred: usize,
+    pub defer_until: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XHealthRepairReport {
+    pub repaired_bookmark_health: usize,
+    pub repaired_watch_health: usize,
+    pub rate_limited_scanned: usize,
+    pub rate_limited_deferred: usize,
+    pub defer_until: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeEvent {
     pub id: String,
     pub source: String,
@@ -6335,7 +6351,17 @@ impl Store {
                     "SELECT COUNT(*) FROM x_projections WHERE status = 'failed'",
                 )?,
                 non_healthy_sources: self.count_query(
-                    "SELECT COUNT(*) FROM source_health WHERE (provider = 'x' OR key LIKE 'x:%') AND status != 'healthy'",
+                    r#"
+                    SELECT COUNT(*)
+                    FROM source_health
+                    WHERE (provider = 'x' OR key LIKE 'x:%')
+                      AND status != 'healthy'
+                      AND NOT (
+                        status = 'rate_limited'
+                        AND next_run_at IS NOT NULL
+                        AND next_run_at > strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')
+                      )
+                    "#,
                 )?,
             },
             portable_export: self.x_portable_export_freshness()?,
@@ -6364,6 +6390,14 @@ impl Store {
                       AND later.stream = failed.stream
                       AND COALESCE(later.cursor_key, '') = COALESCE(failed.cursor_key, '')
                   )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM source_health health
+                    WHERE health.status = 'rate_limited'
+                      AND health.next_run_at IS NOT NULL
+                      AND health.next_run_at > strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')
+                      AND COALESCE(health.cursor_key, health.key, '') = COALESCE(failed.cursor_key, '')
+                  )
                 "#,
             )?,
             source_health_by_status: self.grouped_counts(
@@ -6373,6 +6407,122 @@ impl Store {
                 "SELECT status, COUNT(*) FROM watch_sources WHERE source_kind = 'x_handle' GROUP BY status ORDER BY status",
             )?,
             latest_sync_runs,
+        })
+    }
+
+    pub fn x_repair_health(
+        &self,
+        defer_rate_limited_hours: i64,
+        limit: usize,
+    ) -> Result<XHealthRepairReport> {
+        let deferred = self.x_defer_rate_limited_sources(defer_rate_limited_hours, limit)?;
+        let next_bookmark_run_at = now_plus_seconds(6 * 60 * 60);
+        let repaired_bookmark_health = self.conn.execute(
+            r#"
+            UPDATE source_health
+            SET status = 'healthy',
+                last_success_at = (
+                  SELECT MAX(completed_at)
+                  FROM x_sync_runs
+                  WHERE stream = 'bookmarks' AND status = 'completed'
+                ),
+                last_error = NULL,
+                next_run_at = ?1,
+                updated_at = ?2
+            WHERE key = 'x:bookmarks'
+              AND status != 'healthy'
+              AND EXISTS (
+                SELECT 1
+                FROM x_sync_runs later
+                WHERE later.stream = 'bookmarks'
+                  AND later.status = 'completed'
+                  AND later.completed_at > COALESCE(source_health.last_failure_at, '')
+              )
+            "#,
+            params![next_bookmark_run_at, now()],
+        )?;
+        let next_watch_run_at = now_plus_seconds(defer_rate_limited_hours.clamp(1, 24 * 30) * 3600);
+        let repaired_watch_health = self.conn.execute(
+            r#"
+            UPDATE source_health
+            SET status = 'healthy',
+                last_success_at = (
+                  SELECT MAX(later.completed_at)
+                  FROM x_sync_runs later
+                  WHERE later.stream = 'watch_monitor'
+                    AND later.status = 'completed'
+                    AND COALESCE(later.cursor_key, '') = source_health.key
+                ),
+                last_error = NULL,
+                next_run_at = ?1,
+                updated_at = ?2
+            WHERE (provider = 'x' OR key LIKE 'x:%')
+              AND source_kind = 'x_monitor'
+              AND status != 'healthy'
+              AND EXISTS (
+                SELECT 1
+                FROM x_sync_runs later
+                WHERE later.stream = 'watch_monitor'
+                  AND later.status = 'completed'
+                  AND COALESCE(later.cursor_key, '') = source_health.key
+                  AND later.completed_at > COALESCE(source_health.last_failure_at, '')
+              )
+            "#,
+            params![next_watch_run_at, now()],
+        )?;
+        Ok(XHealthRepairReport {
+            repaired_bookmark_health,
+            repaired_watch_health,
+            rate_limited_scanned: deferred.scanned,
+            rate_limited_deferred: deferred.deferred,
+            defer_until: deferred.defer_until,
+        })
+    }
+
+    fn x_defer_rate_limited_sources(
+        &self,
+        defer_rate_limited_hours: i64,
+        limit: usize,
+    ) -> Result<XRateLimitDeferReport> {
+        let limit = limit.clamp(1, 100_000);
+        let defer_until = now_plus_seconds(defer_rate_limited_hours.clamp(1, 24 * 30) * 3600);
+        let scanned = self.count_query(
+            r#"
+            SELECT COUNT(*)
+            FROM source_health
+            WHERE (provider = 'x' OR key LIKE 'x:%')
+              AND status = 'rate_limited'
+              AND (
+                next_run_at IS NULL
+                OR next_run_at <= strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')
+              )
+            "#,
+        )? as usize;
+        let updated_at = now();
+        let deferred = self.conn.execute(
+            r#"
+            UPDATE source_health
+            SET next_run_at = ?1,
+                updated_at = ?2
+            WHERE rowid IN (
+              SELECT rowid
+              FROM source_health
+              WHERE (provider = 'x' OR key LIKE 'x:%')
+                AND status = 'rate_limited'
+                AND (
+                  next_run_at IS NULL
+                  OR next_run_at <= strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')
+                )
+              ORDER BY updated_at ASC, key ASC
+              LIMIT ?3
+            )
+            "#,
+            params![defer_until, updated_at, limit as i64],
+        )?;
+        Ok(XRateLimitDeferReport {
+            scanned,
+            deferred,
+            defer_until,
         })
     }
 
@@ -85899,7 +86049,7 @@ reason = "X monitor network blocked for test"
                 "x",
                 "x_handle",
                 "arcwell",
-                "429 rate limit token=sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "provider failed token=sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
             .unwrap();
         let leaked_secret = "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -86078,6 +86228,106 @@ reason = "X monitor network blocked for test"
                 .failures
                 .iter()
                 .any(|failure| failure == "X source health: 7 non-healthy source row(s)")
+        );
+    }
+
+    #[test]
+    fn severe_x_repair_health_reconciles_success_and_defers_quota_without_fake_green() {
+        // CLAIM: X health repair reconciles stale local accounting but does not
+        // mark provider quota failures healthy without a later successful read.
+        // PRECONDITIONS: bookmark health is failed but later bookmark sync
+        // completed; watch health is rate_limited with an expired backoff and
+        // an unresolved failed sync run.
+        // POSTCONDITIONS: bookmark health becomes healthy, watch health remains
+        // rate_limited with a future next_run_at, and strict X blocking counts
+        // no longer treat the quota-deferred failed sync as local corruption.
+        // ORACLE: source_health rows plus x_stats blocking counters/status groups.
+        // SEVERITY: Severe because a repair command that paints quota failures
+        // healthy would recreate the "done but hollow" failure mode.
+        let store = test_store("x-health-repair");
+        let old_failure = "2026-06-25T05:00:00+00:00";
+        let later_success = "2026-06-25T05:10:00+00:00";
+        let expired_backoff = "2026-06-25T06:00:00+00:00";
+        store
+            .conn
+            .execute(
+                r#"
+                INSERT INTO source_health
+                  (key, provider, source_kind, locator, status, last_success_at,
+                   last_failure_at, last_error, last_item_id, last_item_date,
+                   cursor_key, cursor_value, next_run_at, updated_at)
+                VALUES
+                  ('x:bookmarks', 'x', 'x_import_bookmarks', 'bookmarks', 'failed',
+                   NULL, ?1, 'expired bearer', NULL, NULL, NULL, NULL, ?3, ?1),
+                  ('x:watch:quota', 'x', 'x_monitor', 'quota', 'rate_limited',
+                   NULL, ?1, 'rate limit', NULL, NULL, 'x:watch:quota', NULL, ?3, ?1)
+                "#,
+                params![old_failure, later_success, expired_backoff],
+            )
+            .unwrap();
+        store
+            .record_x_sync_run(XSyncRunInsert {
+                account_id: None,
+                stream: "bookmarks",
+                transport: "x_api",
+                status: "completed",
+                started_at: later_success,
+                completed_at: later_success,
+                seen: 1,
+                inserted: 0,
+                updated: 0,
+                skipped_duplicates: 1,
+                rejected: 0,
+                cursor_key: None,
+                previous_cursor: None,
+                new_cursor: None,
+                error: None,
+                metadata: json!({}),
+            })
+            .unwrap();
+        store
+            .record_x_sync_run(XSyncRunInsert {
+                account_id: None,
+                stream: "watch_monitor",
+                transport: "x_api",
+                status: "failed",
+                started_at: old_failure,
+                completed_at: old_failure,
+                seen: 0,
+                inserted: 0,
+                updated: 0,
+                skipped_duplicates: 0,
+                rejected: 0,
+                cursor_key: Some("x:watch:quota"),
+                previous_cursor: None,
+                new_cursor: None,
+                error: Some("rate limit"),
+                metadata: json!({}),
+            })
+            .unwrap();
+
+        let before = store.x_stats().unwrap();
+        assert_eq!(before.drift.non_healthy_sources, 2);
+        assert_eq!(before.unresolved_failed_sync_runs, 1);
+
+        let report = store.x_repair_health(24, 100).unwrap();
+        assert_eq!(report.repaired_bookmark_health, 1);
+        assert_eq!(report.repaired_watch_health, 0);
+        assert_eq!(report.rate_limited_deferred, 1);
+
+        let bookmark = store.get_source_health("x:bookmarks").unwrap().unwrap();
+        assert_eq!(bookmark.status, "healthy");
+        assert!(bookmark.last_error.is_none());
+        let quota = store.get_source_health("x:watch:quota").unwrap().unwrap();
+        assert_eq!(quota.status, "rate_limited");
+        assert!(quota.next_run_at.unwrap() > now());
+
+        let after = store.x_stats().unwrap();
+        assert_eq!(after.drift.non_healthy_sources, 0);
+        assert_eq!(after.unresolved_failed_sync_runs, 0);
+        assert_eq!(
+            after.source_health_by_status.get("rate_limited").copied(),
+            Some(1)
         );
     }
 
@@ -86993,7 +87243,7 @@ reason = "test denies X link expansion"
                 "x",
                 "x_monitor",
                 "opsdrift",
-                "rate limit access_token=sk-source-health-secret",
+                "provider failed access_token=sk-source-health-secret",
             )
             .unwrap();
         let leaked_sync_secret = "ghp_cccccccccccccccccccccccccccccccccccccccccccccccc";

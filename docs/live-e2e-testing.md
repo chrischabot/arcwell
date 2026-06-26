@@ -202,11 +202,16 @@ Remaining limits:
 - These are capped copied-home live proofs, not multi-day recurrence or broad
   quota/tier coverage.
 - X portable export freshness is repaired, but broad watch-source health is
-  still blocked by current rate-limit rows and 700 unresolved watch sync
-  failures. Broad monitor runs now stop after three classified quota/rate-limit
-  failures and report deferred sources without marking them failed, but the
-  current real rows still need provider-plan capacity handling plus a
-  policy-allowed repair/retry proof before strict health can be promoted.
+  still constrained by provider quota. Broad monitor runs now stop after three
+  classified quota/rate-limit failures and report deferred sources without
+  marking unattempted sources failed. `arcwell x repair-health
+  --defer-rate-limited-hours 24 --limit 10000` reconciles stale failures only
+  when later successful syncs prove them obsolete, and defers stale
+  `rate_limited` rows without marking them healthy. A real-home run on
+  2026-06-26 repaired one stale bookmark-health failure, deferred 724
+  rate-limited watch rows to 2026-06-27, and reduced X blocking
+  `non_healthy_sources` / `unresolved_failed_sync_runs` to zero while still
+  showing those 724 rows as `rate_limited`.
 - X OAuth provider-side revocation is proven against a controlled local
   endpoint, not live-tested against a deliberately revoked real X refresh token.
 - X plan/API tier changes can still alter bookmark/follow/watch behavior.

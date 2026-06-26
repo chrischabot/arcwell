@@ -3432,6 +3432,12 @@ enum XSubcommand {
         #[arg(long, default_value_t = 10)]
         max_results_per_source: usize,
     },
+    RepairHealth {
+        #[arg(long, default_value_t = 24)]
+        defer_rate_limited_hours: i64,
+        #[arg(long, default_value_t = 10000)]
+        limit: usize,
+    },
     OauthUrl {
         #[arg(long)]
         client_id: String,
@@ -5214,6 +5220,10 @@ fn x_command(store: Store, args: XCommand) -> Result<()> {
             max_sources,
             max_results_per_source,
         } => print_json(&store.x_monitor_watch_sources(max_sources, max_results_per_source)?),
+        XSubcommand::RepairHealth {
+            defer_rate_limited_hours,
+            limit,
+        } => print_json(&store.x_repair_health(defer_rate_limited_hours, limit)?),
         XSubcommand::OauthUrl {
             client_id,
             redirect_uri,
@@ -13873,6 +13883,19 @@ fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> Result<Value
                 max_results_per_source,
             )?))
         }
+        "x_repair_health" => {
+            let defer_rate_limited_hours = arguments
+                .get("defer_rate_limited_hours")
+                .and_then(Value::as_i64)
+                .unwrap_or(24);
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(10000) as usize;
+            Ok(json!(
+                store.x_repair_health(defer_rate_limited_hours, limit)?
+            ))
+        }
         "x_oauth_authorize_url" => {
             let client_id = required_string(&arguments, "client_id")?;
             let redirect_uri = required_string(&arguments, "redirect_uri")?;
@@ -15688,6 +15711,22 @@ fn mcp_tools() -> Vec<Value> {
                     "max_results_per_source",
                     "integer",
                     "Maximum recent tweets to request per watched source.",
+                ),
+            ],
+        ),
+        tool(
+            "x_repair_health",
+            "Reconcile stale X source-health rows after later successful syncs and defer currently rate-limited rows without marking them healthy.",
+            [
+                (
+                    "defer_rate_limited_hours",
+                    "integer",
+                    "Hours to defer stale rate-limited X source-health rows.",
+                ),
+                (
+                    "limit",
+                    "integer",
+                    "Maximum stale rate-limited rows to defer.",
                 ),
             ],
         ),
