@@ -200,6 +200,16 @@ Current implemented bridge slice:
   cluster-scoped watch source. Local severe tests prove idempotency and no
   external delivery; live/broad production writer quality still needs a separate
   proof.
+- Cluster evidence revision gating now keeps terminal editorial, expansion,
+  investigation, and model-writer decisions tied to the exact source-card set
+  they evaluated. `add_source_cards_to_knowledge_cluster` merges fresh
+  source-card evidence into an existing cluster, updates event evidence and
+  cluster scores, stores a source-card-set fingerprint, and due recurrence
+  reopens when that fingerprint changes. Severe tests prove fresh evidence
+  reopens shared editorial recurrence and promoted model-writer recurrence
+  without external delivery. This is local stale-evidence protection, not
+  versioned decision history, broad semantic merge quality, or live
+  wall-clock recurrence.
 - Source-card-gated model cluster writing through
   `arcwell knowledge write-cluster-model`,
   `arcwell knowledge enqueue-cluster-model-write`, and the resident
@@ -1431,6 +1441,14 @@ Add preserved proof scripts:
       promoted model-writer job without a pre-created operator job or watch
       source, suppresses duplicate terminal reruns, and creates no external
       delivery. This is local proof, not live provider or multi-day proof.
+- [x] Local cluster evidence revision stale-decision severe tests:
+      `severe_cluster_evidence_revision_reopens_shared_editorial_recurrence`
+      and
+      `severe_cluster_evidence_revision_reopens_promoted_model_writer_recurrence`
+      prove terminal decisions are current only for the source-card set they
+      evaluated. Adding a fresh source card to an existing cluster updates the
+      cluster fingerprint and reopens shared editorial/model-writer recurrence
+      without authorizing external delivery.
 - [x] `scripts/knowledge-digest-recurrence-proof`
       passed at
       `.arcwell-dev/proofs/knowledge-digest-recurrence-proof-20260626T075355Z-75160/proof-packet.json`:

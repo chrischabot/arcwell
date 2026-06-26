@@ -66,6 +66,8 @@ Knowledge worker chaining and deterministic backlog update: completed `knowledge
 
 2026-06-26 resident model-writer recurrence note: `run_worker_once` now invokes the due promoted model-origin writer sweep before shared editorial/expansion recurrence, and `WorkerRunReport` exposes the `knowledge_cluster_model_writer` enqueue report. A severe local test proves a promoted model-origin cluster can be written without a pre-created operator job or cluster-scoped watch source, while unpromoted/model-proposal and deterministic/shared clusters are not written by that sweep, terminal reruns suppress duplicate writer jobs, and external delivery remains untouched. This is Local Proof for resident recurrence, not broad production-corpus writer quality, live external delivery, or multi-day service proof.
 
+2026-06-26 cluster evidence revision note: terminal editorial, expansion, investigation-execution, and model-writer decisions now suppress recurrence only for the source-card set they evaluated. `add_source_cards_to_knowledge_cluster` merges fresh evidence into an existing cluster, updates event evidence and a readable source-card-set fingerprint, and severe tests prove shared editorial recurrence plus promoted model-writer recurrence reopen after fresh source-card evidence arrives. This is Local Proof against stale-decision mirages, not versioned decision history, semantic merge quality, live external delivery, or multi-day service proof.
+
 ## Product Reality
 
 | Area | Exact state | Live status | Tests | Owner | Blocker / next proof |

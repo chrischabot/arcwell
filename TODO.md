@@ -425,6 +425,16 @@ PR, implementation note, or final report:
       terminal runs do not create another writer job or external delivery. This
       is Local Proof for resident recurrence, not broad production-corpus
       writer quality or multi-day service proof.
+      Cluster evidence revision gating now prevents a different stale mirage:
+      terminal `editorial_decide`, deterministic expansion, model-writer, and
+      investigation-execution decisions suppress recurrence only for the exact
+      source-card set they evaluated. `add_source_cards_to_knowledge_cluster`
+      merges new source-card evidence, updates events/cluster metadata with a
+      source-card-set fingerprint, and severe tests prove shared editorial
+      recurrence and promoted model-writer recurrence reopen after fresh
+      evidence is merged, while still avoiding external delivery. This is local
+      stale-evidence proof, not versioned decision history, semantic merge
+      quality, or live wall-clock recurrence.
       The authenticated `/ops/ui` Knowledge Controls now also expose a
       CSRF/idempotency-protected model-cluster promotion action, double-gated by
       `ops.knowledge_clusters.promote` and core `knowledge_cluster.promote`

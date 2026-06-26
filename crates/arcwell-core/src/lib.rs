@@ -14209,10 +14209,10 @@ impl Store {
                 report.skipped += 1;
                 continue;
             }
-            if let Some(status) = self
-                .get_knowledge_editorial_decision_for_cluster(&cluster.id, "editorial_decide")?
-                .map(|decision| decision.status)
-                && matches!(status.as_str(), "completed" | "blocked")
+            if let Some(existing) =
+                self.get_knowledge_editorial_decision_for_cluster(&cluster.id, "editorial_decide")?
+                && matches!(existing.status.as_str(), "completed" | "blocked")
+                && knowledge_editorial_decision_matches_cluster_revision(&existing, &cluster)
             {
                 report.skipped += 1;
                 continue;
@@ -14478,21 +14478,18 @@ impl Store {
         cluster_id: &str,
     ) -> Result<Option<String>> {
         validate_id(cluster_id)?;
-        self.conn
-            .query_row(
-                r#"
-                SELECT status
-                FROM knowledge_editorial_decisions
-                WHERE cluster_id = ?1
-                  AND decision IN ('expand_wiki_and_digest', 'expand_wiki')
-                ORDER BY updated_at DESC
-                LIMIT 1
-                "#,
-                params![cluster_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(Into::into)
+        let cluster = self
+            .get_knowledge_cluster(cluster_id)?
+            .with_context(|| format!("knowledge cluster not found: {cluster_id}"))?;
+        for decision in ["expand_wiki_and_digest", "expand_wiki"] {
+            if let Some(existing) =
+                self.get_knowledge_editorial_decision_for_cluster(cluster_id, decision)?
+                && knowledge_editorial_decision_matches_cluster_revision(&existing, &cluster)
+            {
+                return Ok(Some(existing.status));
+            }
+        }
+        Ok(None)
     }
 
     fn knowledge_cluster_model_writer_decision_status(
@@ -14500,21 +14497,18 @@ impl Store {
         cluster_id: &str,
     ) -> Result<Option<String>> {
         validate_id(cluster_id)?;
-        self.conn
-            .query_row(
-                r#"
-                SELECT status
-                FROM knowledge_editorial_decisions
-                WHERE cluster_id = ?1
-                  AND decision IN ('model_write_wiki_and_digest', 'model_write_wiki')
-                ORDER BY updated_at DESC
-                LIMIT 1
-                "#,
-                params![cluster_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(Into::into)
+        let cluster = self
+            .get_knowledge_cluster(cluster_id)?
+            .with_context(|| format!("knowledge cluster not found: {cluster_id}"))?;
+        for decision in ["model_write_wiki_and_digest", "model_write_wiki"] {
+            if let Some(existing) =
+                self.get_knowledge_editorial_decision_for_cluster(cluster_id, decision)?
+                && knowledge_editorial_decision_matches_cluster_revision(&existing, &cluster)
+            {
+                return Ok(Some(existing.status));
+            }
+        }
+        Ok(None)
     }
 
     fn knowledge_cluster_investigation_execution_decision_status(
@@ -14522,21 +14516,18 @@ impl Store {
         cluster_id: &str,
     ) -> Result<Option<String>> {
         validate_id(cluster_id)?;
-        self.conn
-            .query_row(
-                r#"
-                SELECT status
-                FROM knowledge_editorial_decisions
-                WHERE cluster_id = ?1
-                  AND decision = 'execute_investigation_tasks'
-                ORDER BY updated_at DESC
-                LIMIT 1
-                "#,
-                params![cluster_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(Into::into)
+        let cluster = self
+            .get_knowledge_cluster(cluster_id)?
+            .with_context(|| format!("knowledge cluster not found: {cluster_id}"))?;
+        Ok(self
+            .get_knowledge_editorial_decision_for_cluster(
+                cluster_id,
+                "execute_investigation_tasks",
+            )?
+            .filter(|decision| {
+                knowledge_editorial_decision_matches_cluster_revision(decision, &cluster)
+            })
+            .map(|decision| decision.status))
     }
 
     fn knowledge_cluster_expansion_has_active_job(&self, cluster_id: &str) -> Result<bool> {
@@ -17693,6 +17684,110 @@ impl Store {
             .with_context(|| format!("inserted knowledge cluster not found: {id}"))
     }
 
+    pub fn add_source_cards_to_knowledge_cluster(
+        &self,
+        cluster_id: &str,
+        source_card_ids: &[String],
+        reason: Option<&str>,
+    ) -> Result<KnowledgeCluster> {
+        validate_id(cluster_id)?;
+        let mut cluster = self
+            .get_knowledge_cluster(cluster_id)?
+            .with_context(|| format!("knowledge cluster not found: {cluster_id}"))?;
+        let mut merged_source_card_ids = cluster.source_card_ids.clone();
+        merged_source_card_ids.extend(source_card_ids.iter().cloned());
+        let merged_source_card_ids =
+            self.normalize_knowledge_source_card_ids(&merged_source_card_ids)?;
+        if merged_source_card_ids == cluster.source_card_ids {
+            return Ok(cluster);
+        }
+        let merged_source_cards = self.read_knowledge_source_cards(&merged_source_card_ids)?;
+        let new_source_cards = source_card_ids
+            .iter()
+            .filter_map(|id| {
+                merged_source_cards
+                    .iter()
+                    .find(|card| card.id == *id)
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        let new_events = self.ensure_knowledge_events_for_source_cards(
+            &new_source_cards,
+            "knowledge_cluster_evidence_update",
+        )?;
+        let mut event_ids = cluster.event_ids.clone();
+        event_ids.extend(new_events.into_iter().map(|event| event.id));
+        let event_ids = self.normalize_knowledge_event_ids(&event_ids)?;
+        self.ensure_knowledge_cluster_event_evidence(&event_ids, &merged_source_card_ids)?;
+        let last_seen_at = merged_source_cards
+            .iter()
+            .map(|card| card.retrieved_at.clone())
+            .max()
+            .unwrap_or_else(now);
+        let provider_count = merged_source_cards
+            .iter()
+            .map(|card| card.provider.clone())
+            .collect::<BTreeSet<_>>()
+            .len();
+        let novelty_score = cluster.novelty_score.max(
+            ((provider_count as f64 + merged_source_cards.len() as f64) / 12.0).clamp(0.1, 1.0),
+        );
+        let momentum_score = cluster
+            .momentum_score
+            .max((merged_source_cards.len() as f64 / 10.0).clamp(0.1, 1.0));
+        let duplicate_groups = knowledge_duplicate_groups_for_cards(&merged_source_cards);
+        let timestamp = now();
+        let previous_revision = knowledge_source_card_revision(&cluster.source_card_ids);
+        let current_revision = knowledge_source_card_revision(&merged_source_card_ids);
+        let mut metadata = cluster.metadata.clone();
+        if !metadata.is_object() {
+            metadata = json!({ "previous_metadata": metadata });
+        }
+        if let Some(object) = metadata.as_object_mut() {
+            object.insert(
+                "evidence_revision".to_string(),
+                json!({
+                    "revision": current_revision,
+                    "previous_revision": previous_revision,
+                    "source_card_count": merged_source_card_ids.len(),
+                    "updated_at": timestamp,
+                    "reason": reason.unwrap_or("Merged new source-card evidence into existing knowledge cluster."),
+                    "origin": "cluster-evidence-update"
+                }),
+            );
+        }
+        let metadata = sanitize_work_json(metadata)?;
+        self.conn.execute(
+            r#"
+            UPDATE knowledge_clusters
+            SET source_card_ids_json = ?2,
+                event_ids_json = ?3,
+                last_seen_at = ?4,
+                novelty_score = ?5,
+                momentum_score = ?6,
+                duplicate_groups_json = ?7,
+                metadata_json = ?8,
+                updated_at = ?9
+            WHERE id = ?1
+            "#,
+            params![
+                cluster.id,
+                serde_json::to_string(&merged_source_card_ids)?,
+                serde_json::to_string(&event_ids)?,
+                last_seen_at,
+                novelty_score,
+                momentum_score,
+                duplicate_groups.to_string(),
+                metadata.to_string(),
+                timestamp,
+            ],
+        )?;
+        cluster = self
+            .get_knowledge_cluster(cluster_id)?
+            .with_context(|| format!("updated knowledge cluster not found: {cluster_id}"))?;
+        Ok(cluster)
+    }
+
     pub fn get_knowledge_cluster(&self, id: &str) -> Result<Option<KnowledgeCluster>> {
         validate_id(id)?;
         self.conn
@@ -17901,6 +17996,7 @@ impl Store {
         if let Some(existing) =
             self.get_knowledge_editorial_decision_for_cluster(&cluster.id, "editorial_decide")?
             && matches!(existing.status.as_str(), "completed" | "blocked")
+            && knowledge_editorial_decision_matches_cluster_revision(&existing, &cluster)
         {
             let action = existing
                 .metadata
@@ -19145,6 +19241,28 @@ impl Store {
         if let Some(digest_candidate_id) = &input.digest_candidate_id {
             validate_id(digest_candidate_id)?;
         }
+        let cluster_revision = knowledge_source_card_revision(&cluster.source_card_ids);
+        let decision_revision = knowledge_source_card_revision(&source_card_ids);
+        let mut metadata = input.metadata;
+        if !metadata.is_object() {
+            metadata = json!({ "previous_metadata": metadata });
+        }
+        if let Some(object) = metadata.as_object_mut() {
+            object.insert(
+                "cluster_evidence_revision".to_string(),
+                json!({
+                    "revision": cluster_revision,
+                    "source_card_count": cluster.source_card_ids.len(),
+                }),
+            );
+            object.insert(
+                "decision_evidence_revision".to_string(),
+                json!({
+                    "revision": decision_revision,
+                    "source_card_count": source_card_ids.len(),
+                }),
+            );
+        }
         let id = format!(
             "ked-{}",
             &sha256(format!("{}\n{}", input.cluster_id, input.decision).as_bytes())[..16]
@@ -19177,7 +19295,7 @@ impl Store {
                 serde_json::to_string(&source_card_ids)?,
                 input.reason,
                 serde_json::to_string(&input.quality_findings)?,
-                input.metadata.to_string(),
+                metadata.to_string(),
                 timestamp,
             ],
         )?;
@@ -36619,6 +36737,26 @@ fn validate_knowledge_editorial_decision_input(
         validate_knowledge_text("knowledge editorial quality finding", finding, 2_000)?;
     }
     Ok(())
+}
+
+fn knowledge_source_card_revision(source_card_ids: &[String]) -> String {
+    let normalized = source_card_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let payload = serde_json::to_string(&normalized).unwrap_or_else(|_| "[]".to_string());
+    format!("source-card-set:{}", &sha256(payload.as_bytes())[..16])
+}
+
+fn knowledge_editorial_decision_matches_cluster_revision(
+    decision: &KnowledgeEditorialDecision,
+    cluster: &KnowledgeCluster,
+) -> bool {
+    knowledge_source_card_revision(&decision.source_card_ids)
+        == knowledge_source_card_revision(&cluster.source_card_ids)
 }
 
 fn validate_knowledge_report_input(input: &KnowledgeReportInput) -> Result<()> {
@@ -60851,6 +60989,119 @@ mod tests {
     }
 
     #[test]
+    fn severe_cluster_evidence_revision_reopens_shared_editorial_recurrence() {
+        // CLAIM: terminal shared editorial/expansion decisions only suppress
+        // recurrence for the evidence revision they evaluated.
+        // ORACLE: after a cluster is expanded, merging a new source card into
+        // the same cluster makes due editorial recurrence enqueue a fresh
+        // editorial_decide job, which can enqueue and complete a fresh expansion
+        // using the new source-card set.
+        // SEVERITY: Severe because otherwise autonomous wiki expansion can look
+        // complete while silently reusing stale reports after new evidence
+        // arrives.
+        let store = test_store("knowledge-cluster-revision-shared");
+        let release = seed_knowledge_source_card(
+            &store,
+            "revision-shared-release",
+            "Revision shared evidence says OpenAI shipped an agent SDK release.",
+        );
+        let reaction = seed_knowledge_source_card(
+            &store,
+            "revision-shared-reaction",
+            "Revision shared evidence says developers discussed the agent SDK release.",
+        );
+        let cluster = store
+            .create_knowledge_cluster(KnowledgeClusterInput {
+                topic: "Revision shared agent SDK trend".to_string(),
+                status: "candidate".to_string(),
+                event_ids: Vec::new(),
+                source_card_ids: vec![release.id.clone(), reaction.id.clone()],
+                first_seen_at: None,
+                last_seen_at: None,
+                novelty_score: 0.82,
+                momentum_score: 0.66,
+                stale_score: 0.0,
+                reason: "Initial source-card-backed shared cluster.".to_string(),
+                duplicate_groups: json!({}),
+                metadata: json!({ "fixture": "revision_shared" }),
+            })
+            .unwrap();
+        let first = store.run_worker_once(10).unwrap();
+        assert!(
+            first
+                .knowledge_cluster_editorial_decision
+                .as_ref()
+                .is_some_and(|report| report.enqueued == 1),
+            "{first:#?}"
+        );
+        assert!(
+            first
+                .jobs
+                .iter()
+                .any(|job| job.kind == "knowledge_cluster_expand" && job.status == "completed"),
+            "{first:#?}"
+        );
+        let first_decision = store
+            .get_knowledge_editorial_decision_for_cluster(&cluster.id, "expand_wiki_and_digest")
+            .unwrap()
+            .unwrap();
+        assert_eq!(first_decision.source_card_ids.len(), 2);
+        let fresh = seed_knowledge_source_card(
+            &store,
+            "revision-shared-fresh",
+            "Revision shared fresh evidence says the OpenAI agent SDK release now has a package registry update.",
+        );
+        let updated = store
+            .add_source_cards_to_knowledge_cluster(
+                &cluster.id,
+                &[fresh.id.clone()],
+                Some("Fresh package-registry evidence arrived for the same cluster."),
+            )
+            .unwrap();
+        assert_eq!(updated.source_card_ids.len(), 3);
+        assert_eq!(
+            updated
+                .metadata
+                .pointer("/evidence_revision/source_card_count")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            updated
+                .metadata
+                .pointer("/evidence_revision/origin")
+                .and_then(Value::as_str),
+            Some("cluster-evidence-update")
+        );
+
+        let due = store
+            .enqueue_due_knowledge_cluster_editorial_decision_jobs(10)
+            .unwrap();
+        assert_eq!(due.enqueued, 1, "{due:?}");
+        assert_eq!(due.skipped, 0, "{due:?}");
+        let second = store.run_worker_once(10).unwrap();
+        assert!(
+            second
+                .jobs
+                .iter()
+                .any(|job| job.kind == "knowledge_cluster_expand" && job.status == "completed"),
+            "{second:#?}"
+        );
+        let refreshed_decision = store
+            .get_knowledge_editorial_decision_for_cluster(&cluster.id, "expand_wiki_and_digest")
+            .unwrap()
+            .unwrap();
+        assert_eq!(refreshed_decision.source_card_ids.len(), 3);
+        assert_eq!(
+            refreshed_decision
+                .metadata
+                .pointer("/cluster_evidence_revision/source_card_count")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+    }
+
+    #[test]
     fn severe_large_knowledge_cluster_expansion_bounds_prose_without_losing_citations() {
         // CLAIM: A production-sized shared cluster should expand into a bounded
         // human-readable wiki/report artifact instead of failing with an
@@ -63870,6 +64121,164 @@ priority = 20
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn severe_cluster_evidence_revision_reopens_promoted_model_writer_recurrence() {
+        // CLAIM: terminal model-writer decisions suppress recurrence only for
+        // the evidence revision they wrote, not forever for the cluster id.
+        // ORACLE: after a promoted model-origin cluster is model-written,
+        // merging a new source card into the same cluster lets the resident
+        // due model-writer sweep enqueue and complete a second writer job with
+        // the new source-card set, without external delivery.
+        // SEVERITY: Severe because otherwise model-backed pages can silently
+        // become stale while the worker reports nothing due.
+        let store = test_store("knowledge-cluster-revision-model-writer");
+        let release = seed_knowledge_source_card(
+            &store,
+            "revision-model-release",
+            "Revision model evidence says OpenAI shipped an MCP-capable agent package.",
+        );
+        let benchmark = seed_knowledge_source_card(
+            &store,
+            "revision-model-benchmark",
+            "Revision model evidence says the agent package was compared with coding benchmarks.",
+        );
+        let invocation = store
+            .invoke_knowledge_cluster_model(KnowledgeClusterProposalModelInput {
+                source_card_ids: vec![release.id.clone(), benchmark.id.clone()],
+                model_provider: "mock".to_string(),
+                model_name: None,
+                endpoint: None,
+                timeout_seconds: None,
+                max_clusters: 6,
+            })
+            .unwrap();
+        let cluster = invocation.clusters.first().unwrap().clone();
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "allow-revision-model-writer-promotion"
+effect = "allow"
+action = "knowledge_cluster.promote"
+package = "arcwell-librarian"
+source = "knowledge_cluster_model_review"
+reason = "allow model writer revision promotion"
+priority = 20
+
+[[rules]]
+id = "allow-revision-model-writer-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+source = "knowledge_cluster_model_write"
+reason = "allow model writer revision recurrence"
+priority = 20
+
+[[rules]]
+id = "allow-revision-model-writer-source-write"
+effect = "allow"
+action = "source.write"
+reason = "allow model writer revision source-card fixture"
+priority = 20
+"#,
+        );
+        store
+            .promote_knowledge_cluster(
+                &cluster.id,
+                Some("revision-model-writer-test"),
+                Some("Promote model-origin cluster before writer recurrence."),
+            )
+            .unwrap();
+
+        let first = store.run_worker_once(10).unwrap();
+        assert!(
+            first
+                .knowledge_cluster_model_writer
+                .as_ref()
+                .is_some_and(|report| report.enqueued == 1),
+            "{first:#?}"
+        );
+        assert_eq!(
+            first
+                .jobs
+                .iter()
+                .filter(
+                    |job| job.kind == "knowledge_cluster_model_write" && job.status == "completed"
+                )
+                .count(),
+            1,
+            "{first:#?}"
+        );
+        let first_decision = store
+            .get_knowledge_editorial_decision_for_cluster(
+                &cluster.id,
+                "model_write_wiki_and_digest",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            first_decision.source_card_ids.len(),
+            cluster.source_card_ids.len()
+        );
+
+        let fresh = seed_knowledge_source_card(
+            &store,
+            "revision-model-fresh",
+            "Revision model fresh evidence says the OpenAI agent package added registry release notes.",
+        );
+        let updated = store
+            .add_source_cards_to_knowledge_cluster(
+                &cluster.id,
+                &[fresh.id.clone()],
+                Some("Fresh registry evidence arrived for the promoted model-origin cluster."),
+            )
+            .unwrap();
+        assert!(updated.source_card_ids.contains(&fresh.id));
+        let due = store
+            .enqueue_due_knowledge_cluster_model_writer_jobs(10, "mock", None, None, None, true)
+            .unwrap();
+        assert_eq!(due.enqueued, 1, "{due:?}");
+        let second = store.run_worker_once(10).unwrap();
+        assert_eq!(
+            second
+                .jobs
+                .iter()
+                .filter(
+                    |job| job.kind == "knowledge_cluster_model_write" && job.status == "completed"
+                )
+                .count(),
+            1,
+            "{second:#?}"
+        );
+        assert_eq!(
+            store
+                .list_wiki_jobs()
+                .unwrap()
+                .iter()
+                .filter(|job| job.kind == "knowledge_cluster_model_write")
+                .count(),
+            2
+        );
+        let refreshed_decision = store
+            .get_knowledge_editorial_decision_for_cluster(
+                &cluster.id,
+                "model_write_wiki_and_digest",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            refreshed_decision.source_card_ids.len(),
+            updated.source_card_ids.len()
+        );
+        assert_eq!(
+            refreshed_decision
+                .metadata
+                .pointer("/cluster_evidence_revision/source_card_count")
+                .and_then(Value::as_u64),
+            Some(updated.source_card_ids.len() as u64)
+        );
+        assert!(store.list_digest_deliveries(None).unwrap().is_empty());
     }
 
     #[test]
