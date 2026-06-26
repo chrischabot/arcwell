@@ -58,6 +58,8 @@ Knowledge worker chaining and deterministic backlog update: completed `knowledge
 
 2026-06-26 knowledge recurrence lineage note: auto-enqueued `knowledge_cluster_backlog`, `knowledge_cluster_expand`, and `knowledge_cluster_investigation_execute` jobs now carry durable `input_json.lineage` with parent job ids, watch-source health keys, source-card ids, cluster ids/topics, and investigation/report ids where available. Local severe tests assert scheduled backlog recurrence, adapter-completion chaining, backlog-to-expansion chaining, expansion-to-investigation chaining, and policy-denied follow-ups remain explainable from stored job rows. This is still Local Proof, not wall-clock production recurrence or live external delivery recurrence.
 
+2026-06-26 ops lineage visibility note: `/ops/ui` Jobs now includes a compact lineage column for jobs with `input_json.lineage`, and the Jobs filter searches those lineage summaries. A severe UI test proves scheduled knowledge backlog -> expansion lineage is visible and hostile lineage text is escaped. This is local ops visibility only; it does not prove a resident service ran over wall-clock time.
+
 ## Product Reality
 
 | Area | Exact state | Live status | Tests | Owner | Blocker / next proof |

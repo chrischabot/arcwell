@@ -7756,7 +7756,7 @@ code,pre{white-space:pre-wrap;word-break:break-word}
     html.push_str(&ops_table_with_raw_columns(
         "Jobs",
         &[
-            "id", "kind", "status", "attempts", "worker", "next run", "updated", "error",
+            "id", "kind", "status", "attempts", "lineage", "worker", "next run", "updated", "error",
         ],
         filtered_jobs(snapshot, options)
             .into_iter()
@@ -7767,6 +7767,7 @@ code,pre{white-space:pre-wrap;word-break:break-word}
                     job.kind.clone(),
                     job.status.clone(),
                     format!("{}/{}", job.attempts, job.max_attempts),
+                    job_lineage_summary(job),
                     job.worker_id.clone().unwrap_or_default(),
                     job.next_run_at.clone().unwrap_or_default(),
                     job.updated_at.clone(),
@@ -9007,6 +9008,42 @@ fn render_ops_detail(snapshot: &OpsSnapshot, detail: &str) -> String {
     }
 }
 
+fn job_lineage_summary(job: &arcwell_core::WikiJob) -> String {
+    let Some(lineage) = job.input_json.get("lineage").and_then(Value::as_object) else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    if let Some(trigger) = lineage.get("trigger").and_then(Value::as_str) {
+        parts.push(format!("trigger:{trigger}"));
+    }
+    if let Some(parent_kind) = lineage.get("parent_kind").and_then(Value::as_str) {
+        parts.push(format!("parent:{parent_kind}"));
+    }
+    if let Some(parent_job_id) = lineage.get("parent_job_id").and_then(Value::as_str) {
+        parts.push(format!("parent_job:{}", short_id(parent_job_id)));
+    }
+    if let Some(watch_source_key) = lineage.get("watch_source_key").and_then(Value::as_str) {
+        parts.push(format!("source:{watch_source_key}"));
+    }
+    if let Some(cluster_id) = lineage.get("cluster_id").and_then(Value::as_str) {
+        parts.push(format!("cluster:{}", short_id(cluster_id)));
+    }
+    if let Some(source_card_count) = lineage.get("source_card_count").and_then(Value::as_u64) {
+        parts.push(format!("source_cards:{source_card_count}"));
+    }
+    if let Some(task_count) = lineage
+        .get("investigation_task_count")
+        .and_then(Value::as_u64)
+    {
+        parts.push(format!("tasks:{task_count}"));
+    }
+    if parts.is_empty() {
+        json_cell(&Value::Object(lineage.clone()))
+    } else {
+        parts.join(" ")
+    }
+}
+
 fn filtered_jobs<'a>(
     snapshot: &'a OpsSnapshot,
     options: &OpsUiOptions,
@@ -9015,6 +9052,7 @@ fn filtered_jobs<'a>(
         .jobs
         .iter()
         .filter(|job| {
+            let lineage_summary = job_lineage_summary(job);
             matches_status(&job.status, options)
                 && matches_query(
                     options,
@@ -9024,6 +9062,7 @@ fn filtered_jobs<'a>(
                         job.status.as_str(),
                         job.worker_id.as_deref().unwrap_or_default(),
                         job.error.as_deref().unwrap_or_default(),
+                        lineage_summary.as_str(),
                     ],
                 )
         })
@@ -19842,6 +19881,90 @@ reason = "<script data-x=\"policy\">alert('policy')</script>"
         assert!(html.contains(&short_id(&projection.cluster.id)));
         assert!(!html.contains("<script>alert(1)</script>"));
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+    }
+
+    #[test]
+    fn severe_ops_ui_surfaces_knowledge_job_lineage_without_raw_html() {
+        // CLAIM: Knowledge recurrence lineage is operator-visible from the ops
+        // job list, not only buried in raw job detail JSON.
+        // ORACLE: A scheduled backlog -> expansion chain renders compact
+        // lineage summaries, query filtering can find lineage fields, and a
+        // hostile lineage trigger is escaped instead of rendered as HTML.
+        // SEVERITY: Severe because opaque autonomous jobs recreate the
+        // "looks integrated, cannot explain itself" failure mode.
+        let paths = test_paths("ops-ui-knowledge-job-lineage");
+        let store = Store::open(paths).unwrap();
+        store
+            .schedule_knowledge_cluster_backlog(25, 2, 5, "warm", "active")
+            .unwrap();
+        store
+            .add_source_card(SourceCardInput {
+                title: "Lineage OpenAI package release".to_string(),
+                url: "https://example.com/lineage/openai".to_string(),
+                source_type: "rss".to_string(),
+                provider: "rss".to_string(),
+                summary: "Lineage evidence says OpenAI released MCP agent infrastructure tooling."
+                    .to_string(),
+                claims: Vec::new(),
+                retrieved_at: Some("2026-06-26T08:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "rss" }),
+            })
+            .unwrap();
+        store
+            .add_source_card(SourceCardInput {
+                title: "Lineage OpenAI developer reaction".to_string(),
+                url: "https://example.com/lineage/reaction".to_string(),
+                source_type: "hackernews_story".to_string(),
+                provider: "hackernews".to_string(),
+                summary:
+                    "Lineage evidence says developers discussed the same OpenAI MCP agent tooling."
+                        .to_string(),
+                claims: Vec::new(),
+                retrieved_at: Some("2026-06-26T08:01:00Z".to_string()),
+                metadata: json!({ "source_kind": "hackernews" }),
+            })
+            .unwrap();
+        let worker = store.run_worker_once(2).unwrap();
+        assert_eq!(worker.jobs[0].kind, "knowledge_cluster_backlog");
+        assert_eq!(worker.jobs[1].kind, "knowledge_cluster_expand");
+
+        store
+            .enqueue_wiki_job(
+                "knowledge_cluster_backlog",
+                json!({
+                    "max_source_cards": 1,
+                    "min_group_size": 1,
+                    "max_clusters": 1,
+                    "lineage": {
+                        "trigger": "<script>alert(1)</script>",
+                        "watch_source_key": "knowledge:hostile-lineage"
+                    }
+                }),
+            )
+            .unwrap();
+
+        let snapshot = store.ops_snapshot().unwrap();
+        let html = render_ops_ui(&snapshot);
+        assert!(html.contains(">lineage<") || html.contains(">Lineage<"));
+        assert!(html.contains("trigger:watch_source_due"));
+        assert!(html.contains("source:knowledge:source-card-backlog"));
+        assert!(html.contains("trigger:backlog_completion"));
+        assert!(html.contains("parent:knowledge_cluster_backlog"));
+        assert!(html.contains("source_cards:2"));
+        assert!(!html.contains("<script>alert(1)</script>"));
+        assert!(html.contains("trigger:&lt;script&gt;alert(1)&lt;/script&gt;"));
+
+        let filtered = render_ops_ui_with_options(
+            &snapshot,
+            &OpsUiOptions {
+                q: Some("backlog_completion".to_string()),
+                ..OpsUiOptions::default()
+            },
+            None,
+            false,
+        );
+        assert!(filtered.contains("knowledge_cluster_expand"));
+        assert!(filtered.contains("trigger:backlog_completion"));
     }
 
     #[test]

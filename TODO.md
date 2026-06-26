@@ -231,6 +231,10 @@ PR, implementation note, or final report:
       investigation/report ids where available. Severe tests assert that
       scheduled recurrence and adapter/backlog/expansion follow-ups remain
       explainable from stored job rows.
+      `/ops/ui` now renders a compact lineage column in the Jobs table and
+      lets operators filter by lineage summaries; severe UI coverage proves
+      scheduled knowledge backlog -> expansion lineage appears without raw HTML
+      rendering from hostile lineage text.
       Completed `knowledge_cluster_backlog` jobs now visibly auto-enqueue
       `knowledge_cluster_expand` follow-ups, and completed expansion jobs
       visibly auto-enqueue `knowledge_cluster_investigation_execute` follow-ups
