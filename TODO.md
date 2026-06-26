@@ -210,6 +210,12 @@ PR, implementation note, or final report:
       one-shot backlog clustering job, plus queueing due shared cluster
       expansion jobs and due source-linked investigation execution jobs, with
       CSRF, idempotency, policy gates, and severe HTTP tests.
+      Completed source-adapter jobs now also record a visible
+      `auto_knowledge_backlog` result when fresh source-card output is chained
+      into backlog clustering, blocked by policy, or skipped because another
+      backlog job is active. Severe tests prove adapter completion can feed a
+      source-card-backed cluster through the worker and cannot bypass
+      `worker.enqueue` policy.
       Copied-home production-corpus proof
       `.arcwell-dev/proofs/knowledge-backlog-production-proof-20260626T051406Z/artifacts/proof-packet.md`
       inspected 500 real source cards, accepted 157, skipped 343, considered
@@ -245,10 +251,11 @@ PR, implementation note, or final report:
       when `worker.enqueue` policy allows it, while also proving fail-closed
       policy denial and replay suppression. This is still copied-home
       foreground recurrence, not wall-clock resident-service proof.
-      Remaining work is fresh primary-source acquisition, broad production-data
-      semantic/model clustering, X credential-refresh live proof, wall-clock
-      scheduled source recurrence, external delivery recurrence, richer
-      model-backed writer/editor synthesis, and broader ops UI repair controls.
+      Remaining work is broad live fresh primary-source acquisition,
+      production-data semantic/model clustering, X credential-refresh live
+      proof, wall-clock scheduled source recurrence, external delivery
+      recurrence, richer model-backed writer/editor synthesis, and broader ops
+      UI repair controls.
 - [ ] Complete the Arcwell X anti-mirage plan in
       `docs/arcwell-x-architecture-implementation-plan.md` before marking X
       beyond `Partial`.

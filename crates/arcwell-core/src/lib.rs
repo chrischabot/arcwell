@@ -32437,6 +32437,16 @@ impl Store {
     }
 
     fn complete_wiki_job(&self, id: &str, result_json: Value) -> Result<WikiJob> {
+        let existing = self
+            .get_wiki_job(id)?
+            .with_context(|| format!("wiki job not found before completion: {id}"))?;
+        let mut result_json = result_json;
+        if let Some(auto_knowledge_backlog) =
+            self.auto_enqueue_knowledge_backlog_after_adapter_job(&existing, &result_json)?
+            && let Some(object) = result_json.as_object_mut()
+        {
+            object.insert("auto_knowledge_backlog".to_string(), auto_knowledge_backlog);
+        }
         self.conn.execute(
             r#"
             UPDATE wiki_jobs
@@ -32457,6 +32467,71 @@ impl Store {
             .with_context(|| format!("completed wiki job not found: {id}"))?;
         self.record_knowledge_adapter_run_for_job(&job)?;
         Ok(job)
+    }
+
+    fn auto_enqueue_knowledge_backlog_after_adapter_job(
+        &self,
+        job: &WikiJob,
+        result_json: &Value,
+    ) -> Result<Option<Value>> {
+        if knowledge_adapter_context_for_job(job)?.is_none() {
+            return Ok(None);
+        }
+        let source_card_ids = adapter_source_card_ids_from_result(result_json);
+        if source_card_ids.is_empty() {
+            return Ok(None);
+        }
+        let Some(source) = self.list_watch_sources()?.into_iter().find(|source| {
+            source.source_kind == "knowledge_backlog"
+                && source.locator == "source-cards"
+                && source.status == "active"
+        }) else {
+            return Ok(None);
+        };
+        if self.knowledge_cluster_backlog_has_active_job()? {
+            return Ok(Some(json!({
+                "status": "skipped",
+                "reason": "knowledge_cluster_backlog_job_already_active",
+                "source_card_count": source_card_ids.len(),
+                "source_card_ids": source_card_ids,
+            })));
+        }
+        let max_source_cards = source
+            .metadata
+            .get("max_source_cards")
+            .and_then(Value::as_u64)
+            .unwrap_or(100) as usize;
+        let min_group_size = source
+            .metadata
+            .get("min_group_size")
+            .and_then(Value::as_u64)
+            .unwrap_or(2) as usize;
+        let max_clusters = source
+            .metadata
+            .get("max_clusters")
+            .and_then(Value::as_u64)
+            .unwrap_or(12) as usize;
+        match self.enqueue_knowledge_cluster_backlog_job(
+            max_source_cards,
+            min_group_size,
+            max_clusters,
+        ) {
+            Ok(backlog_job) => Ok(Some(json!({
+                "status": "enqueued",
+                "job_id": backlog_job.id,
+                "source_card_count": source_card_ids.len(),
+                "source_card_ids": source_card_ids,
+                "max_source_cards": max_source_cards.clamp(1, 500),
+                "min_group_size": min_group_size.clamp(1, 20),
+                "max_clusters": max_clusters.clamp(1, 50),
+            }))),
+            Err(error) => Ok(Some(json!({
+                "status": "blocked",
+                "error": excerpt(&redact_secret_like_text(&error.to_string()), 500),
+                "source_card_count": source_card_ids.len(),
+                "source_card_ids": source_card_ids,
+            }))),
+        }
     }
 
     fn defer_wiki_job(&self, id: &str, result_json: Value, next_run_at: &str) -> Result<WikiJob> {
@@ -37392,6 +37467,22 @@ fn adapter_result_shape(result: &Value) -> Value {
         "has_cursor_value": result.get("cursor_value").is_some() || result.get("new_cursor").is_some(),
         "keys": result.as_object().map(|object| object.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()
     })
+}
+
+fn adapter_source_card_ids_from_result(result: &Value) -> Vec<String> {
+    result
+        .get("source_cards")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 fn classify_source_adapter_error_kind(error: &str) -> String {
@@ -58844,6 +58935,197 @@ mod tests {
         );
         let snapshot = store.ops_snapshot().unwrap();
         assert!(snapshot.knowledge_adapter_runs.len() >= 2);
+    }
+
+    #[test]
+    fn severe_completed_adapter_output_chains_into_knowledge_backlog() {
+        // CLAIM: Fresh adapter output can feed the unified knowledge pipeline
+        // without a manual second command once an active knowledge_backlog watch
+        // source is configured.
+        // ORACLE: completed adapter job result records the queued backlog job,
+        // worker execution creates a source-card-backed knowledge cluster, and
+        // duplicate completion does not create a second active backlog job.
+        // SEVERITY: Severe because source acquisition that stops at source cards
+        // looks fresh while trends/wiki/digests stay stale.
+        let store = test_store("adapter-auto-knowledge-backlog");
+        store
+            .schedule_knowledge_cluster_backlog(50, 1, 5, "warm", "active")
+            .unwrap();
+        let card = store
+            .add_source_card(SourceCardInput {
+                title: "OpenAI agent package release".to_string(),
+                url: "https://example.com/openai-agent-package".to_string(),
+                source_type: "rss".to_string(),
+                provider: "rss".to_string(),
+                summary: "OpenAI launched a new agent package with MCP workflow infrastructure."
+                    .to_string(),
+                claims: Vec::new(),
+                retrieved_at: Some("2026-06-26T06:00:00Z".to_string()),
+                metadata: json!({ "source_kind": "rss", "source_detail": "https://example.com/feed.xml" }),
+            })
+            .unwrap();
+        let adapter_job = store
+            .insert_wiki_job_with_status(
+                "rss_fetch",
+                "running",
+                json!({ "url": "https://example.com/feed.xml" }),
+            )
+            .unwrap();
+
+        let completed = store
+            .complete_wiki_job(
+                &adapter_job.id,
+                json!({
+                    "source_cards": [card.id],
+                    "count": 1,
+                    "cursor": "rss:https://example.com/feed.xml",
+                    "cursor_before": Value::Null,
+                    "cursor_value": "2026-06-26T06:00:00Z"
+                }),
+            )
+            .unwrap();
+        let auto = completed
+            .result_json
+            .as_ref()
+            .and_then(|value| value.get("auto_knowledge_backlog"))
+            .expect("completed adapter job should record auto backlog enqueue");
+        assert_eq!(auto["status"], "enqueued");
+        let backlog_job_id = auto
+            .get("job_id")
+            .and_then(Value::as_str)
+            .expect("auto backlog job id");
+        let jobs = store.list_wiki_jobs().unwrap();
+        assert!(jobs.iter().any(|job| {
+            job.id == backlog_job_id
+                && job.kind == "knowledge_cluster_backlog"
+                && job.status == "pending"
+        }));
+
+        let second_adapter_job = store
+            .insert_wiki_job_with_status(
+                "rss_fetch",
+                "running",
+                json!({ "url": "https://example.com/feed.xml" }),
+            )
+            .unwrap();
+        let second_completed = store
+            .complete_wiki_job(
+                &second_adapter_job.id,
+                json!({
+                    "source_cards": [card.id],
+                    "count": 1,
+                    "cursor": "rss:https://example.com/feed.xml",
+                    "cursor_before": "2026-06-26T06:00:00Z",
+                    "cursor_value": "2026-06-26T06:00:00Z"
+                }),
+            )
+            .unwrap();
+        let second_auto = second_completed
+            .result_json
+            .as_ref()
+            .and_then(|value| value.get("auto_knowledge_backlog"))
+            .expect("second adapter completion should explain backlog status");
+        assert_eq!(second_auto["status"], "skipped");
+        assert_eq!(
+            second_auto["reason"],
+            "knowledge_cluster_backlog_job_already_active"
+        );
+        assert_eq!(
+            store
+                .list_wiki_jobs()
+                .unwrap()
+                .iter()
+                .filter(|job| job.kind == "knowledge_cluster_backlog"
+                    && matches!(job.status.as_str(), "pending" | "running" | "deferred"))
+                .count(),
+            1,
+            "auto chaining should not create multiple active backlog jobs"
+        );
+        let worker = store.run_worker_once(1).unwrap();
+        assert_eq!(worker.processed, 1);
+        assert_eq!(worker.jobs[0].kind, "knowledge_cluster_backlog");
+        assert!(
+            !store.list_knowledge_clusters(10).unwrap().is_empty(),
+            "worker backlog execution should project fresh source cards into clusters"
+        );
+    }
+
+    #[test]
+    fn severe_completed_adapter_chain_records_policy_denial_without_hidden_job() {
+        // CLAIM: Auto-chaining fresh adapter output into backlog clustering is
+        // policy-gated and fail-visible, not a hidden worker enqueue bypass.
+        // ORACLE: adapter job completes, result records a redacted blocked
+        // auto_knowledge_backlog status, policy decision is denied, and no
+        // knowledge_cluster_backlog job is written.
+        // SEVERITY: Severe because automatic recurrence must not silently bypass
+        // operator policy or make source ingestion look failed.
+        let store = test_store("adapter-auto-knowledge-policy-deny");
+        store
+            .schedule_knowledge_cluster_backlog(50, 1, 5, "warm", "active")
+            .unwrap();
+        let card = seed_knowledge_source_card(
+            &store,
+            "adapter-policy",
+            "OpenAI launched an agent workflow package with MCP support.",
+        );
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "deny-auto-knowledge-backlog"
+effect = "deny"
+action = "worker.enqueue"
+source = "knowledge_cluster_backlog"
+reason = "block automatic backlog enqueue token=sk-test-secret"
+"#,
+        );
+        let adapter_job = store
+            .insert_wiki_job_with_status(
+                "rss_fetch",
+                "running",
+                json!({ "url": "https://example.com/feed.xml" }),
+            )
+            .unwrap();
+
+        let completed = store
+            .complete_wiki_job(
+                &adapter_job.id,
+                json!({
+                    "source_cards": [card.id],
+                    "count": 1,
+                    "cursor": "rss:https://example.com/feed.xml",
+                    "cursor_value": "2026-06-26T06:00:00Z"
+                }),
+            )
+            .unwrap();
+        assert_eq!(completed.status, "completed");
+        let auto = completed
+            .result_json
+            .as_ref()
+            .and_then(|value| value.get("auto_knowledge_backlog"))
+            .expect("blocked auto backlog status");
+        assert_eq!(auto["status"], "blocked");
+        let error = auto.get("error").and_then(Value::as_str).unwrap_or("");
+        assert!(error.contains("policy denied worker.enqueue"), "{error}");
+        assert!(!error.contains("sk-test-secret"), "{error}");
+        assert!(
+            store
+                .list_wiki_jobs()
+                .unwrap()
+                .iter()
+                .all(|job| job.kind != "knowledge_cluster_backlog")
+        );
+        assert!(
+            store
+                .list_policy_decisions(10)
+                .unwrap()
+                .iter()
+                .any(|decision| {
+                    !decision.allowed
+                        && decision.action == "worker.enqueue"
+                        && decision.source.as_deref() == Some("knowledge_cluster_backlog")
+                })
+        );
     }
 
     #[test]
