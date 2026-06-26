@@ -1183,8 +1183,13 @@ PR, implementation note, or final report:
       `digest_candidate.deliver`, recipient authorization, quiet-hours, and
       `channel.send` pass. Severe tests cover send/dedupe/redaction,
       auto-approval denial, quiet-hours deferral before materialization, and
-      healthy no-op ticks. Still not claimed: provider-side scope introspection,
-      revocation APIs, or multi-day external recurrence proof.
+      healthy no-op ticks. Controlled-provider proof
+      `.arcwell-dev/proofs/credential-reminder-scheduled-proof-20260626T171355Z-40920/artifacts/proof-packet.json`
+      validates an expiring sentinel X bearer, active scheduled X bookmark
+      dependency, one human-readable Cloudflare Email reminder, duplicate
+      suppression, quiet-hours no-send, and secret redaction. Still not
+      claimed: provider-side scope introspection, revocation APIs, live
+      external inbox delivery, or multi-day external recurrence proof.
 - [ ] Add ops UI burn-down and override controls for budgets only after
       idempotency, policy, and audit behavior are tested.
 

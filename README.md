@@ -276,6 +276,10 @@ claiming a live credential path is healthy. Forced refresh from copied homes is
 guarded because provider-side refresh-token rotation can otherwise leave the
 real local home stale; use `--write-back-rotated-tokens` when probing the real
 local credential store.
+Scheduled credential reminders use the digest-alert delivery ledger; run
+`scripts/credential-reminder-scheduled-proof` for the controlled-provider proof
+of human-readable outbound reminder delivery, duplicate suppression, quiet
+hours, and secret redaction.
 
 ## Use With Codex
 

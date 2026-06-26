@@ -120,8 +120,20 @@ effect = "allow"
 Local severe coverage is `cargo test -p arcwell-core credential_reminder -- --nocapture`.
 It proves human-readable reminder rendering, redaction, idempotent duplicate
 suppression, quiet-hours deferral before source-card creation, policy denial
-before provider attempts, and healthy no-op ticks. It does not prove provider
-scope introspection, revoked-token APIs, or multi-day live external recurrence.
+before provider attempts, and healthy no-op ticks.
+
+`scripts/credential-reminder-scheduled-proof` is the repeatable
+controlled-provider proof for outbound scheduled reminder delivery. The latest
+packet is
+`.arcwell-dev/proofs/credential-reminder-scheduled-proof-20260626T171355Z-40920/artifacts/proof-packet.json`.
+It seeds an expiring sentinel `X_BEARER_TOKEN`, keeps an active scheduled X
+bookmark dependency visible while backing it off from provider fetch, sends one
+human-readable Cloudflare Email reminder through a controlled local endpoint,
+checks the delivery ledger and provider request body, proves duplicate
+suppression, proves quiet-hours deferral before reminder materialization or
+send, and scans artifacts for the sentinel token. It does not prove provider
+scope introspection, revoked-token APIs, a real external inbox receipt, or
+multi-day live external recurrence.
 
 `scripts/x-credential-probe` copies the configured source home into a proof home
 and writes a redacted proof packet. Forced refresh is guarded because refreshing
