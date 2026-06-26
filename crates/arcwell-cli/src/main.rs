@@ -5908,6 +5908,14 @@ async fn serve(paths: AppPaths, args: ServeArgs) -> Result<()> {
             post(http_ops_x_bookmarks_enqueue),
         )
         .route(
+            "/ops/actions/knowledge/backlog/schedule",
+            post(http_ops_knowledge_backlog_schedule),
+        )
+        .route(
+            "/ops/actions/knowledge/backlog/enqueue",
+            post(http_ops_knowledge_backlog_enqueue),
+        )
+        .route(
             "/ops/actions/worker/run-once",
             post(http_ops_worker_run_once),
         )
@@ -6051,6 +6059,26 @@ struct OpsXBookmarksEnqueueForm {
     idempotency_key: String,
     bookmark_days: i64,
     max_bookmarks: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsKnowledgeBacklogScheduleForm {
+    csrf_token: String,
+    idempotency_key: String,
+    max_source_cards: usize,
+    min_group_size: usize,
+    max_clusters: usize,
+    cadence: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsKnowledgeBacklogEnqueueForm {
+    csrf_token: String,
+    idempotency_key: String,
+    max_source_cards: usize,
+    min_group_size: usize,
+    max_clusters: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -6339,6 +6367,175 @@ async fn http_ops_x_bookmarks_enqueue(
     match result {
         Ok(id) => redirect_to_ops_ui(&format!(
             "/ops/ui?detail=job:{}&notice=x_bookmarks_enqueued",
+            url_component(&id)
+        )),
+        Err(error) => http_error_response(HttpError::bad_request(
+            "ops_action_failed",
+            error.to_string(),
+        )),
+    }
+}
+
+async fn http_ops_knowledge_backlog_schedule(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = validate_http_mutation_request(&state, &headers, &uri) {
+        return http_error_response(error);
+    }
+    if body.len() as u64 > state.max_body_bytes {
+        return http_error_response(HttpError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        ));
+    }
+    let form = match parse_ops_knowledge_backlog_schedule_form(&body) {
+        Ok(form) => form,
+        Err(error) => return http_error_response(error),
+    };
+    if let Err(error) =
+        validate_ops_csrf_and_idempotency(&state, &form.csrf_token, &form.idempotency_key)
+    {
+        return http_error_response(error);
+    }
+    let idempotency_scope = format!("knowledge-backlog-schedule:{}", form.idempotency_key);
+    let inserted = match reserve_ops_idempotency(&state, idempotency_scope) {
+        Ok(inserted) => inserted,
+        Err(error) => return http_error_response(error),
+    };
+    if !inserted {
+        return redirect_to_ops_ui("/ops/ui?q=knowledge_backlog&notice=duplicate");
+    }
+
+    let result = (|| -> Result<String> {
+        let store = Store::open(state.paths.clone())?;
+        let max_source_cards = form.max_source_cards.clamp(1, 500);
+        let min_group_size = form.min_group_size.clamp(1, 20);
+        let max_clusters = form.max_clusters.clamp(1, 50);
+        let cadence = validate_ops_x_schedule_word(&form.cadence, "cadence")?;
+        let status = validate_ops_x_schedule_word(&form.status, "status")?;
+        let decision = store.policy_check(PolicyRequest {
+            action: "ops.knowledge_backlog.schedule".to_string(),
+            package: Some("arcwell-cli".to_string()),
+            provider: None,
+            source: Some("ops-ui".to_string()),
+            channel: Some("http".to_string()),
+            subject: Some("local-operator".to_string()),
+            target: Some("knowledge:source-card-backlog".to_string()),
+            projected_usd: None,
+            metadata: json!({
+                "max_source_cards": max_source_cards,
+                "min_group_size": min_group_size,
+                "max_clusters": max_clusters,
+                "cadence": cadence,
+                "status": status,
+                "idempotency_key": form.idempotency_key,
+            }),
+            untrusted_excerpt: None,
+        })?;
+        if !decision.allowed {
+            bail!(
+                "policy denied ops.knowledge_backlog.schedule: {}",
+                decision.reason
+            );
+        }
+        let source = store.schedule_knowledge_cluster_backlog(
+            max_source_cards,
+            min_group_size,
+            max_clusters,
+            &cadence,
+            &status,
+        )?;
+        Ok(source.id)
+    })();
+
+    match result {
+        Ok(_) => {
+            redirect_to_ops_ui("/ops/ui?q=knowledge_backlog&notice=knowledge_backlog_scheduled")
+        }
+        Err(error) => http_error_response(HttpError::bad_request(
+            "ops_action_failed",
+            error.to_string(),
+        )),
+    }
+}
+
+async fn http_ops_knowledge_backlog_enqueue(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = validate_http_mutation_request(&state, &headers, &uri) {
+        return http_error_response(error);
+    }
+    if body.len() as u64 > state.max_body_bytes {
+        return http_error_response(HttpError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        ));
+    }
+    let form = match parse_ops_knowledge_backlog_enqueue_form(&body) {
+        Ok(form) => form,
+        Err(error) => return http_error_response(error),
+    };
+    if let Err(error) =
+        validate_ops_csrf_and_idempotency(&state, &form.csrf_token, &form.idempotency_key)
+    {
+        return http_error_response(error);
+    }
+    let idempotency_scope = format!("knowledge-backlog-enqueue:{}", form.idempotency_key);
+    let inserted = match reserve_ops_idempotency(&state, idempotency_scope) {
+        Ok(inserted) => inserted,
+        Err(error) => return http_error_response(error),
+    };
+    if !inserted {
+        return redirect_to_ops_ui("/ops/ui?q=knowledge_cluster_backlog&notice=duplicate");
+    }
+
+    let result = (|| -> Result<String> {
+        let store = Store::open(state.paths.clone())?;
+        let max_source_cards = form.max_source_cards.clamp(1, 500);
+        let min_group_size = form.min_group_size.clamp(1, 20);
+        let max_clusters = form.max_clusters.clamp(1, 50);
+        let decision = store.policy_check(PolicyRequest {
+            action: "ops.knowledge_backlog.enqueue".to_string(),
+            package: Some("arcwell-cli".to_string()),
+            provider: None,
+            source: Some("ops-ui".to_string()),
+            channel: Some("http".to_string()),
+            subject: Some("local-operator".to_string()),
+            target: Some("knowledge_cluster_backlog".to_string()),
+            projected_usd: None,
+            metadata: json!({
+                "max_source_cards": max_source_cards,
+                "min_group_size": min_group_size,
+                "max_clusters": max_clusters,
+                "idempotency_key": form.idempotency_key,
+            }),
+            untrusted_excerpt: None,
+        })?;
+        if !decision.allowed {
+            bail!(
+                "policy denied ops.knowledge_backlog.enqueue: {}",
+                decision.reason
+            );
+        }
+        let job = store.enqueue_knowledge_cluster_backlog_job(
+            max_source_cards,
+            min_group_size,
+            max_clusters,
+        )?;
+        Ok(job.id)
+    })();
+
+    match result {
+        Ok(id) => redirect_to_ops_ui(&format!(
+            "/ops/ui?detail=job:{}&notice=knowledge_backlog_enqueued",
             url_component(&id)
         )),
         Err(error) => http_error_response(HttpError::bad_request(
@@ -6734,6 +6931,54 @@ fn parse_ops_x_bookmarks_enqueue_form(
         idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
         bookmark_days: take_required_form_i64(&mut values, "bookmark_days", 1, 36_500)?,
         max_bookmarks: take_required_form_usize(&mut values, "max_bookmarks", 1, 100_000)?,
+    })
+}
+
+fn parse_ops_knowledge_backlog_schedule_form(
+    body: &[u8],
+) -> std::result::Result<OpsKnowledgeBacklogScheduleForm, HttpError> {
+    let mut values = parse_ops_form_fields(
+        body,
+        &[
+            "csrf_token",
+            "idempotency_key",
+            "max_source_cards",
+            "min_group_size",
+            "max_clusters",
+            "cadence",
+            "status",
+        ],
+    )?;
+    Ok(OpsKnowledgeBacklogScheduleForm {
+        csrf_token: take_required_form_string(&mut values, "csrf_token")?,
+        idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
+        max_source_cards: take_required_form_usize(&mut values, "max_source_cards", 1, 500)?,
+        min_group_size: take_required_form_usize(&mut values, "min_group_size", 1, 20)?,
+        max_clusters: take_required_form_usize(&mut values, "max_clusters", 1, 50)?,
+        cadence: take_required_form_string(&mut values, "cadence")?,
+        status: take_required_form_string(&mut values, "status")?,
+    })
+}
+
+fn parse_ops_knowledge_backlog_enqueue_form(
+    body: &[u8],
+) -> std::result::Result<OpsKnowledgeBacklogEnqueueForm, HttpError> {
+    let mut values = parse_ops_form_fields(
+        body,
+        &[
+            "csrf_token",
+            "idempotency_key",
+            "max_source_cards",
+            "min_group_size",
+            "max_clusters",
+        ],
+    )?;
+    Ok(OpsKnowledgeBacklogEnqueueForm {
+        csrf_token: take_required_form_string(&mut values, "csrf_token")?,
+        idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
+        max_source_cards: take_required_form_usize(&mut values, "max_source_cards", 1, 500)?,
+        min_group_size: take_required_form_usize(&mut values, "min_group_size", 1, 20)?,
+        max_clusters: take_required_form_usize(&mut values, "max_clusters", 1, 50)?,
     })
 }
 
@@ -7217,6 +7462,10 @@ code,pre{white-space:pre-wrap;word-break:break-word}
     }
     html.push_str(&render_ops_filter_form(options));
     html.push_str(&render_x_ops_control_panel(csrf_token, controls_enabled));
+    html.push_str(&render_knowledge_ops_control_panel(
+        csrf_token,
+        controls_enabled,
+    ));
     html.push_str("<section class=\"grid\">");
     for (label, value) in [
         ("Health score", health_score.score as usize),
@@ -8329,6 +8578,54 @@ fn render_x_ops_control_panel(csrf_token: Option<&str>, controls_enabled: bool) 
     html
 }
 
+fn render_knowledge_ops_control_panel(csrf_token: Option<&str>, controls_enabled: bool) -> String {
+    let mut html = String::new();
+    html.push_str("<section class=\"section\"><h2>Knowledge Controls</h2>");
+    let Some(csrf_token) = csrf_token else {
+        html.push_str("<p class=\"muted\">Open /ops/ui from the authenticated HTTP server to use knowledge controls.</p></section>");
+        return html;
+    };
+    if !controls_enabled {
+        html.push_str("<p class=\"muted\">Disabled: start server with ARCWELL_HTTP_AUTH_TOKEN to enable mutations.</p></section>");
+        return html;
+    }
+    html.push_str("<div class=\"control-grid\">");
+    html.push_str(&format!(
+        r#"<form method="post" action="/ops/actions/knowledge/backlog/schedule">
+<input type="hidden" name="csrf_token" value="{}">
+<input type="hidden" name="idempotency_key" value="{}">
+<div><b>Schedule backlog clustering</b><p class="muted">Create or update the local source-card backlog watch source.</p></div>
+<div class="fields">
+<label>Max cards<input name="max_source_cards" type="number" min="1" max="500" value="100"></label>
+<label>Min group<input name="min_group_size" type="number" min="1" max="20" value="2"></label>
+<label>Max clusters<input name="max_clusters" type="number" min="1" max="50" value="12"></label>
+<label>Status<select name="status"><option value="active">active</option><option value="paused">paused</option></select></label>
+<label>Cadence<input name="cadence" maxlength="40" value="warm"></label>
+</div>
+<button type="submit">Schedule</button>
+</form>"#,
+        html_escape(csrf_token),
+        html_escape(&ops_control_idempotency_key("knowledge-backlog-schedule")),
+    ));
+    html.push_str(&format!(
+        r#"<form method="post" action="/ops/actions/knowledge/backlog/enqueue">
+<input type="hidden" name="csrf_token" value="{}">
+<input type="hidden" name="idempotency_key" value="{}">
+<div><b>Queue backlog clustering</b><p class="muted">Enqueue one source-card backlog clustering job without claiming source health.</p></div>
+<div class="fields">
+<label>Max cards<input name="max_source_cards" type="number" min="1" max="500" value="100"></label>
+<label>Min group<input name="min_group_size" type="number" min="1" max="20" value="2"></label>
+<label>Max clusters<input name="max_clusters" type="number" min="1" max="50" value="12"></label>
+</div>
+<button type="submit">Queue clustering</button>
+</form>"#,
+        html_escape(csrf_token),
+        html_escape(&ops_control_idempotency_key("knowledge-backlog-enqueue")),
+    ));
+    html.push_str("</div></section>");
+    html
+}
+
 fn ops_control_idempotency_key(prefix: &str) -> String {
     format!("ops-ui-{prefix}-{}", Uuid::new_v4())
 }
@@ -9097,6 +9394,10 @@ fn ops_notice_text(notice: &str) -> String {
         "dead_lettered" => "Edge event dead-lettered.".to_string(),
         "x_bookmarks_scheduled" => "X bookmark ingestion schedule updated.".to_string(),
         "x_bookmarks_enqueued" => "X bookmark import job queued.".to_string(),
+        "knowledge_backlog_scheduled" => {
+            "Knowledge backlog clustering schedule updated.".to_string()
+        }
+        "knowledge_backlog_enqueued" => "Knowledge backlog clustering job queued.".to_string(),
         "worker_ran_once" => "Worker run completed.".to_string(),
         "duplicate" => {
             "Duplicate idempotency key ignored; no second mutation was applied.".to_string()
@@ -20079,6 +20380,194 @@ reason = "ops controls may enqueue local worker jobs"
     }
 
     #[tokio::test]
+    async fn severe_ops_ui_knowledge_backlog_controls_require_auth_csrf_policy_and_idempotency() {
+        // CLAIM: knowledge backlog ops controls are real, narrow,
+        // CSRF-protected mutations over durable watch-source/job state.
+        // ORACLE: HTTP status, durable watch_sources/jobs state, policy
+        // decision count, duplicate idempotency behavior, and rendered routes.
+        // SEVERITY: Severe because otherwise the new autonomous clustering path
+        // could remain CLI-only while the ops UI implies operator control.
+        let unauthenticated = test_http_state("ops-ui-knowledge-controls-no-auth", None);
+        let (no_config_status, no_config_json) = response_json(
+            http_ops_knowledge_backlog_schedule(
+                State(unauthenticated.clone()),
+                HeaderMap::new(),
+                Uri::from_static("/ops/actions/knowledge/backlog/schedule"),
+                Bytes::from(knowledge_backlog_schedule_body(
+                    &unauthenticated.csrf_token,
+                    "ops-ui-knowledge-schedule-no-auth",
+                    100,
+                    2,
+                    12,
+                    "warm",
+                    "active",
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(no_config_status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            no_config_json
+                .pointer("/error/type")
+                .and_then(Value::as_str),
+            Some("mutation_auth_required")
+        );
+
+        let state = test_http_state("ops-ui-knowledge-controls", Some("local-auth-token-123"));
+        let store = Store::open(state.paths.clone()).unwrap();
+        let denied_schedule_body = knowledge_backlog_schedule_body(
+            &state.csrf_token,
+            "ops-ui-knowledge-schedule-denied",
+            100,
+            2,
+            12,
+            "warm",
+            "active",
+        );
+        let (policy_status, policy_json) = response_json(
+            http_ops_knowledge_backlog_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/backlog/schedule"),
+                Bytes::from(denied_schedule_body),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(policy_status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            policy_json.pointer("/error/type").and_then(Value::as_str),
+            Some("ops_action_failed")
+        );
+        assert!(store.list_watch_sources().unwrap().is_empty());
+        assert_eq!(store.list_policy_decisions(10).unwrap().len(), 1);
+
+        std::fs::write(
+            state.paths.home.join("arcwell-policy.toml"),
+            r#"
+[[rules]]
+id = "allow-ops-knowledge-backlog-schedule"
+effect = "allow"
+action = "ops.knowledge_backlog.schedule"
+reason = "local operator may schedule knowledge backlog clustering"
+
+[[rules]]
+id = "allow-ops-knowledge-backlog-enqueue"
+effect = "allow"
+action = "ops.knowledge_backlog.enqueue"
+reason = "local operator may enqueue knowledge backlog clustering"
+
+[[rules]]
+id = "allow-worker-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+reason = "ops controls may enqueue local worker jobs"
+"#,
+        )
+        .unwrap();
+
+        let allowed_schedule_body = knowledge_backlog_schedule_body(
+            &state.csrf_token,
+            "ops-ui-knowledge-schedule-allowed",
+            77,
+            3,
+            9,
+            "warm",
+            "active",
+        );
+        let (allowed_status, _) = response_text(
+            http_ops_knowledge_backlog_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/backlog/schedule"),
+                Bytes::from(allowed_schedule_body.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(allowed_status, StatusCode::SEE_OTHER);
+        let sources = store.list_watch_sources().unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].source_kind, "knowledge_backlog");
+        assert_eq!(sources[0].locator, "source-cards");
+        assert_eq!(sources[0].metadata["max_source_cards"], 77);
+        assert_eq!(sources[0].metadata["min_group_size"], 3);
+        assert_eq!(sources[0].metadata["max_clusters"], 9);
+        let decisions_after_schedule = store.list_policy_decisions(10).unwrap().len();
+
+        let (duplicate_status, _) = response_text(
+            http_ops_knowledge_backlog_schedule(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/backlog/schedule"),
+                Bytes::from(allowed_schedule_body),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(duplicate_status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            store.list_policy_decisions(10).unwrap().len(),
+            decisions_after_schedule
+        );
+
+        let (enqueue_status, _) = response_text(
+            http_ops_knowledge_backlog_enqueue(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/backlog/enqueue"),
+                Bytes::from(knowledge_backlog_enqueue_body(
+                    &state.csrf_token,
+                    "ops-ui-knowledge-enqueue-allowed",
+                    88,
+                    4,
+                    10,
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(enqueue_status, StatusCode::SEE_OTHER);
+        assert!(store.list_wiki_jobs().unwrap().iter().any(|job| job.kind
+            == "knowledge_cluster_backlog"
+            && job.input_json["max_source_cards"] == 88
+            && job.input_json["min_group_size"] == 4
+            && job.input_json["max_clusters"] == 10));
+
+        let (bad_form_status, bad_form_json) = response_json(
+            http_ops_knowledge_backlog_enqueue(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/backlog/enqueue"),
+                Bytes::from(format!(
+                    "csrf_token={}&idempotency_key={}&max_source_cards=0&min_group_size=2&max_clusters=5",
+                    url_component(&state.csrf_token),
+                    url_component("ops-ui-knowledge-bad-form")
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(bad_form_status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            bad_form_json.pointer("/error/type").and_then(Value::as_str),
+            Some("bad_form")
+        );
+
+        let html = render_ops_ui_with_options(
+            &store.ops_snapshot().unwrap(),
+            &OpsUiOptions::default(),
+            Some(&state.csrf_token),
+            true,
+        );
+        assert!(html.contains("Knowledge Controls"));
+        assert!(html.contains("/ops/actions/knowledge/backlog/schedule"));
+        assert!(html.contains("/ops/actions/knowledge/backlog/enqueue"));
+        assert!(html.contains("knowledge_backlog"));
+    }
+
+    #[tokio::test]
     async fn severe_ops_ui_edge_dead_letter_requires_auth_csrf_idempotency_and_policy() {
         // CLAIM: The only ops UI mutation is narrow and fails closed without auth, local Origin, CSRF, idempotency, and policy allow.
         // POSTCONDITIONS: Failed attempts do not change event status; duplicate successful submissions do not reapply or re-audit.
@@ -20324,6 +20813,44 @@ reason = "local operator may dead-letter reviewed edge events"
             url_component(idempotency_key),
             bookmark_days,
             max_bookmarks
+        )
+    }
+
+    fn knowledge_backlog_schedule_body(
+        csrf_token: &str,
+        idempotency_key: &str,
+        max_source_cards: usize,
+        min_group_size: usize,
+        max_clusters: usize,
+        cadence: &str,
+        status: &str,
+    ) -> String {
+        format!(
+            "csrf_token={}&idempotency_key={}&max_source_cards={}&min_group_size={}&max_clusters={}&cadence={}&status={}",
+            url_component(csrf_token),
+            url_component(idempotency_key),
+            max_source_cards,
+            min_group_size,
+            max_clusters,
+            url_component(cadence),
+            url_component(status)
+        )
+    }
+
+    fn knowledge_backlog_enqueue_body(
+        csrf_token: &str,
+        idempotency_key: &str,
+        max_source_cards: usize,
+        min_group_size: usize,
+        max_clusters: usize,
+    ) -> String {
+        format!(
+            "csrf_token={}&idempotency_key={}&max_source_cards={}&min_group_size={}&max_clusters={}",
+            url_component(csrf_token),
+            url_component(idempotency_key),
+            max_source_cards,
+            min_group_size,
+            max_clusters
         )
     }
 

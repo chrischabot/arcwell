@@ -205,10 +205,14 @@ PR, implementation note, or final report:
       suppression for already clustered source cards, source-health advancement
       only after durable clustering, and the two-pass worker path from
       scheduled backlog clustering to automatic wiki/report/digest expansion.
+      The current ops-control slice adds authenticated `/ops/ui` Knowledge
+      Controls for scheduling the backlog watch source and enqueueing a
+      one-shot backlog clustering job, with CSRF, idempotency, policy gates,
+      and severe HTTP tests.
       Remaining work is investigation jobs, broad production-data
       semantic/model clustering, X credential-refresh live proof, wall-clock
       scheduled source recurrence, external delivery recurrence, richer
-      model-backed writer/editor synthesis, and broader ops UI controls.
+      model-backed writer/editor synthesis, and broader ops UI repair controls.
 - [ ] Complete the Arcwell X anti-mirage plan in
       `docs/arcwell-x-architecture-implementation-plan.md` before marking X
       beyond `Partial`.
