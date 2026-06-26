@@ -1153,6 +1153,19 @@ PR, implementation note, or final report:
       `.arcwell-dev/proofs/x-credential-probe-20260626T124924Z-78664/artifacts/proof-packet.json`
       reused the refreshed stored credential without forcing refresh and passed
       both recent search and a tiny bookmark/follow watch-source rebuild.
+- [x] Repair X portable export freshness without packaging secret-like local
+      evidence. Portable export now sanitizes token-shaped fields/values before
+      writing bundle rows, validation still rejects unsanitized bundles, and
+      real-home proof
+      `.arcwell-dev/proofs/x-portable-export-repair-20260626T165215Z/artifacts/proof-packet.json`
+      exported and validated 5,164 tweets with 15 redactions. Remaining X
+      strict-doctor blockers are current watch-source health and failed sync-run
+      accounting, not portable export freshness.
+- [ ] Replace broad X watch-source retry storms with a quota-aware scheduler:
+      bounded per-window fanout, provider-plan capacity estimates, exponential
+      backoff that keeps `next_run_at` meaningful, stale-rate-limit surfacing,
+      and a repair/retry proof that clears or downgrades current
+      `rate_limited` rows only after successful durable provider reads.
 - [x] Add scheduled credential rotation reminders and stale-scope warnings.
       `secret_health`, `health`, `doctor`, and `ops_snapshot` warn when
       local/ref credentials expire within 72 hours, and active scheduled X

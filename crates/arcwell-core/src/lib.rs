@@ -16063,6 +16063,7 @@ impl Store {
                         "current_tweet_count": self.count("x_tweets")?,
                         "latest_tweet_updated_at": latest_tweet_updated_at,
                         "shards": report.shards,
+                        "warnings": report.warnings,
                     }),
                 })?;
             }
@@ -54540,7 +54541,7 @@ fn inspect_x_archive_zip_members(
 fn export_x_portable(conn: &Connection, out_dir: &Path) -> Result<XPortableExportReport> {
     fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
     let generated_at = now();
-    let tweet_rows = x_portable_tweet_rows(conn)?;
+    let (tweet_rows, redacted_values) = x_portable_tweet_rows(conn)?;
     let shard = write_x_portable_jsonl_shard(out_dir, "data/x/tweets.jsonl", &tweet_rows)?;
     let manifest = json!({
         "format": "arcwell-x-portable",
@@ -54562,7 +54563,10 @@ fn export_x_portable(conn: &Connection, out_dir: &Path) -> Result<XPortableExpor
             "sqlite_secret_values",
             "fts_shadow_tables",
             "raw_dms"
-        ]
+        ],
+        "redactions": {
+            "secret_like_fields_or_values": redacted_values
+        }
     });
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
     if x_portable_text_has_secret_like_value(&manifest_json) {
@@ -54571,17 +54575,24 @@ fn export_x_portable(conn: &Connection, out_dir: &Path) -> Result<XPortableExpor
     let manifest_path = out_dir.join("manifest.json");
     fs::write(&manifest_path, manifest_json)
         .with_context(|| format!("writing {}", manifest_path.display()))?;
+    let warnings = if redacted_values > 0 {
+        vec![format!(
+            "redacted {redacted_values} secret-like X portable field/value occurrence(s)"
+        )]
+    } else {
+        Vec::new()
+    };
     Ok(XPortableExportReport {
         out_dir: out_dir.display().to_string(),
         manifest_path: manifest_path.display().to_string(),
         generated_at,
         rows_exported: shard.rows,
         shards: vec![shard],
-        warnings: Vec::new(),
+        warnings,
     })
 }
 
-fn x_portable_tweet_rows(conn: &Connection) -> Result<Vec<Value>> {
+fn x_portable_tweet_rows(conn: &Connection) -> Result<(Vec<Value>, usize)> {
     let mut stmt = conn.prepare(
         r#"
         SELECT t.x_id, COALESCE(p.handle, 'archive') AS author, t.text, t.url,
@@ -54623,14 +54634,22 @@ fn x_portable_tweet_rows(conn: &Connection) -> Result<Vec<Value>> {
         }))
     })?;
     let mut values = Vec::new();
+    let mut redactions = 0usize;
     for row in rows {
         let value = row?;
+        let id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let (value, row_redactions) = sanitize_x_portable_export_value(value);
+        redactions += row_redactions;
         if x_portable_value_has_secret_like_value(&value) {
-            bail!("portable X tweet row contains token-like text");
+            bail!("portable X tweet row contains token-like text after sanitization: {id}");
         }
         values.push(value);
     }
-    Ok(values)
+    Ok((values, redactions))
 }
 
 fn write_x_portable_jsonl_shard(
@@ -54798,6 +54817,54 @@ fn x_portable_value_has_secret_like_value(value: &Value) -> bool {
             x_portable_key_is_secret_like(key) || x_portable_value_has_secret_like_value(value)
         }),
         _ => false,
+    }
+}
+
+fn sanitize_x_portable_export_value(value: Value) -> (Value, usize) {
+    match value {
+        Value::String(value) => {
+            let redacted = redact_secret_like_text_preserving_whitespace(&value);
+            if redacted != value {
+                return (Value::String(redacted), 1);
+            }
+            if x_portable_text_has_secret_like_value(&redacted) {
+                return (Value::String("[REDACTED]".to_string()), 1);
+            }
+            (Value::String(value), 0)
+        }
+        Value::Array(values) => {
+            let mut redactions = 0usize;
+            let values = values
+                .into_iter()
+                .map(|value| {
+                    let (value, value_redactions) = sanitize_x_portable_export_value(value);
+                    redactions += value_redactions;
+                    value
+                })
+                .collect::<Vec<_>>();
+            (Value::Array(values), redactions)
+        }
+        Value::Object(object) => {
+            let mut redactions = 0usize;
+            let mut sanitized = serde_json::Map::new();
+            for (key, value) in object {
+                if x_portable_key_is_secret_like(&key) {
+                    redactions += 1;
+                    continue;
+                }
+                let (value, value_redactions) = sanitize_x_portable_export_value(value);
+                redactions += value_redactions;
+                sanitized.insert(key, value);
+            }
+            if redactions > 0 {
+                sanitized.insert(
+                    "_arcwell_redacted_field_or_value_count".to_string(),
+                    json!(redactions),
+                );
+            }
+            (Value::Object(sanitized), redactions)
+        }
+        other => (other, 0),
     }
 }
 
@@ -85291,36 +85358,46 @@ reason = "X monitor network blocked for test"
     }
 
     #[test]
-    fn severe_x_portable_export_rejects_token_like_raw_content() {
-        // CLAIM: portable export refuses to package token-shaped raw data.
+    fn severe_x_portable_export_sanitizes_token_like_raw_content() {
+        // CLAIM: portable export does not package token-shaped raw data, but it
+        // also does not make recovery/export freshness permanently impossible
+        // when imported X evidence contains secret-like fields or text.
         // PRECONDITIONS: canonical X raw JSON contains a secret-shaped key/value.
-        // POSTCONDITIONS: export fails before writing a trustworthy-looking bundle.
+        // POSTCONDITIONS: export succeeds, validates, records a redaction warning,
+        // and the bundle omits the secret-shaped key/value.
         // SEVERITY: Severe because portable bundles are likely to be shared or copied.
         let store = test_store("x-portable-secret");
+        let secret = "sk-test-secret-shaped-value";
         store
             .import_x_json_value(&json!([
                 {
                     "id": "portable-secret",
                     "author": "arcwell",
-                    "text": "Portable secret scan proof.",
+                    "text": format!("Portable secret scan proof {secret}."),
                     "url": "https://x.com/arcwell/status/portable-secret",
                     "raw": {
-                        "access_token": "sk-test-secret-shaped-value"
+                        "access_token": secret
                     },
                     "source_kind": "json_import"
                 }
             ]))
             .unwrap();
 
-        let error = store
-            .export_x_portable(&store.paths().home.join("portable-x"))
-            .expect_err("token-shaped raw content must block export");
+        let out_dir = store.paths().home.join("portable-x");
+        let report = store.export_x_portable(&out_dir).unwrap();
+        assert_eq!(report.rows_exported, 1);
         assert!(
-            error
-                .to_string()
-                .contains("tweet row contains token-like text"),
-            "{error}"
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("redacted")),
+            "{report:#?}"
         );
+        store.validate_x_portable(&out_dir).unwrap();
+        let shard = fs::read_to_string(out_dir.join("data/x/tweets.jsonl")).unwrap();
+        assert!(!shard.contains(secret), "{shard}");
+        assert!(!shard.contains("access_token"), "{shard}");
+        assert!(shard.contains("[REDACTED]"), "{shard}");
     }
 
     #[test]
@@ -85432,24 +85509,24 @@ reason = "X monitor network blocked for test"
     }
 
     #[test]
-    fn severe_x_portable_export_failure_records_redacted_sync_run() {
-        // CLAIM: failed portable exports are visible in X sync runs and do not leak
-        // token-shaped raw content through stats or health.
+    fn severe_x_portable_export_redaction_records_completed_sync_run() {
+        // CLAIM: token-like portable-export redactions are visible in X sync runs
+        // and do not leak token-shaped raw content through stats or health.
         // PRECONDITIONS: canonical X raw JSON contains a token-shaped value that
-        // blocks portable export.
-        // POSTCONDITIONS: export fails, a failed export_portable sync run exists,
-        // and serialized stats/health omit the token-shaped value.
-        // SEVERITY: Severe because silent export failure is an operational mirage,
-        // while failure reporting must not create a privacy incident.
-        let store = test_store("x-portable-failed-ledger");
+        // must be sanitized during portable export.
+        // POSTCONDITIONS: export succeeds, a completed export_portable sync run
+        // exists, warnings are recorded, and serialized stats/health omit the token.
+        // SEVERITY: Severe because recovery exports must not silently fail forever,
+        // while warning/reporting must not create a privacy incident.
+        let store = test_store("x-portable-redacted-ledger");
         let secret = "sk-portable-export-secret";
         store
             .import_x_json_value(&json!([
                 {
-                    "id": "portable-failed-ledger",
+                    "id": "portable-redacted-ledger",
                     "author": "arcwell",
                     "text": "Portable failed ledger proof.",
-                    "url": "https://x.com/arcwell/status/portable-failed-ledger",
+                    "url": "https://x.com/arcwell/status/portable-redacted-ledger",
                     "raw": {
                         "access_token": secret
                     },
@@ -85458,20 +85535,29 @@ reason = "X monitor network blocked for test"
             ]))
             .unwrap();
 
-        let error = store
+        store
             .export_x_portable(&store.paths().home.join("portable-x"))
-            .expect_err("token-like raw content must block export");
-        assert!(
-            error
-                .to_string()
-                .contains("tweet row contains token-like text"),
-            "{error}"
-        );
+            .unwrap();
         let stats = store.x_stats().unwrap();
-        assert_eq!(stats.sync_runs_by_status.get("failed").copied(), Some(1));
+        assert_eq!(stats.sync_runs_by_status.get("completed").copied(), Some(2));
         assert_eq!(stats.latest_sync_runs[0].stream, "export_portable");
-        assert_eq!(stats.latest_sync_runs[0].status, "failed");
-        assert!(stats.portable_export.latest_failed_at.is_some());
+        assert_eq!(stats.latest_sync_runs[0].status, "completed");
+        let metadata_json: String = store
+            .conn
+            .query_row(
+                "SELECT metadata_json FROM x_sync_runs WHERE stream = 'export_portable'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let metadata: Value = serde_json::from_str(&metadata_json).unwrap();
+        assert!(
+            metadata
+                .get("warnings")
+                .and_then(Value::as_array)
+                .is_some_and(|warnings| !warnings.is_empty()),
+            "{metadata:#?}"
+        );
         let visible = serde_json::to_string(&json!({
             "stats": stats,
             "health": store.health().unwrap()

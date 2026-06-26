@@ -65,6 +65,11 @@ probe now proves the stored-token refresh path. The current proof packets are:
   live recent search and a tiny bookmark/follow watch-source rebuild.
 - `.arcwell-dev/proofs/x-live-smoke-after-auto-refresh-20260626T081624Z`
   remains the capped live X replay/recent-search/watch-monitor proof.
+- `.arcwell-dev/proofs/x-portable-export-repair-20260626T165215Z/artifacts/proof-packet.json`
+  exported and validated the real local canonical X corpus as a portable bundle:
+  5,164 tweets, 15 secret-like field/value redactions, fresh portable export
+  status, and strict-doctor still failing only on remaining X watch-source
+  health/sync-run debt.
 
 Use a disposable/current X credential with scopes/API tier that allow recent
 search, bookmarks, follows, user lookup, and offline refresh. Do not paste
@@ -75,6 +80,8 @@ scripts/x-credential-probe --self-test
 scripts/x-credential-probe --exercise-refresh --write-back-rotated-tokens --no-watch
 scripts/x-credential-probe
 scripts/x-live-smoke
+arcwell x export-portable --out "$HOME/.arcwell/exports/x-portable-$(date -u +%Y%m%dT%H%M%SZ)"
+arcwell x validate-portable "$HOME/.arcwell/exports/<bundle>"
 ```
 
 Scheduled credential reminders are locally proven through the existing digest
@@ -153,6 +160,9 @@ Remaining limits:
 
 - These are capped copied-home live proofs, not multi-day recurrence or broad
   quota/tier coverage.
+- X portable export freshness is repaired, but broad watch-source health is
+  still blocked by current rate-limit rows and needs a quota-aware scheduler
+  proof rather than a one-shot broad retry.
 - Provider-side revocation is classifier-tested locally, not live-tested against
   a deliberately revoked X refresh token.
 - X plan/API tier changes can still alter bookmark/follow/watch behavior.
