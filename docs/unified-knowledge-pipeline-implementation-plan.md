@@ -188,6 +188,12 @@ Current implemented bridge slice:
   `ops.knowledge_model_write.schedule`, and
   `ops.knowledge_model_write.enqueue`; they reuse the existing worker paths and
   do not promote model-cluster quality, wiki writes, or delivery readiness.
+- `arcwell knowledge enqueue-due-model-writes` and the authenticated
+  `/ops/ui` due-writer control can bulk-enqueue model-writer jobs for active
+  promoted model-origin clusters. The path skips unpromoted model proposals,
+  deterministic/shared clusters, active writer/editorial/expansion jobs, and
+  terminal writer/expansion decisions; external digest delivery remains behind
+  separate delivery policy and recipient gates.
 - Source-card-gated model cluster writing through
   `arcwell knowledge write-cluster-model`,
   `arcwell knowledge enqueue-cluster-model-write`, and the resident

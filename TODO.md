@@ -411,13 +411,21 @@ PR, implementation note, or final report:
       nothing externally, and browser-checked authenticated desktop/mobile
       `/ops/ui`. This is live scheduled proof for the proof-scoped
       cluster-writer slice, not broad autonomous production analyst quality.
+      This slice also adds `arcwell knowledge enqueue-due-model-writes` and an
+      authenticated `/ops/ui` due-writer control for promoted model-origin
+      clusters. Severe tests prove the bulk path enqueues only active promoted
+      model-origin clusters, skips unpromoted model proposals and deterministic
+      clusters, suppresses active and terminal duplicate writer jobs, writes no
+      external delivery rows, and keeps the HTTP control policy-gated,
+      CSRF-protected, idempotent, and rendered.
       The authenticated `/ops/ui` Knowledge Controls now also expose a
       CSRF/idempotency-protected model-cluster promotion action, double-gated by
       `ops.knowledge_clusters.promote` and core `knowledge_cluster.promote`
       policy. The same control panel now has CSRF/idempotency-protected,
       policy-gated schedule/enqueue actions for review-only model-cluster
-      proposal jobs and promoted-cluster model-writer jobs; severe HTTP tests
-      prove denied policy, durable watch-source/job writes, duplicate
+      proposal jobs, promoted-cluster model-writer jobs, and due promoted
+      model-origin writer sweeps; severe HTTP tests prove denied policy,
+      durable watch-source/job writes, duplicate
       idempotency suppression, and rendered routes. This is an operator
       control surface for already-scoped model clustering/writing paths, not
       broad production-corpus clustering quality or a full repair/control

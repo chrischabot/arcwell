@@ -1473,6 +1473,15 @@ pub struct KnowledgeClusterEditorialDecisionEnqueueReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeClusterModelWriterEnqueueReport {
+    pub inspected: usize,
+    pub enqueued: usize,
+    pub skipped: usize,
+    pub jobs: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeClusterInvestigationExecutionEnqueueReport {
     pub inspected: usize,
     pub enqueued: usize,
@@ -14242,6 +14251,107 @@ impl Store {
                     "source_card_count": cluster.source_card_ids.len(),
                     "source_card_ids": cluster.source_card_ids.clone(),
                     "boundary": "Due recurrence records a durable editorial decision before any wiki/report/digest follow-up."
+                })),
+            ) {
+                Ok(job) => {
+                    report.enqueued += 1;
+                    report.jobs.push(job.id);
+                }
+                Err(error) => {
+                    report.skipped += 1;
+                    report
+                        .errors
+                        .push(format!("{}:{}: {error}", cluster.id, cluster.topic));
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    pub fn enqueue_due_knowledge_cluster_model_writer_jobs(
+        &self,
+        max_clusters: usize,
+        model_provider: &str,
+        model_name: Option<&str>,
+        endpoint: Option<&str>,
+        timeout_seconds: Option<u64>,
+        create_digest: bool,
+    ) -> Result<KnowledgeClusterModelWriterEnqueueReport> {
+        let provider = model_provider.trim().to_ascii_lowercase();
+        if !matches!(provider.as_str(), "mock" | "openai") {
+            bail!("unsupported knowledge cluster writer model provider: {provider}");
+        }
+        let model_name = model_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if let Some(model_name) = &model_name {
+            validate_key(model_name)?;
+        }
+        if let Some(endpoint) = endpoint {
+            validated_endpoint(Some(endpoint), "https://api.openai.com/v1/responses")?;
+        }
+        let mut report = KnowledgeClusterModelWriterEnqueueReport {
+            inspected: 0,
+            enqueued: 0,
+            skipped: 0,
+            jobs: Vec::new(),
+            errors: Vec::new(),
+        };
+        for cluster in self
+            .list_knowledge_clusters(max_clusters.clamp(1, 100))?
+            .into_iter()
+        {
+            report.inspected += 1;
+            if cluster.status != "active" {
+                report.skipped += 1;
+                continue;
+            }
+            if cluster.metadata.get("origin").and_then(Value::as_str)
+                != Some("model_cluster_proposal_v1")
+            {
+                report.skipped += 1;
+                continue;
+            }
+            if let Some(status) =
+                self.knowledge_cluster_model_writer_decision_status(&cluster.id)?
+                && matches!(status.as_str(), "completed" | "blocked")
+            {
+                report.skipped += 1;
+                continue;
+            }
+            if let Some(status) = self.knowledge_cluster_expansion_decision_status(&cluster.id)?
+                && matches!(status.as_str(), "completed" | "blocked")
+            {
+                report.skipped += 1;
+                continue;
+            }
+            if self.knowledge_cluster_model_writer_has_active_job(&cluster.id)? {
+                report.skipped += 1;
+                continue;
+            }
+            if self.knowledge_cluster_expansion_has_active_job(&cluster.id)? {
+                report.skipped += 1;
+                continue;
+            }
+            if self.knowledge_cluster_editorial_decision_has_active_job(&cluster.id)? {
+                report.skipped += 1;
+                continue;
+            }
+            match self.enqueue_knowledge_cluster_model_writer_job_with_lineage(
+                &cluster.id,
+                &provider,
+                model_name.as_deref(),
+                endpoint,
+                timeout_seconds,
+                create_digest,
+                Some(json!({
+                    "trigger": "due_promoted_model_cluster_recurrence",
+                    "cluster_id": cluster.id.clone(),
+                    "topic": cluster.topic.clone(),
+                    "source_card_count": cluster.source_card_ids.len(),
+                    "source_card_ids": cluster.source_card_ids.clone(),
+                    "boundary": "Due recurrence enqueues a local model-writer job for a promoted model-origin cluster only; external delivery remains a separate reviewed digest policy gate."
                 })),
             ) {
                 Ok(job) => {
@@ -63423,6 +63533,168 @@ priority = 20
                 .count()
                 == 1
         );
+    }
+
+    #[test]
+    fn severe_due_model_writer_enqueues_only_promoted_model_origin_clusters() {
+        // CLAIM: bulk due model-writer enqueue bridges promoted model-origin
+        // clusters into wiki/report/digest-candidate writing without sweeping
+        // unpromoted proposals, deterministic clusters, active jobs, terminal
+        // writer decisions, or external delivery.
+        // ORACLE: one promoted model-origin cluster gets exactly one writer
+        // job; an unpromoted model-origin cluster and a deterministic cluster
+        // are skipped; a second enqueue skips the active job; after worker
+        // completion, terminal writer decision suppresses recurrence and no
+        // digest delivery rows exist.
+        // SEVERITY: Severe because broad "autonomous writer" controls could
+        // otherwise publish unreviewed model proposals or duplicate pages.
+        let store = test_store("knowledge-cluster-model-writer-due");
+        let mcp = seed_knowledge_source_card(
+            &store,
+            "due-writer-mcp",
+            "Due writer evidence says an MCP agent SDK shipped with workflow automation.",
+        );
+        let model = seed_knowledge_source_card(
+            &store,
+            "due-writer-model",
+            "Due writer evidence says an open source model release shipped benchmark details.",
+        );
+        let invocation = store
+            .invoke_knowledge_cluster_model(KnowledgeClusterProposalModelInput {
+                source_card_ids: vec![mcp.id.clone(), model.id.clone()],
+                model_provider: "mock".to_string(),
+                model_name: None,
+                endpoint: None,
+                timeout_seconds: None,
+                max_clusters: 6,
+            })
+            .unwrap();
+        assert!(
+            invocation.clusters.len() >= 2,
+            "fixture should create promoted and unpromoted model clusters: {invocation:?}"
+        );
+        let promoted_cluster = &invocation.clusters[0];
+        let unpromoted_cluster = &invocation.clusters[1];
+        seed_knowledge_source_card(
+            &store,
+            "due-writer-deterministic-a",
+            "Due writer deterministic evidence says a source-backed non-model cluster exists.",
+        );
+        seed_knowledge_source_card(
+            &store,
+            "due-writer-deterministic-b",
+            "Due writer deterministic evidence says another source supports the non-model cluster.",
+        );
+        let deterministic = store
+            .project_knowledge_from_source_card_query(
+                "Due writer deterministic evidence",
+                Some("Due writer deterministic cluster"),
+                10,
+            )
+            .unwrap();
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "allow-due-model-writer-promotion"
+effect = "allow"
+action = "knowledge_cluster.promote"
+package = "arcwell-librarian"
+source = "knowledge_cluster_model_review"
+reason = "allow reviewed due model writer test"
+priority = 20
+
+[[rules]]
+id = "allow-due-model-writer-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+source = "knowledge_cluster_model_write"
+reason = "allow due model writer worker enqueue in severe test"
+priority = 20
+"#,
+        );
+        store
+            .promote_knowledge_cluster(
+                &promoted_cluster.id,
+                Some("due-model-writer-test"),
+                Some("Promote only one model-origin cluster for due writer enqueue."),
+            )
+            .unwrap();
+
+        let report = store
+            .enqueue_due_knowledge_cluster_model_writer_jobs(20, "mock", None, None, None, true)
+            .unwrap();
+        assert_eq!(report.inspected, 3, "{report:?}");
+        assert_eq!(report.enqueued, 1, "{report:?}");
+        assert_eq!(report.skipped, 2, "{report:?}");
+        let jobs = store.list_wiki_jobs().unwrap();
+        let writer_jobs = jobs
+            .iter()
+            .filter(|job| job.kind == "knowledge_cluster_model_write")
+            .collect::<Vec<_>>();
+        assert_eq!(writer_jobs.len(), 1, "{jobs:#?}");
+        assert_eq!(
+            writer_jobs[0]
+                .input_json
+                .get("cluster_id")
+                .and_then(Value::as_str),
+            Some(promoted_cluster.id.as_str())
+        );
+        assert_ne!(
+            writer_jobs[0]
+                .input_json
+                .get("cluster_id")
+                .and_then(Value::as_str),
+            Some(unpromoted_cluster.id.as_str())
+        );
+        assert_ne!(
+            writer_jobs[0]
+                .input_json
+                .get("cluster_id")
+                .and_then(Value::as_str),
+            Some(deterministic.cluster.id.as_str())
+        );
+        assert_eq!(
+            writer_jobs[0]
+                .input_json
+                .get("lineage")
+                .and_then(|value| value.get("trigger"))
+                .and_then(Value::as_str),
+            Some("due_promoted_model_cluster_recurrence")
+        );
+
+        let duplicate = store
+            .enqueue_due_knowledge_cluster_model_writer_jobs(20, "mock", None, None, None, true)
+            .unwrap();
+        assert_eq!(duplicate.enqueued, 0, "{duplicate:?}");
+        assert_eq!(
+            store
+                .list_wiki_jobs()
+                .unwrap()
+                .iter()
+                .filter(|job| job.kind == "knowledge_cluster_model_write")
+                .count(),
+            1
+        );
+
+        let worker = store.run_worker_once(1).unwrap();
+        assert_eq!(worker.processed, 1, "{worker:#?}");
+        assert_eq!(worker.jobs[0].kind, "knowledge_cluster_model_write");
+        assert_eq!(worker.jobs[0].status, "completed", "{worker:#?}");
+        assert!(
+            store
+                .list_knowledge_editorial_decisions(20)
+                .unwrap()
+                .iter()
+                .any(|decision| decision.cluster_id == promoted_cluster.id
+                    && decision.decision == "model_write_wiki_and_digest"
+                    && decision.status == "completed")
+        );
+        let terminal = store
+            .enqueue_due_knowledge_cluster_model_writer_jobs(20, "mock", None, None, None, true)
+            .unwrap();
+        assert_eq!(terminal.enqueued, 0, "{terminal:?}");
+        assert!(store.list_digest_deliveries(None).unwrap().is_empty());
     }
 
     #[test]

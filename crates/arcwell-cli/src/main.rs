@@ -1837,6 +1837,20 @@ enum KnowledgeSubcommand {
         #[arg(long, default_value = "active")]
         status: String,
     },
+    EnqueueDueModelWrites {
+        #[arg(long, default_value_t = 25)]
+        max_clusters: usize,
+        #[arg(long, default_value = "mock")]
+        provider: String,
+        #[arg(long)]
+        model_name: Option<String>,
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        #[arg(long)]
+        skip_digest: bool,
+    },
     EnqueueClusterInvestigation {
         cluster_id: String,
     },
@@ -4016,6 +4030,21 @@ fn knowledge(store: Store, args: KnowledgeCommand) -> Result<()> {
             !skip_digest,
             &cadence,
             &status,
+        )?),
+        KnowledgeSubcommand::EnqueueDueModelWrites {
+            max_clusters,
+            provider,
+            model_name,
+            endpoint,
+            timeout_seconds,
+            skip_digest,
+        } => print_json(&store.enqueue_due_knowledge_cluster_model_writer_jobs(
+            max_clusters,
+            &provider,
+            model_name.as_deref(),
+            endpoint.as_deref(),
+            timeout_seconds,
+            !skip_digest,
         )?),
         KnowledgeSubcommand::EnqueueClusterInvestigation { cluster_id } => {
             print_json(&store.enqueue_knowledge_cluster_investigation_job(&cluster_id)?)
@@ -6204,6 +6233,10 @@ async fn serve(paths: AppPaths, args: ServeArgs) -> Result<()> {
             post(http_ops_knowledge_cluster_editorial_decisions_enqueue),
         )
         .route(
+            "/ops/actions/knowledge/model-writes/enqueue-due",
+            post(http_ops_knowledge_model_writes_enqueue_due),
+        )
+        .route(
             "/ops/actions/knowledge/clusters/promote",
             post(http_ops_knowledge_cluster_promote),
         )
@@ -6436,6 +6469,18 @@ struct OpsKnowledgeDueClustersForm {
     csrf_token: String,
     idempotency_key: String,
     max_clusters: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsKnowledgeDueModelWritesForm {
+    csrf_token: String,
+    idempotency_key: String,
+    max_clusters: usize,
+    model_provider: String,
+    model_name: Option<String>,
+    endpoint: Option<String>,
+    timeout_seconds: Option<u64>,
+    create_digest: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -7424,6 +7469,93 @@ async fn http_ops_knowledge_cluster_editorial_decisions_enqueue(
     }
 }
 
+async fn http_ops_knowledge_model_writes_enqueue_due(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if let Err(error) = validate_http_mutation_request(&state, &headers, &uri) {
+        return http_error_response(error);
+    }
+    if body.len() as u64 > state.max_body_bytes {
+        return http_error_response(HttpError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_body_too_large",
+            "request body is too large",
+        ));
+    }
+    let form = match parse_ops_knowledge_due_model_writes_form(&body) {
+        Ok(form) => form,
+        Err(error) => return http_error_response(error),
+    };
+    if let Err(error) =
+        validate_ops_csrf_and_idempotency(&state, &form.csrf_token, &form.idempotency_key)
+    {
+        return http_error_response(error);
+    }
+    let idempotency_scope = format!("knowledge-model-writes-due:{}", form.idempotency_key);
+    let inserted = match reserve_ops_idempotency(&state, idempotency_scope) {
+        Ok(inserted) => inserted,
+        Err(error) => return http_error_response(error),
+    };
+    if !inserted {
+        return redirect_to_ops_ui("/ops/ui?q=knowledge_cluster_model_write&notice=duplicate");
+    }
+
+    let result = (|| -> Result<usize> {
+        let store = Store::open(state.paths.clone())?;
+        let max_clusters = form.max_clusters.clamp(1, 100);
+        let provider = form.model_provider.trim().to_ascii_lowercase();
+        let decision = store.policy_check(PolicyRequest {
+            action: "ops.knowledge_model_write.enqueue_due".to_string(),
+            package: Some("arcwell-cli".to_string()),
+            provider: Some(provider.clone()),
+            source: Some("ops-ui".to_string()),
+            channel: Some("http".to_string()),
+            subject: Some("local-operator".to_string()),
+            target: Some("knowledge_cluster_model_write".to_string()),
+            projected_usd: None,
+            metadata: json!({
+                "max_clusters": max_clusters,
+                "model_provider": provider.clone(),
+                "model_name": form.model_name.clone(),
+                "endpoint_configured": form.endpoint.is_some(),
+                "timeout_seconds": form.timeout_seconds,
+                "create_digest": form.create_digest,
+                "idempotency_key": form.idempotency_key,
+            }),
+            untrusted_excerpt: None,
+        })?;
+        if !decision.allowed {
+            bail!(
+                "policy denied ops.knowledge_model_write.enqueue_due: {}",
+                decision.reason
+            );
+        }
+        let report = store.enqueue_due_knowledge_cluster_model_writer_jobs(
+            max_clusters,
+            &provider,
+            form.model_name.as_deref(),
+            form.endpoint.as_deref(),
+            form.timeout_seconds,
+            form.create_digest,
+        )?;
+        Ok(report.enqueued)
+    })();
+
+    match result {
+        Ok(enqueued) => redirect_to_ops_ui(&format!(
+            "/ops/ui?q=knowledge_cluster_model_write&notice=knowledge_model_writes_due_enqueued&count={}",
+            enqueued
+        )),
+        Err(error) => http_error_response(HttpError::bad_request(
+            "ops_action_failed",
+            error.to_string(),
+        )),
+    }
+}
+
 async fn http_ops_knowledge_cluster_promote(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -8140,6 +8272,34 @@ fn parse_ops_knowledge_model_write_enqueue_form(
         csrf_token: take_required_form_string(&mut values, "csrf_token")?,
         idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
         cluster_id: take_required_form_string(&mut values, "cluster_id")?,
+        model_provider: take_required_form_string(&mut values, "model_provider")?,
+        model_name: take_optional_form_string(&mut values, "model_name"),
+        endpoint: take_optional_form_string(&mut values, "endpoint"),
+        timeout_seconds: take_optional_form_u64(&mut values, "timeout_seconds", 1, 600)?,
+        create_digest: take_required_form_bool(&mut values, "create_digest")?,
+    })
+}
+
+fn parse_ops_knowledge_due_model_writes_form(
+    body: &[u8],
+) -> std::result::Result<OpsKnowledgeDueModelWritesForm, HttpError> {
+    let mut values = parse_ops_form_fields(
+        body,
+        &[
+            "csrf_token",
+            "idempotency_key",
+            "max_clusters",
+            "model_provider",
+            "model_name",
+            "endpoint",
+            "timeout_seconds",
+            "create_digest",
+        ],
+    )?;
+    Ok(OpsKnowledgeDueModelWritesForm {
+        csrf_token: take_required_form_string(&mut values, "csrf_token")?,
+        idempotency_key: take_required_form_string(&mut values, "idempotency_key")?,
+        max_clusters: take_required_form_usize(&mut values, "max_clusters", 1, 100)?,
         model_provider: take_required_form_string(&mut values, "model_provider")?,
         model_name: take_optional_form_string(&mut values, "model_name"),
         endpoint: take_optional_form_string(&mut values, "endpoint"),
@@ -9989,6 +10149,26 @@ fn render_knowledge_ops_control_panel(csrf_token: Option<&str>, controls_enabled
         )),
     ));
     html.push_str(&format!(
+        r#"<form method="post" action="/ops/actions/knowledge/model-writes/enqueue-due">
+<input type="hidden" name="csrf_token" value="{}">
+<input type="hidden" name="idempotency_key" value="{}">
+<div><b>Queue due model writers</b><p class="muted">Find promoted model-origin clusters without terminal writer output and enqueue source-card-gated model writer jobs.</p></div>
+<div class="fields">
+<label>Max clusters<input name="max_clusters" type="number" min="1" max="100" value="25"></label>
+<label>Provider<select name="model_provider"><option value="mock">mock</option><option value="openai">openai</option></select></label>
+<label>Model<input name="model_name" maxlength="80" placeholder="gpt-4.1-mini"></label>
+<label>Endpoint<input name="endpoint" maxlength="300" placeholder="optional"></label>
+<label>Timeout<input name="timeout_seconds" type="number" min="1" max="600" placeholder="optional"></label>
+<label>Digest<select name="create_digest"><option value="true">create</option><option value="false">skip</option></select></label>
+</div>
+<button type="submit">Queue due writers</button>
+</form>"#,
+        html_escape(csrf_token),
+        html_escape(&ops_control_idempotency_key(
+            "knowledge-model-writes-due"
+        )),
+    ));
+    html.push_str(&format!(
         r#"<form method="post" action="/ops/actions/knowledge/investigations/enqueue-execution">
 <input type="hidden" name="csrf_token" value="{}">
 <input type="hidden" name="idempotency_key" value="{}">
@@ -10821,6 +11001,9 @@ fn ops_notice_text(notice: &str) -> String {
         "knowledge_model_clusters_enqueued" => "Knowledge model clustering job queued.".to_string(),
         "knowledge_model_write_scheduled" => "Knowledge model writer schedule updated.".to_string(),
         "knowledge_model_write_enqueued" => "Knowledge model writer job queued.".to_string(),
+        "knowledge_model_writes_due_enqueued" => {
+            "Due promoted model-cluster writer jobs queued.".to_string()
+        }
         "knowledge_cluster_expansions_enqueued" => {
             "Due knowledge cluster expansion jobs queued.".to_string()
         }
@@ -22066,6 +22249,31 @@ reason = "ops controls may enqueue local worker jobs"
         );
         assert!(store.list_watch_sources().unwrap().is_empty());
 
+        let (denied_due_model_writes_status, denied_due_model_writes_json) = response_json(
+            http_ops_knowledge_model_writes_enqueue_due(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-writes/enqueue-due"),
+                Bytes::from(knowledge_due_model_writes_body(
+                    &state.csrf_token,
+                    "ops-ui-knowledge-model-writes-due-denied",
+                    5,
+                    "mock",
+                    true,
+                )),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(denied_due_model_writes_status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            denied_due_model_writes_json
+                .pointer("/error/type")
+                .and_then(Value::as_str),
+            Some("ops_action_failed")
+        );
+        assert!(store.list_wiki_jobs().unwrap().is_empty());
+
         let (denied_investigation_status, denied_investigation_json) = response_json(
             http_ops_knowledge_investigation_execution_enqueue(
                 State(state.clone()),
@@ -22223,6 +22431,12 @@ id = "allow-ops-knowledge-model-write-enqueue"
 effect = "allow"
 action = "ops.knowledge_model_write.enqueue"
 reason = "local operator may enqueue promoted cluster model writer jobs"
+
+[[rules]]
+id = "allow-ops-knowledge-model-write-enqueue-due"
+effect = "allow"
+action = "ops.knowledge_model_write.enqueue_due"
+reason = "local operator may enqueue due promoted model-origin cluster writer jobs"
 
 [[rules]]
 id = "allow-core-knowledge-cluster-promote"
@@ -22638,6 +22852,58 @@ reason = "ops controls may enqueue local worker jobs"
             model_write_job_count
         );
 
+        let due_model_writes_body = knowledge_due_model_writes_body(
+            &state.csrf_token,
+            "ops-ui-knowledge-model-writes-due-allowed",
+            7,
+            "mock",
+            true,
+        );
+        let (due_model_writes_status, _) = response_text(
+            http_ops_knowledge_model_writes_enqueue_due(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-writes/enqueue-due"),
+                Bytes::from(due_model_writes_body.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(due_model_writes_status, StatusCode::SEE_OTHER);
+        assert!(
+            store
+                .list_policy_decisions(50)
+                .unwrap()
+                .iter()
+                .any(|decision| decision.allowed
+                    && decision.action == "ops.knowledge_model_write.enqueue_due")
+        );
+        assert_eq!(
+            store
+                .list_wiki_jobs()
+                .unwrap()
+                .iter()
+                .filter(|job| job.kind == "knowledge_cluster_model_write")
+                .count(),
+            model_write_job_count
+        );
+        let decisions_after_due_model_writes = store.list_policy_decisions(50).unwrap().len();
+        let (due_model_writes_duplicate_status, _) = response_text(
+            http_ops_knowledge_model_writes_enqueue_due(
+                State(state.clone()),
+                authed_local_headers(),
+                Uri::from_static("/ops/actions/knowledge/model-writes/enqueue-due"),
+                Bytes::from(due_model_writes_body),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(due_model_writes_duplicate_status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            store.list_policy_decisions(50).unwrap().len(),
+            decisions_after_due_model_writes
+        );
+
         store
             .create_knowledge_cluster_investigation(&projected.cluster.id)
             .unwrap();
@@ -22732,6 +22998,7 @@ reason = "ops controls may enqueue local worker jobs"
         assert!(html.contains("/ops/actions/knowledge/clusters/promote"));
         assert!(html.contains("/ops/actions/knowledge/model-writes/schedule"));
         assert!(html.contains("/ops/actions/knowledge/model-writes/enqueue"));
+        assert!(html.contains("/ops/actions/knowledge/model-writes/enqueue-due"));
         assert!(html.contains("/ops/actions/knowledge/investigations/enqueue-execution"));
         assert!(html.contains("Schedule model clustering"));
         assert!(html.contains("Queue model clustering"));
@@ -22739,6 +23006,7 @@ reason = "ops controls may enqueue local worker jobs"
         assert!(html.contains("Promote model cluster"));
         assert!(html.contains("Schedule model writer"));
         assert!(html.contains("Queue model writer"));
+        assert!(html.contains("Queue due model writers"));
         assert!(html.contains("knowledge_backlog"));
     }
 
@@ -23104,6 +23372,23 @@ reason = "local operator may dead-letter reviewed edge events"
             url_component(csrf_token),
             url_component(idempotency_key),
             url_component(cluster_id),
+            url_component(provider),
+            create_digest
+        )
+    }
+
+    fn knowledge_due_model_writes_body(
+        csrf_token: &str,
+        idempotency_key: &str,
+        max_clusters: usize,
+        provider: &str,
+        create_digest: bool,
+    ) -> String {
+        format!(
+            "csrf_token={}&idempotency_key={}&max_clusters={}&model_provider={}&model_name=&endpoint=&timeout_seconds=&create_digest={}",
+            url_component(csrf_token),
+            url_component(idempotency_key),
+            max_clusters,
             url_component(provider),
             create_digest
         )
