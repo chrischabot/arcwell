@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use calamine::{Data, Range, Reader, SheetType, SheetVisible, open_workbook_auto};
-use chrono::{DateTime, Duration as ChronoDuration, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, Local, TimeZone, Timelike, Utc};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use reqwest::header::{
@@ -26,7 +26,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 pub const APP_NAME: &str = "arcwell";
-pub const SCHEMA_VERSION: i64 = 17;
+pub const SCHEMA_VERSION: i64 = 18;
 pub const SOURCE_CARD_SCHEMA_VERSION: u64 = 1;
 const MAX_COST_USD: f64 = 1_000_000.0;
 const SOURCE_CARD_STALE_DAYS: i64 = 180;
@@ -1336,6 +1336,61 @@ pub struct DigestAlertTick {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueScheduleInput {
+    pub name: String,
+    pub kind: String,
+    pub channel: String,
+    pub recipient_ref: String,
+    pub time_zone: String,
+    pub hour: i64,
+    pub minute: i64,
+    pub catch_up_hours: i64,
+    pub metadata: Value,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueSchedule {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub kind: String,
+    pub channel: String,
+    pub recipient_ref: String,
+    pub time_zone: String,
+    pub hour: i64,
+    pub minute: i64,
+    pub catch_up_hours: i64,
+    pub metadata: Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueScheduleTick {
+    pub id: String,
+    pub schedule_id: String,
+    pub tick_key: String,
+    pub due_at: String,
+    pub status: String,
+    pub job_id: Option<String>,
+    pub candidate_id: Option<String>,
+    pub delivery_id: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueScheduleEnqueueReport {
+    pub inspected: usize,
+    pub enqueued: usize,
+    pub skipped: usize,
+    pub jobs: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RadarAuditFinding {
     pub severity: String,
     pub code: String,
@@ -1576,6 +1631,7 @@ pub struct WorkerRunReport {
     pub watch_poll: Option<WatchSourcePollEnqueueReport>,
     pub radar_schedule: Option<RadarScheduleEnqueueReport>,
     pub digest_alert_schedule: Option<DigestAlertScheduleEnqueueReport>,
+    pub issue_schedule: Option<IssueScheduleEnqueueReport>,
     pub knowledge_cluster_model_writer: Option<KnowledgeClusterModelWriterEnqueueReport>,
     pub knowledge_entity_resolution: Option<KnowledgeEntityResolutionEnqueueReport>,
     pub knowledge_cluster_editorial_decision:
@@ -4058,6 +4114,8 @@ pub struct OpsSnapshot {
     pub channel_delivery_attempts: Vec<ChannelDeliveryAttempt>,
     pub digest_candidates: Vec<DigestCandidate>,
     pub digest_deliveries: Vec<DigestDelivery>,
+    pub issue_schedules: Vec<IssueSchedule>,
+    pub issue_schedule_ticks: Vec<IssueScheduleTick>,
     pub work_runs: Vec<WorkRun>,
     pub procedures: Vec<Procedure>,
     pub procedure_candidates: Vec<ProcedureCandidate>,
@@ -5316,6 +5374,47 @@ impl Store {
 
             CREATE INDEX IF NOT EXISTS idx_digest_alert_ticks_status
             ON digest_alert_ticks(status);
+
+            CREATE TABLE IF NOT EXISTS issue_schedules (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              status TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              channel TEXT NOT NULL,
+              recipient_ref TEXT NOT NULL,
+              time_zone TEXT NOT NULL,
+              hour INTEGER NOT NULL,
+              minute INTEGER NOT NULL,
+              catch_up_hours INTEGER NOT NULL,
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(kind, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS issue_schedule_ticks (
+              id TEXT PRIMARY KEY,
+              schedule_id TEXT NOT NULL,
+              tick_key TEXT NOT NULL UNIQUE,
+              due_at TEXT NOT NULL,
+              status TEXT NOT NULL,
+              job_id TEXT,
+              candidate_id TEXT,
+              delivery_id TEXT,
+              error TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY(schedule_id) REFERENCES issue_schedules(id) ON DELETE CASCADE,
+              FOREIGN KEY(job_id) REFERENCES wiki_jobs(id) ON DELETE SET NULL,
+              FOREIGN KEY(candidate_id) REFERENCES digest_candidates(id) ON DELETE SET NULL,
+              FOREIGN KEY(delivery_id) REFERENCES digest_deliveries(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_issue_schedule_ticks_schedule_due
+            ON issue_schedule_ticks(schedule_id, due_at);
+
+            CREATE INDEX IF NOT EXISTS idx_issue_schedule_ticks_status
+            ON issue_schedule_ticks(status);
             "#,
         )?;
         self.ensure_column(
@@ -5588,6 +5687,9 @@ impl Store {
         )?;
         self.apply_schema_migration(17, "worker_heartbeat_events", false, None, |conn| {
             ensure_worker_heartbeat_events_schema_on(conn)
+        })?;
+        self.apply_schema_migration(18, "issue_schedules", false, None, |conn| {
+            ensure_issue_schedule_schema_on(conn)
         })?;
         repair_radar_source_quality_run_scope_on(&self.conn)?;
         self.conn.execute(
@@ -16077,6 +16179,12 @@ impl Store {
         } else {
             None
         };
+        let issue_schedule = self.enqueue_due_issue_schedule_jobs(max_jobs)?;
+        let issue_schedule = if issue_schedule.inspected > 0 {
+            Some(issue_schedule)
+        } else {
+            None
+        };
         let knowledge_cluster_model_writer = self.enqueue_due_knowledge_cluster_model_writer_jobs(
             max_jobs, "mock", None, None, None, true,
         )?;
@@ -16156,6 +16264,7 @@ impl Store {
             watch_poll,
             radar_schedule,
             digest_alert_schedule,
+            issue_schedule,
             knowledge_cluster_model_writer,
             knowledge_entity_resolution,
             knowledge_cluster_editorial_decision,
@@ -21182,6 +21291,46 @@ impl Store {
             "#,
         )?;
         rows(stmt.query_map(params![limit.clamp(1, 500)], knowledge_report_from_row)?)
+    }
+
+    fn list_knowledge_reports_updated_between(
+        &self,
+        window_start: &str,
+        window_end: &str,
+        limit: usize,
+    ) -> Result<Vec<KnowledgeReport>> {
+        validate_timestamp(window_start)?;
+        validate_timestamp(window_end)?;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, cluster_id, title, body_markdown, status, source_card_ids_json,
+                   quality_findings_json, metadata_json, created_at, updated_at
+            FROM knowledge_reports
+            WHERE updated_at >= ?1 AND updated_at <= ?2
+            ORDER BY updated_at DESC
+            LIMIT ?3
+            "#,
+        )?;
+        rows(stmt.query_map(
+            params![window_start, window_end, limit.clamp(1, 100) as i64],
+            knowledge_report_from_row,
+        )?)
+    }
+
+    fn read_source_cards_by_ids(&self, source_card_ids: &[String]) -> Result<Vec<SourceCard>> {
+        let mut cards = Vec::new();
+        let mut seen = BTreeSet::new();
+        for source_card_id in source_card_ids {
+            if !seen.insert(source_card_id.clone()) {
+                continue;
+            }
+            validate_id(source_card_id)?;
+            cards.push(
+                self.read_source_card(source_card_id)?
+                    .with_context(|| format!("source card not found: {source_card_id}"))?,
+            );
+        }
+        Ok(cards)
     }
 
     pub fn project_knowledge_from_source_card_query(
@@ -27838,6 +27987,9 @@ impl Store {
             let source_card = self
                 .read_source_card(source_card_id)?
                 .with_context(|| format!("digest source card not found: {source_card_id}"))?;
+            if digest_source_card_is_knowledge_daily_briefing(&source_card) {
+                return Ok(("arcwell-knowledge", "knowledge_daily_briefing_delivery"));
+            }
             if digest_source_card_is_x_origin(&source_card) {
                 return Ok(("arcwell-x", "x_digest_delivery"));
             }
@@ -28075,6 +28227,18 @@ impl Store {
     }
 
     fn digest_candidate_delivery_text(&self, candidate: &DigestCandidate) -> Result<String> {
+        if digest_topic_is_knowledge_daily_briefing(&candidate.topic) {
+            for source_card_id in &candidate.source_card_ids {
+                let card = self
+                    .read_source_card(source_card_id)?
+                    .with_context(|| format!("digest source card not found: {source_card_id}"))?;
+                if digest_source_card_is_knowledge_daily_briefing(&card) {
+                    return Ok(Self::knowledge_daily_briefing_delivery_text(
+                        candidate, &card,
+                    ));
+                }
+            }
+        }
         let mut cards = Vec::new();
         for source_card_id in candidate.source_card_ids.iter().take(12) {
             let card = self
@@ -28137,6 +28301,22 @@ impl Store {
         lines.push(String::new());
         lines.push("Arcwell keeps the review status, score, digest candidate id, and source-card ids in the local audit ledger; they are intentionally omitted from the reader-facing notification.".to_string());
         Ok(lines.join("\n"))
+    }
+
+    fn knowledge_daily_briefing_delivery_text(
+        candidate: &DigestCandidate,
+        briefing_card: &SourceCard,
+    ) -> String {
+        let body = briefing_card.summary.trim();
+        if body.starts_with("# ") || body.starts_with("## ") {
+            body.to_string()
+        } else {
+            format!(
+                "# {}\n\n{}",
+                Self::digest_human_topic(&candidate.topic),
+                body
+            )
+        }
     }
 
     fn credential_reminder_delivery_text(
@@ -28836,6 +29016,368 @@ impl Store {
                 "#,
                 params![tick_key],
                 digest_alert_tick_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn upsert_issue_schedule(&self, input: IssueScheduleInput) -> Result<IssueSchedule> {
+        validate_query(&input.name)?;
+        validate_issue_schedule_kind(&input.kind)?;
+        let status = input
+            .status
+            .as_deref()
+            .unwrap_or("active")
+            .trim()
+            .to_ascii_lowercase();
+        validate_issue_schedule_status(&status)?;
+        let channel = normalize_radar_delivery_channel(&input.channel)?;
+        let recipient_ref = normalize_radar_delivery_recipient(&channel, &input.recipient_ref)?;
+        let time_zone = normalize_issue_schedule_time_zone(&input.time_zone)?;
+        let hour = input.hour.clamp(0, 23);
+        let minute = input.minute.clamp(0, 59);
+        let catch_up_hours = input.catch_up_hours.clamp(1, 24 * 14);
+        let metadata = sanitize_work_json(input.metadata)?;
+        let metadata_json = serde_json::to_string(&metadata)?;
+        let id = issue_schedule_id(&input.kind, &input.name);
+        let timestamp = now();
+        self.conn.execute(
+            r#"
+            INSERT INTO issue_schedules
+              (id, name, status, kind, channel, recipient_ref, time_zone, hour, minute,
+               catch_up_hours, metadata_json, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
+            ON CONFLICT(kind, name) DO UPDATE SET
+              status = excluded.status,
+              channel = excluded.channel,
+              recipient_ref = excluded.recipient_ref,
+              time_zone = excluded.time_zone,
+              hour = excluded.hour,
+              minute = excluded.minute,
+              catch_up_hours = excluded.catch_up_hours,
+              metadata_json = excluded.metadata_json,
+              updated_at = excluded.updated_at
+            "#,
+            params![
+                id,
+                input.name,
+                status,
+                input.kind,
+                channel,
+                recipient_ref,
+                time_zone,
+                hour,
+                minute,
+                catch_up_hours,
+                metadata_json,
+                timestamp
+            ],
+        )?;
+        self.get_issue_schedule(&id)?
+            .with_context(|| format!("issue schedule not found after upsert: {id}"))
+    }
+
+    pub fn list_issue_schedules(&self) -> Result<Vec<IssueSchedule>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, name, status, kind, channel, recipient_ref, time_zone, hour, minute,
+                   catch_up_hours, metadata_json, created_at, updated_at
+            FROM issue_schedules
+            ORDER BY updated_at DESC
+            "#,
+        )?;
+        rows(stmt.query_map([], issue_schedule_from_row)?)
+    }
+
+    pub fn get_issue_schedule(&self, id: &str) -> Result<Option<IssueSchedule>> {
+        validate_id(id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, name, status, kind, channel, recipient_ref, time_zone, hour, minute,
+                       catch_up_hours, metadata_json, created_at, updated_at
+                FROM issue_schedules
+                WHERE id = ?1
+                "#,
+                params![id],
+                issue_schedule_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn list_issue_schedule_ticks(
+        &self,
+        schedule_id: Option<&str>,
+    ) -> Result<Vec<IssueScheduleTick>> {
+        if let Some(schedule_id) = schedule_id {
+            validate_id(schedule_id)?;
+            let mut stmt = self.conn.prepare(
+                r#"
+                SELECT id, schedule_id, tick_key, due_at, status, job_id, candidate_id,
+                       delivery_id, error, created_at, updated_at
+                FROM issue_schedule_ticks
+                WHERE schedule_id = ?1
+                ORDER BY due_at DESC, updated_at DESC
+                "#,
+            )?;
+            return rows(stmt.query_map(params![schedule_id], issue_schedule_tick_from_row)?);
+        }
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, schedule_id, tick_key, due_at, status, job_id, candidate_id,
+                   delivery_id, error, created_at, updated_at
+            FROM issue_schedule_ticks
+            ORDER BY due_at DESC, updated_at DESC
+            "#,
+        )?;
+        rows(stmt.query_map([], issue_schedule_tick_from_row)?)
+    }
+
+    pub fn enqueue_due_issue_schedule_jobs(
+        &self,
+        max_schedules: usize,
+    ) -> Result<IssueScheduleEnqueueReport> {
+        let mut report = IssueScheduleEnqueueReport {
+            inspected: 0,
+            enqueued: 0,
+            skipped: 0,
+            jobs: Vec::new(),
+            errors: Vec::new(),
+        };
+        let max_schedules = max_schedules.clamp(1, 100);
+        let max_jobs = max_schedules;
+        for schedule in self.list_issue_schedules()?.into_iter().take(max_schedules) {
+            report.inspected += 1;
+            if schedule.status != "active" {
+                report.skipped += 1;
+                continue;
+            }
+            if self.issue_schedule_has_active_job(&schedule.id)? {
+                report.skipped += 1;
+                continue;
+            }
+            let due_slots = match self.issue_schedule_due_slots(&schedule, Utc::now()) {
+                Ok(slots) => slots,
+                Err(error) => {
+                    report.skipped += 1;
+                    report.errors.push(format!("{}: {error}", schedule.name));
+                    continue;
+                }
+            };
+            if due_slots.is_empty() {
+                report.skipped += 1;
+                continue;
+            }
+            for due_at in due_slots {
+                if report.enqueued >= max_jobs {
+                    break;
+                }
+                let tick_key = issue_schedule_tick_key(&schedule.id, &due_at, &schedule);
+                if self.get_issue_schedule_tick_by_key(&tick_key)?.is_some() {
+                    report.skipped += 1;
+                    continue;
+                }
+                match self.create_issue_schedule_tick(&schedule.id, &tick_key, &due_at) {
+                    Ok(tick) => {
+                        let job_kind = match schedule.kind.as_str() {
+                            "knowledge_daily_briefing" => "knowledge_daily_briefing",
+                            other => {
+                                let error = format!("unsupported issue schedule kind: {other}");
+                                self.update_issue_schedule_tick(
+                                    &tick.id,
+                                    "blocked",
+                                    None,
+                                    None,
+                                    Some(&error),
+                                )?;
+                                report.skipped += 1;
+                                report.errors.push(format!("{}: {error}", schedule.name));
+                                continue;
+                            }
+                        };
+                        match self.enqueue_wiki_job(job_kind, json!({ "tick_id": tick.id })) {
+                            Ok(job) => {
+                                self.attach_issue_schedule_job(&tick.id, &job.id)?;
+                                report.enqueued += 1;
+                                report.jobs.push(job.id);
+                            }
+                            Err(error) => {
+                                self.update_issue_schedule_tick(
+                                    &tick.id,
+                                    "blocked",
+                                    None,
+                                    None,
+                                    Some(&error.to_string()),
+                                )?;
+                                report.skipped += 1;
+                                report.errors.push(format!("{}: {error}", schedule.name));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        report.skipped += 1;
+                        report.errors.push(format!("{}: {error}", schedule.name));
+                    }
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    fn issue_schedule_has_active_job(&self, schedule_id: &str) -> Result<bool> {
+        validate_id(schedule_id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM issue_schedule_ticks tick
+                JOIN wiki_jobs job ON job.id = tick.job_id
+                WHERE tick.schedule_id = ?1
+                  AND job.status IN ('pending', 'running', 'deferred')
+                "#,
+                params![schedule_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .map_err(Into::into)
+    }
+
+    fn issue_schedule_due_slots(
+        &self,
+        schedule: &IssueSchedule,
+        now_utc: DateTime<Utc>,
+    ) -> Result<Vec<String>> {
+        let latest_due_at = self.latest_issue_schedule_due_at(&schedule.id)?;
+        issue_schedule_due_slots(
+            latest_due_at.as_deref(),
+            &schedule.created_at,
+            schedule.hour,
+            schedule.minute,
+            schedule.catch_up_hours,
+            &schedule.time_zone,
+            now_utc,
+            schedule
+                .metadata
+                .get("max_catch_up_ticks")
+                .and_then(Value::as_u64)
+                .unwrap_or(3) as usize,
+        )
+    }
+
+    fn latest_issue_schedule_due_at(&self, schedule_id: &str) -> Result<Option<String>> {
+        validate_id(schedule_id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT due_at
+                FROM issue_schedule_ticks
+                WHERE schedule_id = ?1
+                ORDER BY due_at DESC
+                LIMIT 1
+                "#,
+                params![schedule_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn create_issue_schedule_tick(
+        &self,
+        schedule_id: &str,
+        tick_key: &str,
+        due_at: &str,
+    ) -> Result<IssueScheduleTick> {
+        validate_id(schedule_id)?;
+        validate_query(tick_key)?;
+        validate_timestamp(due_at)?;
+        let id = Uuid::new_v4().to_string();
+        let timestamp = now();
+        self.conn.execute(
+            r#"
+            INSERT INTO issue_schedule_ticks
+              (id, schedule_id, tick_key, due_at, status, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?5)
+            "#,
+            params![id, schedule_id, tick_key, due_at, timestamp],
+        )?;
+        self.get_issue_schedule_tick(&id)?
+            .with_context(|| format!("inserted issue schedule tick not found: {id}"))
+    }
+
+    fn attach_issue_schedule_job(&self, tick_id: &str, job_id: &str) -> Result<()> {
+        validate_id(tick_id)?;
+        validate_id(job_id)?;
+        self.conn.execute(
+            "UPDATE issue_schedule_ticks SET job_id = ?2, updated_at = ?3 WHERE id = ?1",
+            params![tick_id, job_id, now()],
+        )?;
+        Ok(())
+    }
+
+    fn update_issue_schedule_tick(
+        &self,
+        tick_id: &str,
+        status: &str,
+        candidate_id: Option<&str>,
+        delivery_id: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<IssueScheduleTick> {
+        validate_id(tick_id)?;
+        validate_issue_schedule_tick_status(status)?;
+        if let Some(candidate_id) = candidate_id {
+            validate_id(candidate_id)?;
+        }
+        if let Some(delivery_id) = delivery_id {
+            validate_id(delivery_id)?;
+        }
+        let error = error.map(sanitize_radar_delivery_error).transpose()?;
+        self.conn.execute(
+            r#"
+            UPDATE issue_schedule_ticks
+            SET status = ?2,
+                candidate_id = COALESCE(?3, candidate_id),
+                delivery_id = COALESCE(?4, delivery_id),
+                error = ?5,
+                updated_at = ?6
+            WHERE id = ?1
+            "#,
+            params![tick_id, status, candidate_id, delivery_id, error, now()],
+        )?;
+        self.get_issue_schedule_tick(tick_id)?
+            .with_context(|| format!("updated issue schedule tick not found: {tick_id}"))
+    }
+
+    fn get_issue_schedule_tick(&self, id: &str) -> Result<Option<IssueScheduleTick>> {
+        validate_id(id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, schedule_id, tick_key, due_at, status, job_id, candidate_id,
+                       delivery_id, error, created_at, updated_at
+                FROM issue_schedule_ticks
+                WHERE id = ?1
+                "#,
+                params![id],
+                issue_schedule_tick_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn get_issue_schedule_tick_by_key(&self, tick_key: &str) -> Result<Option<IssueScheduleTick>> {
+        validate_query(tick_key)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, schedule_id, tick_key, due_at, status, job_id, candidate_id,
+                       delivery_id, error, created_at, updated_at
+                FROM issue_schedule_ticks
+                WHERE tick_key = ?1
+                "#,
+                params![tick_key],
+                issue_schedule_tick_from_row,
             )
             .optional()
             .map_err(Into::into)
@@ -32045,6 +32587,8 @@ impl Store {
             channel_delivery_attempts: self.list_channel_delivery_attempts(None)?,
             digest_candidates: self.list_digest_candidates()?,
             digest_deliveries: self.list_digest_deliveries(None)?,
+            issue_schedules: self.list_issue_schedules()?,
+            issue_schedule_ticks: self.list_issue_schedule_ticks(None)?,
             work_runs: self.search_work_runs(None, None, None, 50)?,
             procedures: self.search_procedures(None, Some("active"), 50)?,
             procedure_candidates: self.list_procedure_candidates("pending")?,
@@ -34363,6 +34907,9 @@ impl Store {
                     self.execute_radar_scheduled_delivery(&job.input_json)
                 }
                 "digest_scheduled_alert" => self.execute_digest_scheduled_alert(&job.input_json),
+                "knowledge_daily_briefing" => {
+                    self.execute_knowledge_daily_briefing(&job.input_json)
+                }
                 "knowledge_cluster_editorial_decide" => {
                     self.execute_knowledge_cluster_editorial_decide(&job.input_json)
                 }
@@ -35180,6 +35727,288 @@ impl Store {
             "errors": errors,
             "proof_level": proof_level
         }))
+    }
+
+    fn execute_knowledge_daily_briefing(&self, input: &Value) -> Result<Value> {
+        let tick_id = input
+            .get("tick_id")
+            .and_then(Value::as_str)
+            .context("knowledge_daily_briefing missing tick_id")?;
+        let tick = self
+            .get_issue_schedule_tick(tick_id)?
+            .with_context(|| format!("issue schedule tick not found: {tick_id}"))?;
+        let schedule = self
+            .get_issue_schedule(&tick.schedule_id)?
+            .with_context(|| format!("issue schedule not found: {}", tick.schedule_id))?;
+        if schedule.kind != "knowledge_daily_briefing" {
+            let error = format!(
+                "knowledge_daily_briefing job cannot execute issue kind {}",
+                schedule.kind
+            );
+            let updated =
+                self.update_issue_schedule_tick(&tick.id, "blocked", None, None, Some(&error))?;
+            return Ok(
+                json!({ "tick": updated, "schedule": schedule, "status": "blocked", "error": error }),
+            );
+        }
+        self.update_issue_schedule_tick(&tick.id, "running", None, None, None)?;
+        let max_reports = schedule
+            .metadata
+            .get("max_reports")
+            .and_then(Value::as_u64)
+            .unwrap_or(12) as usize;
+        let max_source_cards = schedule
+            .metadata
+            .get("max_source_cards")
+            .and_then(Value::as_u64)
+            .unwrap_or(80) as usize;
+        let window_hours = schedule
+            .metadata
+            .get("window_hours")
+            .and_then(Value::as_i64)
+            .unwrap_or(24)
+            .clamp(1, 24 * 14);
+        let window_end = Utc::now();
+        let window_start = window_end - ChronoDuration::hours(window_hours);
+        let reports = self.list_knowledge_reports_updated_between(
+            &window_start.to_rfc3339(),
+            &window_end.to_rfc3339(),
+            max_reports,
+        )?;
+        if reports.is_empty() {
+            let updated = self.update_issue_schedule_tick(&tick.id, "empty", None, None, None)?;
+            return Ok(json!({
+                "tick": updated,
+                "schedule": schedule,
+                "status": "empty",
+                "window_start": window_start.to_rfc3339(),
+                "window_end": window_end.to_rfc3339(),
+                "proof_level": "Operational boundary: scheduled daily briefing ran, but no source-backed knowledge reports were updated in the configured window"
+            }));
+        }
+        let mut source_card_ids = BTreeSet::new();
+        for report in &reports {
+            for source_card_id in &report.source_card_ids {
+                source_card_ids.insert(source_card_id.clone());
+            }
+        }
+        let source_card_ids = source_card_ids
+            .into_iter()
+            .take(max_source_cards.clamp(1, 500))
+            .collect::<Vec<_>>();
+        if source_card_ids.is_empty() {
+            let error = "knowledge daily briefing requires source-card-backed reports";
+            let updated =
+                self.update_issue_schedule_tick(&tick.id, "blocked", None, None, Some(error))?;
+            return Ok(
+                json!({ "tick": updated, "schedule": schedule, "status": "blocked", "error": error }),
+            );
+        }
+        let source_cards = self.read_source_cards_by_ids(&source_card_ids)?;
+        if source_cards.iter().all(is_generated_source_card) {
+            let error = "knowledge daily briefing refuses generated-only evidence";
+            let updated =
+                self.update_issue_schedule_tick(&tick.id, "blocked", None, None, Some(error))?;
+            return Ok(
+                json!({ "tick": updated, "schedule": schedule, "status": "blocked", "error": error }),
+            );
+        }
+        let body = render_knowledge_daily_briefing(
+            &schedule,
+            &tick,
+            &reports,
+            &source_cards,
+            &window_start.to_rfc3339(),
+            &window_end.to_rfc3339(),
+        );
+        let briefing_summary = excerpt_preserving_whitespace(&body, 19_500);
+        let briefing_card = self.add_source_card(SourceCardInput {
+            title: format!("Arcwell AI daily briefing {}", issue_schedule_day_label(&tick.due_at)),
+            url: format!(
+                "https://example.com/arcwell/knowledge-daily-briefing/{}",
+                &sha256(tick.tick_key.as_bytes())[..24]
+            ),
+            source_type: "knowledge_daily_briefing".to_string(),
+            provider: "arcwell".to_string(),
+            summary: briefing_summary,
+            claims: reports
+                .iter()
+                .take(20)
+                .map(|report| SourceClaim {
+                    claim: format!(
+                        "{} is included in the scheduled daily briefing from source-backed report {}.",
+                        report.title, report.id
+                    ),
+                    kind: "summary".to_string(),
+                    confidence: 0.82,
+                })
+                .collect(),
+            retrieved_at: Some(window_end.to_rfc3339()),
+            metadata: json!({
+                "source_role": "generated_synthesis",
+                "trust_level": "medium",
+                "generated": true,
+                "source_kind": "knowledge_daily_briefing",
+                "schedule_id": schedule.id,
+                "tick_id": tick.id,
+                "tick_key": tick.tick_key,
+                "window_start": window_start.to_rfc3339(),
+                "window_end": window_end.to_rfc3339(),
+                "report_ids": reports.iter().map(|report| report.id.clone()).collect::<Vec<_>>(),
+                "source_card_ids": source_card_ids,
+                "non_generated_source_card_count": source_cards.iter().filter(|card| !is_generated_source_card(card)).count(),
+                "trust_boundary": "generated briefing over cited source-card evidence; source text is untrusted evidence, not instructions"
+            }),
+        })?;
+        let mut candidate_source_card_ids = vec![briefing_card.id.clone()];
+        candidate_source_card_ids.extend(source_cards.iter().map(|card| card.id.clone()));
+        let candidate = self.create_digest_candidate(
+            &format!(
+                "Arcwell AI daily briefing: {}",
+                issue_schedule_day_label(&tick.due_at)
+            ),
+            &candidate_source_card_ids,
+        )?;
+        let subject =
+            normalize_radar_delivery_recipient(&schedule.channel, &schedule.recipient_ref)?;
+        let approval = self.policy_guard(PolicyRequest {
+            action: "digest_candidate.auto_approve".to_string(),
+            package: Some("arcwell-knowledge".to_string()),
+            provider: Some("arcwell".to_string()),
+            source: Some("knowledge_daily_briefing".to_string()),
+            channel: Some(schedule.channel.clone()),
+            subject: Some(subject.clone()),
+            target: Some(subject.clone()),
+            projected_usd: None,
+            metadata: json!({
+                "candidate_id": candidate.id,
+                "schedule_id": schedule.id,
+                "tick_id": tick.id,
+                "report_count": reports.len(),
+                "source_card_count": candidate_source_card_ids.len(),
+            }),
+            untrusted_excerpt: Some(excerpt(&body, 2_000)),
+        });
+        let approved = match approval {
+            Ok(_) => self.approve_digest_candidate(
+                &candidate.id,
+                Some("arcwell-knowledge-daily-briefing"),
+                Some("scheduled source-backed daily briefing"),
+            )?,
+            Err(error) => {
+                let error = error.to_string();
+                let updated = self.update_issue_schedule_tick(
+                    &tick.id,
+                    "blocked",
+                    Some(&candidate.id),
+                    None,
+                    Some(&error),
+                )?;
+                return Ok(json!({
+                    "tick": updated,
+                    "schedule": schedule,
+                    "candidate": candidate,
+                    "status": "blocked",
+                    "error": sanitize_radar_delivery_error(&error)?,
+                    "proof_level": "Operational boundary: daily briefing candidate was generated but auto-approval policy blocked delivery"
+                }));
+            }
+        };
+        let idempotency_key = Some(format!("issue-schedule-{}", tick.tick_key));
+        let delivery_result = match schedule.channel.as_str() {
+            "email" => {
+                let account_id = self.configured_cloudflare_account_id()?.context(
+                    "CLOUDFLARE_ACCOUNT_ID is required for scheduled knowledge daily email",
+                )?;
+                let api_token = self.configured_cloudflare_email_api_token()?.context(
+                    "CLOUDFLARE_EMAIL_API_TOKEN or CLOUDFLARE_API_TOKEN is required for scheduled knowledge daily email",
+                )?;
+                let from = self.configured_agent_email_from()?.context(
+                    "ARCWELL_AGENT_EMAIL_FROM or ARCWELL_AGENT_EMAIL is required for scheduled knowledge daily email",
+                )?;
+                let to = digest_alert_email_recipient(&schedule.recipient_ref)?.to_string();
+                self.send_digest_candidate_email(
+                    &approved.id,
+                    &account_id,
+                    &api_token,
+                    &from,
+                    &to,
+                    idempotency_key.as_deref(),
+                    self.configured_cloudflare_email_api_base()?.as_deref(),
+                )
+                .map(|report| {
+                    let delivery_id = report.digest_delivery.id.clone();
+                    let status = report.digest_delivery.status.clone();
+                    (delivery_id, status, json!(report))
+                })
+            }
+            "telegram" => {
+                let bot_token = self.configured_telegram_bot_token()?.context(
+                    "TELEGRAM_BOT_TOKEN is required for scheduled knowledge daily Telegram",
+                )?;
+                let chat_id = digest_alert_telegram_chat_id(&schedule.recipient_ref)?.to_string();
+                self.send_digest_candidate_telegram(
+                    &approved.id,
+                    &bot_token,
+                    &chat_id,
+                    idempotency_key.as_deref(),
+                    self.configured_telegram_api_base()?.as_deref(),
+                )
+                .map(|report| {
+                    let delivery_id = report.digest_delivery.id.clone();
+                    let status = report.digest_delivery.status.clone();
+                    (delivery_id, status, json!(report))
+                })
+            }
+            other => bail!("unsupported scheduled knowledge daily channel: {other}"),
+        };
+        match delivery_result {
+            Ok((delivery_id, status, delivery)) => {
+                let tick_status = match status.as_str() {
+                    "sent" => "sent",
+                    "blocked" => "blocked",
+                    "failed" => "failed",
+                    _ => "partial",
+                };
+                let updated = self.update_issue_schedule_tick(
+                    &tick.id,
+                    tick_status,
+                    Some(&approved.id),
+                    Some(&delivery_id),
+                    None,
+                )?;
+                Ok(json!({
+                    "tick": updated,
+                    "schedule": schedule,
+                    "candidate": approved,
+                    "daily_briefing_source_card_id": briefing_card.id,
+                    "reports": reports,
+                    "delivery": delivery,
+                    "status": tick_status,
+                    "proof_level": "Operational proof: native issue schedule created a source-backed daily briefing candidate and attempted authorized delivery"
+                }))
+            }
+            Err(error) => {
+                let error = sanitize_radar_delivery_error(&error.to_string())?;
+                let updated = self.update_issue_schedule_tick(
+                    &tick.id,
+                    "blocked",
+                    Some(&approved.id),
+                    None,
+                    Some(&error),
+                )?;
+                Ok(json!({
+                    "tick": updated,
+                    "schedule": schedule,
+                    "candidate": approved,
+                    "daily_briefing_source_card_id": briefing_card.id,
+                    "reports": reports,
+                    "status": "blocked",
+                    "error": error,
+                    "proof_level": "Operational boundary: native daily briefing generated and approved, but delivery was blocked before/at provider send"
+                }))
+            }
+        }
     }
 
     fn materialize_credential_reminder_digest_candidate(
@@ -41411,7 +42240,19 @@ fn digest_candidate_email_subject(candidate: &DigestCandidate) -> String {
     if digest_topic_is_credential_reminder(&candidate.topic) {
         return format!("Arcwell credential reminder: {}", excerpt(&topic, 120));
     }
+    if digest_topic_is_knowledge_daily_briefing(&candidate.topic) {
+        return excerpt(&topic, 140);
+    }
     format!("X bookmark report: {}", excerpt(&topic, 120))
+}
+
+fn digest_topic_is_knowledge_daily_briefing(topic: &str) -> bool {
+    topic
+        .to_ascii_lowercase()
+        .contains("arcwell ai daily briefing")
+        || topic
+            .to_ascii_lowercase()
+            .contains("knowledge daily briefing")
 }
 
 fn digest_topic_is_credential_reminder(topic: &str) -> bool {
@@ -42406,6 +43247,15 @@ fn wiki_job_policy_context(
         ),
         "radar_scheduled_delivery" => (
             "arcwell-radar",
+            None,
+            input
+                .get("tick_id")
+                .and_then(Value::as_str)
+                .map(|value| excerpt(value, 120)),
+            None,
+        ),
+        "knowledge_daily_briefing" => (
+            "arcwell-knowledge",
             None,
             input
                 .get("tick_id")
@@ -43989,6 +44839,7 @@ fn validate_job_kind(kind: &str) -> Result<()> {
         | "radar_run"
         | "radar_scheduled_delivery"
         | "digest_scheduled_alert"
+        | "knowledge_daily_briefing"
         | "knowledge_cluster_editorial_decide"
         | "knowledge_cluster_expand"
         | "knowledge_cluster_model_write"
@@ -45875,6 +46726,54 @@ fn ensure_x_knowledge_schema_on(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn ensure_issue_schedule_schema_on(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS issue_schedules (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          status TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          channel TEXT NOT NULL,
+          recipient_ref TEXT NOT NULL,
+          time_zone TEXT NOT NULL,
+          hour INTEGER NOT NULL,
+          minute INTEGER NOT NULL,
+          catch_up_hours INTEGER NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(kind, name)
+        );
+
+        CREATE TABLE IF NOT EXISTS issue_schedule_ticks (
+          id TEXT PRIMARY KEY,
+          schedule_id TEXT NOT NULL,
+          tick_key TEXT NOT NULL UNIQUE,
+          due_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          job_id TEXT,
+          candidate_id TEXT,
+          delivery_id TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(schedule_id) REFERENCES issue_schedules(id) ON DELETE CASCADE,
+          FOREIGN KEY(job_id) REFERENCES wiki_jobs(id) ON DELETE SET NULL,
+          FOREIGN KEY(candidate_id) REFERENCES digest_candidates(id) ON DELETE SET NULL,
+          FOREIGN KEY(delivery_id) REFERENCES digest_deliveries(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_issue_schedule_ticks_schedule_due
+        ON issue_schedule_ticks(schedule_id, due_at);
+
+        CREATE INDEX IF NOT EXISTS idx_issue_schedule_ticks_status
+        ON issue_schedule_ticks(status);
+        "#,
+    )?;
+    Ok(())
+}
+
 fn ensure_knowledge_schema_on(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
@@ -47617,6 +48516,41 @@ fn digest_alert_tick_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Diges
     })
 }
 
+fn issue_schedule_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<IssueSchedule> {
+    let metadata_json: String = row.get(10)?;
+    Ok(IssueSchedule {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        status: row.get(2)?,
+        kind: row.get(3)?,
+        channel: row.get(4)?,
+        recipient_ref: row.get(5)?,
+        time_zone: row.get(6)?,
+        hour: row.get(7)?,
+        minute: row.get(8)?,
+        catch_up_hours: row.get(9)?,
+        metadata: parse_json_column(&metadata_json, 10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
+}
+
+fn issue_schedule_tick_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<IssueScheduleTick> {
+    Ok(IssueScheduleTick {
+        id: row.get(0)?,
+        schedule_id: row.get(1)?,
+        tick_key: row.get(2)?,
+        due_at: row.get(3)?,
+        status: row.get(4)?,
+        job_id: row.get(5)?,
+        candidate_id: row.get(6)?,
+        delivery_id: row.get(7)?,
+        error: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
+}
+
 fn radar_profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RadarProfile> {
     let languages_json: String = row.get(7)?;
     let category_groups_json: String = row.get(8)?;
@@ -48533,6 +49467,242 @@ fn digest_alert_schedule_is_credential_reminder(schedule: &DigestAlertSchedule) 
     )
 }
 
+fn validate_issue_schedule_kind(kind: &str) -> Result<()> {
+    match kind {
+        "knowledge_daily_briefing" => Ok(()),
+        other => bail!("unsupported issue schedule kind: {other}"),
+    }
+}
+
+fn validate_issue_schedule_status(status: &str) -> Result<()> {
+    match status {
+        "active" | "paused" => Ok(()),
+        other => bail!("issue schedule status must be active or paused, got {other}"),
+    }
+}
+
+fn validate_issue_schedule_tick_status(status: &str) -> Result<()> {
+    match status {
+        "pending" | "running" | "sent" | "failed" | "blocked" | "deferred" | "empty"
+        | "partial" | "dead_lettered" => Ok(()),
+        other => bail!("unsupported issue schedule tick status: {other}"),
+    }
+}
+
+fn normalize_issue_schedule_time_zone(time_zone: &str) -> Result<String> {
+    let time_zone = time_zone.trim().to_ascii_lowercase();
+    match time_zone.as_str() {
+        "utc" | "local" => Ok(time_zone),
+        other => bail!("issue schedule time_zone must be utc or local, got {other}"),
+    }
+}
+
+fn issue_schedule_id(kind: &str, name: &str) -> String {
+    format!(
+        "isch-{}",
+        &sha256(format!("{kind}\n{name}").as_bytes())[..24]
+    )
+}
+
+fn issue_schedule_tick_key(schedule_id: &str, due_at: &str, schedule: &IssueSchedule) -> String {
+    format!(
+        "issue-{}",
+        &sha256(
+            format!(
+                "{}\n{}\n{}\n{}\n{}",
+                schedule_id, due_at, schedule.kind, schedule.channel, schedule.recipient_ref
+            )
+            .as_bytes()
+        )[..32]
+    )
+}
+
+fn issue_schedule_due_slots(
+    latest_due_at: Option<&str>,
+    created_at: &str,
+    hour: i64,
+    minute: i64,
+    catch_up_hours: i64,
+    time_zone: &str,
+    now_utc: DateTime<Utc>,
+    max_ticks: usize,
+) -> Result<Vec<String>> {
+    validate_timestamp(created_at)?;
+    let created_at = DateTime::parse_from_rfc3339(created_at)?.with_timezone(&Utc);
+    let lower_bound = now_utc - ChronoDuration::hours(catch_up_hours.clamp(1, 24 * 14));
+    let latest_bound = if let Some(value) = latest_due_at {
+        validate_timestamp(value)?;
+        Some(DateTime::parse_from_rfc3339(value)?.with_timezone(&Utc) + ChronoDuration::seconds(1))
+    } else {
+        None
+    };
+    let mut start = created_at.max(lower_bound);
+    if let Some(latest_bound) = latest_bound {
+        start = start.max(latest_bound);
+    }
+    let hour = hour.clamp(0, 23) as u32;
+    let minute = minute.clamp(0, 59) as u32;
+    let mut slots = match normalize_issue_schedule_time_zone(time_zone)?.as_str() {
+        "utc" => issue_schedule_due_slots_utc(start, now_utc, hour, minute)?,
+        "local" => issue_schedule_due_slots_local(start, now_utc, hour, minute)?,
+        _ => unreachable!("time zone normalized above"),
+    };
+    slots.sort();
+    slots.truncate(max_ticks.clamp(1, 30));
+    Ok(slots.into_iter().map(|slot| slot.to_rfc3339()).collect())
+}
+
+fn issue_schedule_due_slots_utc(
+    start: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+    hour: u32,
+    minute: u32,
+) -> Result<Vec<DateTime<Utc>>> {
+    let mut date = start.date_naive();
+    let end_date = now_utc.date_naive();
+    let mut slots = Vec::new();
+    while date <= end_date {
+        let Some(candidate) = Utc
+            .with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0)
+            .single()
+        else {
+            bail!("constructing UTC issue schedule slot failed");
+        };
+        if candidate >= start && candidate <= now_utc {
+            slots.push(candidate);
+        }
+        let Some(next) = date.succ_opt() else {
+            break;
+        };
+        date = next;
+    }
+    Ok(slots)
+}
+
+fn issue_schedule_due_slots_local(
+    start: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+    hour: u32,
+    minute: u32,
+) -> Result<Vec<DateTime<Utc>>> {
+    let start_local = start.with_timezone(&Local);
+    let now_local = now_utc.with_timezone(&Local);
+    let mut date = start_local.date_naive();
+    let end_date = now_local.date_naive();
+    let mut slots = Vec::new();
+    while date <= end_date {
+        let local_slot =
+            match Local.with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0) {
+                chrono::LocalResult::Single(value) => Some(value),
+                chrono::LocalResult::Ambiguous(earliest, _) => Some(earliest),
+                chrono::LocalResult::None => None,
+            };
+        if let Some(local_slot) = local_slot {
+            let candidate = local_slot.with_timezone(&Utc);
+            if candidate >= start && candidate <= now_utc {
+                slots.push(candidate);
+            }
+        }
+        let Some(next) = date.succ_opt() else {
+            break;
+        };
+        date = next;
+    }
+    Ok(slots)
+}
+
+fn issue_schedule_day_label(due_at: &str) -> String {
+    DateTime::parse_from_rfc3339(due_at)
+        .map(|value| value.date_naive().to_string())
+        .unwrap_or_else(|_| Utc::now().date_naive().to_string())
+}
+
+fn render_knowledge_daily_briefing(
+    schedule: &IssueSchedule,
+    tick: &IssueScheduleTick,
+    reports: &[KnowledgeReport],
+    source_cards: &[SourceCard],
+    window_start: &str,
+    window_end: &str,
+) -> String {
+    let day = issue_schedule_day_label(&tick.due_at);
+    let source_family_count = source_cards
+        .iter()
+        .map(|card| card.provider.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let mut lines = vec![
+        format!("# AI Daily Briefing - {day}"),
+        String::new(),
+        "## Bottom Line".to_string(),
+        format!(
+            "{} source-backed AI update{} moved in the last {} hours across {} provider/source famil{}. The important thing is not the ledger state; it is what changed, why it matters, how the story is developing, and what still needs corroboration.",
+            reports.len(),
+            if reports.len() == 1 { "" } else { "s" },
+            schedule
+                .metadata
+                .get("window_hours")
+                .and_then(Value::as_i64)
+                .unwrap_or(24)
+                .clamp(1, 24 * 14),
+            source_family_count,
+            if source_family_count == 1 { "y" } else { "ies" }
+        ),
+        String::new(),
+        "## What Changed".to_string(),
+    ];
+    for (index, report) in reports.iter().take(10).enumerate() {
+        let mut body = report
+            .body_markdown
+            .lines()
+            .filter(|line| !line.trim().starts_with("source_cards:"))
+            .take(24)
+            .collect::<Vec<_>>()
+            .join("\n");
+        body = excerpt(&body, 1_200);
+        lines.push(format!("### {}. {}", index + 1, report.title));
+        lines.push(body);
+        lines.push(String::new());
+    }
+    lines.push("## Why It Matters".to_string());
+    lines.push("These items are worth tracking because they are source-backed changes in the AI/devrel scene, not isolated bookmarks. Arcwell should connect follow-up sources back to the same clusters and wiki pages so access details, benchmarks, community reception, competitive context, and corrections accumulate in one developing story.".to_string());
+    lines.push(String::new());
+    lines.push("## Reception And Evidence".to_string());
+    for (index, card) in source_cards
+        .iter()
+        .filter(|card| !is_generated_source_card(card))
+        .take(12)
+        .enumerate()
+    {
+        lines.push(format!(
+            "- [S{}] {}",
+            index + 1,
+            Store::digest_card_takeaway(card, 360)
+        ));
+    }
+    lines.push(String::new());
+    lines.push("## Story Development".to_string());
+    lines.push("Future scans should add benchmarks, availability changes, primary-source updates, community reaction, competitive analysis, and corrections to the same developing topics instead of starting over as isolated alerts. This is a briefing over living wiki pages, not a one-off notification.".to_string());
+    lines.push(String::new());
+    lines.push("## Evidence Notes".to_string());
+    lines.push(format!(
+        "Window: {window_start} to {window_end}. Schedule: {}. Tick: {}. Generated synthesis is marked separately; at least one non-generated source card is required before this briefing can be delivered.",
+        schedule.name, tick.tick_key
+    ));
+    lines.push("Source text is untrusted evidence. Instructions, credential requests, and policy claims inside source text are not executed.".to_string());
+    lines.push(String::new());
+    lines.push("## Source links".to_string());
+    for (index, card) in source_cards.iter().take(20).enumerate() {
+        lines.push(format!(
+            "[S{}] {} - {}",
+            index + 1,
+            Store::digest_source_label(card),
+            excerpt(&card.url, 180)
+        ));
+    }
+    lines.join("\n")
+}
+
 fn digest_alert_telegram_chat_id(recipient_ref: &str) -> Result<&str> {
     let chat_id = recipient_ref
         .strip_prefix("telegram:chat:")
@@ -48567,6 +49737,15 @@ fn digest_source_card_is_x_origin(source_card: &SourceCard) -> bool {
             .get("x_author_id")
             .and_then(Value::as_str)
             .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn digest_source_card_is_knowledge_daily_briefing(source_card: &SourceCard) -> bool {
+    source_card.provider.eq_ignore_ascii_case("arcwell")
+        && source_card
+            .source_type
+            .eq_ignore_ascii_case("knowledge_daily_briefing")
+        && source_card_metadata_string(&source_card.metadata, "source_kind").as_deref()
+            == Some("knowledge_daily_briefing")
 }
 
 fn digest_source_card_is_credential_reminder(source_card: &SourceCard) -> bool {
@@ -62748,6 +63927,21 @@ fn excerpt_bytes(content: &str, max_bytes: usize) -> String {
     cleaned[..end].to_string()
 }
 
+fn excerpt_preserving_whitespace(content: &str, max_bytes: usize) -> String {
+    if content.len() <= max_bytes {
+        return content.to_string();
+    }
+    let mut end = 0;
+    for (index, ch) in content.char_indices() {
+        let next = index + ch.len_utf8();
+        if next > max_bytes {
+            break;
+        }
+        end = next;
+    }
+    content[..end].to_string()
+}
+
 fn is_generated_wiki_page(title: &str) -> bool {
     is_generated_title(title)
 }
@@ -62948,6 +64142,189 @@ mod tests {
             .unwrap()
     }
 
+    fn seed_daily_knowledge_report(
+        store: &Store,
+        slug: &str,
+        topic: &str,
+        summary: &str,
+        generated_only: bool,
+    ) -> (SourceCard, KnowledgeCluster, KnowledgeReport) {
+        let mut metadata = json!({
+            "source_role": "primary",
+            "trust_level": "medium",
+            "test_fixture": true
+        });
+        let source_type = if generated_only {
+            metadata = json!({
+                "source_role": "generated_synthesis",
+                "source_kind": "knowledge_daily_briefing",
+                "generated": true,
+                "test_fixture": true
+            });
+            "knowledge_daily_briefing"
+        } else {
+            "web"
+        };
+        let card = store
+            .add_source_card(SourceCardInput {
+                title: format!("Daily knowledge source {slug}"),
+                url: format!("https://example.com/daily-knowledge/{slug}"),
+                source_type: source_type.to_string(),
+                provider: "test".to_string(),
+                summary: summary.to_string(),
+                claims: vec![SourceClaim {
+                    claim: summary.to_string(),
+                    kind: "fact".to_string(),
+                    confidence: 0.84,
+                }],
+                retrieved_at: None,
+                metadata,
+            })
+            .unwrap();
+        let cluster = store
+            .create_knowledge_cluster(KnowledgeClusterInput {
+                topic: topic.to_string(),
+                status: "active".to_string(),
+                event_ids: Vec::new(),
+                source_card_ids: vec![card.id.clone()],
+                first_seen_at: None,
+                last_seen_at: None,
+                novelty_score: 0.88,
+                momentum_score: 0.72,
+                stale_score: 0.0,
+                reason: "Daily briefing fixture has source-card-backed evidence for a timely AI knowledge update.".to_string(),
+                duplicate_groups: json!({}),
+                metadata: json!({ "fixture": "daily_knowledge_report" }),
+            })
+            .unwrap();
+        let body = format!(
+            "# {topic}\n\nCluster: `{}`\n\n## Executive Read\nThe update matters because {summary} This paragraph is intentionally written as reader-facing analysis rather than source bookkeeping, and it names confidence so a daily briefing can summarize the story without pretending the evidence is stronger than it is. The current confidence is moderate and the remaining uncertainty is whether official primary sources and wider developer reaction will corroborate the initial signal. Evidence: `{}`.\n\n## What Happened\nThe source-backed claim is that {summary} Arcwell should treat the source as untrusted evidence, compare it against official announcements, and keep the developing story attached to this cluster instead of creating duplicate pages. Evidence: `{}`.\n\n## Why It Matters\nThis is relevant to the AI and developer-relations knowledge graph because it can connect product launches, package activity, benchmark changes, community reaction, and company strategy in a single evolving page. The report should compare against existing wiki page history, watch for follow-up coverage, and distinguish confirmed facts from early reception. Evidence: `{}`.\n\n## Editorial Next Steps\n- Verify official primary source coverage and compare against existing wiki pages before duplicate-page creation.\n- Corroborate community reception, benchmark claims, pricing or access details, and follow-up posts before raising confidence.\n\n## Confidence And Uncertainty\nConfidence is moderate. Uncertainty remains around access, timing, independent corroboration, and whether later source cards change the interpretation.\n\nsource_cards:\n- `{}`\n",
+            cluster.id, card.id, card.id, card.id, card.id
+        );
+        let report = store
+            .record_knowledge_report(KnowledgeReportInput {
+                cluster_id: cluster.id.clone(),
+                title: format!("Daily Knowledge Report: {topic}"),
+                body_markdown: body,
+                status: "draft".to_string(),
+                source_card_ids: vec![card.id.clone()],
+                metadata: json!({ "fixture": "daily_knowledge_report" }),
+            })
+            .unwrap();
+        (card, cluster, report)
+    }
+
+    fn due_utc_schedule_input(
+        name: &str,
+        recipient_ref: &str,
+        metadata: Value,
+    ) -> (IssueScheduleInput, String, String) {
+        let now = Utc::now();
+        let due = now - ChronoDuration::minutes(1);
+        let created_at = due - ChronoDuration::hours(2);
+        (
+            IssueScheduleInput {
+                name: name.to_string(),
+                kind: "knowledge_daily_briefing".to_string(),
+                channel: "email".to_string(),
+                recipient_ref: recipient_ref.to_string(),
+                time_zone: "utc".to_string(),
+                hour: due.hour() as i64,
+                minute: due.minute() as i64,
+                catch_up_hours: 72,
+                status: Some("active".to_string()),
+                metadata,
+            },
+            created_at.to_rfc3339(),
+            due.to_rfc3339(),
+        )
+    }
+
+    fn force_issue_schedule_created_at(store: &Store, schedule_id: &str, created_at: &str) {
+        store
+            .conn
+            .execute(
+                "UPDATE issue_schedules SET created_at = ?2 WHERE id = ?1",
+                params![schedule_id, created_at],
+            )
+            .unwrap();
+    }
+
+    fn force_knowledge_report_updated_at(store: &Store, report_id: &str, updated_at: &str) {
+        store
+            .conn
+            .execute(
+                "UPDATE knowledge_reports SET updated_at = ?2 WHERE id = ?1",
+                params![report_id, updated_at],
+            )
+            .unwrap();
+    }
+
+    fn write_daily_briefing_email_policy(store: &Store, recipient_ref: &str, target_email: &str) {
+        write_policy(
+            store,
+            &format!(
+                r#"
+[[rules]]
+id = "allow-daily-briefing-worker-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+package = "arcwell-knowledge"
+source = "knowledge_daily_briefing"
+reason = "allow native daily briefing issue schedule worker enqueue"
+priority = 20
+
+[[rules]]
+id = "allow-daily-briefing-source-write"
+effect = "allow"
+action = "source.write"
+package = "arcwell-llm-wiki"
+provider = "arcwell"
+source = "source_card_add"
+reason = "allow generated daily briefing audit source card"
+priority = 15
+
+[[rules]]
+id = "allow-daily-briefing-auto-approval"
+effect = "allow"
+action = "digest_candidate.auto_approve"
+package = "arcwell-knowledge"
+source = "knowledge_daily_briefing"
+channel = "email"
+subject = "{recipient_ref}"
+target = "{recipient_ref}"
+reason = "allow daily briefing auto approval for authorized recipient"
+priority = 10
+
+[[rules]]
+id = "allow-daily-briefing-digest-delivery"
+effect = "allow"
+action = "digest_candidate.deliver"
+package = "arcwell-knowledge"
+source = "knowledge_daily_briefing_delivery"
+channel = "email"
+subject = "{recipient_ref}"
+target = "{recipient_ref}"
+reason = "allow daily briefing email delivery"
+priority = 10
+
+[[rules]]
+id = "allow-daily-briefing-email-send"
+effect = "allow"
+action = "channel.send"
+package = "arcwell-email"
+provider = "cloudflare_email"
+source = "email_send"
+channel = "email"
+subject = "{recipient_ref}"
+target = "{target_email}"
+reason = "allow daily briefing Cloudflare Email send"
+priority = 10
+"#
+            ),
+        );
+    }
+
     fn seed_knowledge_event(store: &Store, canonical_key: &str) -> KnowledgeEvent {
         store
             .upsert_knowledge_event(KnowledgeEventInput {
@@ -62962,6 +64339,353 @@ mod tests {
                 metadata: json!({ "source_family": "github" }),
             })
             .unwrap()
+    }
+
+    #[test]
+    fn severe_issue_schedule_due_slots_catch_up_without_hidden_cap_or_replay() {
+        // CLAIM: fixed-time issue schedules compute explicit missed daily slots
+        // from durable state, not an arbitrary provider/page cap or "ran once"
+        // flag.
+        // ORACLE: a four-day window returns four due UTC slots when allowed,
+        // an explicit max_ticks bound limits catch-up intentionally, and a
+        // stored latest_due_at resumes strictly after the previous slot.
+        // SEVERITY: Severe because daily briefings that silently miss days after
+        // sleep/shutdown recreate the same "looks scheduled" mirage.
+        let now = Utc
+            .with_ymd_and_hms(2026, 6, 27, 10, 0, 0)
+            .single()
+            .unwrap();
+        let created_at = Utc
+            .with_ymd_and_hms(2026, 6, 24, 6, 30, 0)
+            .single()
+            .unwrap()
+            .to_rfc3339();
+        let slots = issue_schedule_due_slots(None, &created_at, 7, 0, 96, "utc", now, 10).unwrap();
+        assert_eq!(
+            slots,
+            vec![
+                "2026-06-24T07:00:00+00:00",
+                "2026-06-25T07:00:00+00:00",
+                "2026-06-26T07:00:00+00:00",
+                "2026-06-27T07:00:00+00:00",
+            ]
+        );
+        let explicitly_capped =
+            issue_schedule_due_slots(None, &created_at, 7, 0, 96, "utc", now, 2).unwrap();
+        assert_eq!(explicitly_capped, &slots[..2]);
+        let resumed =
+            issue_schedule_due_slots(Some(&slots[1]), &created_at, 7, 0, 96, "utc", now, 10)
+                .unwrap();
+        assert_eq!(resumed, vec![slots[2].clone(), slots[3].clone()]);
+    }
+
+    #[test]
+    fn severe_issue_schedule_worker_enqueues_native_daily_briefing_once() {
+        // CLAIM: daily AI briefings are first-class resident worker issue
+        // schedules, not Codex-side reminders or manual commands.
+        // ORACLE: a due active schedule creates one tick and one
+        // knowledge_daily_briefing wiki job, then a duplicate enqueue pass sees
+        // the active job and suppresses another tick.
+        // SEVERITY: Severe because a "schedule" row without durable tick/job
+        // lineage is operational theater.
+        let store = test_store("issue-schedule-enqueue-once");
+        let (input, created_at, _) = due_utc_schedule_input(
+            "Native daily briefing",
+            "email:friend@example.com",
+            json!({ "window_hours": 24, "max_catch_up_ticks": 3 }),
+        );
+        let schedule = store.upsert_issue_schedule(input).unwrap();
+        force_issue_schedule_created_at(&store, &schedule.id, &created_at);
+
+        let first = store.enqueue_due_issue_schedule_jobs(10).unwrap();
+        assert_eq!(first.inspected, 1, "{first:#?}");
+        assert_eq!(first.enqueued, 1, "{first:#?}");
+        assert!(first.errors.is_empty(), "{first:#?}");
+        let ticks = store.list_issue_schedule_ticks(Some(&schedule.id)).unwrap();
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].status, "pending");
+        assert!(ticks[0].job_id.is_some());
+        let jobs = store.list_wiki_jobs().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].kind, "knowledge_daily_briefing");
+        assert_eq!(jobs[0].input_json.get("tick_id"), Some(&json!(ticks[0].id)));
+
+        let duplicate = store.enqueue_due_issue_schedule_jobs(10).unwrap();
+        assert_eq!(duplicate.inspected, 1, "{duplicate:#?}");
+        assert_eq!(duplicate.enqueued, 0, "{duplicate:#?}");
+        assert_eq!(
+            store
+                .list_issue_schedule_ticks(Some(&schedule.id))
+                .unwrap()
+                .len(),
+            1,
+            "active pending issue job must suppress duplicate ticks"
+        );
+    }
+
+    #[test]
+    fn severe_daily_briefing_blocks_generated_only_evidence() {
+        // CLAIM: generated summaries may be audit artifacts but cannot be the
+        // sole evidence behind a scheduled daily briefing.
+        // ORACLE: a report backed only by a generated source card leaves the
+        // issue tick blocked and creates no digest candidate or delivery.
+        // SEVERITY: Severe because recursive generated-only briefings would
+        // look comprehensive while drifting away from primary evidence.
+        let store = test_store("daily-briefing-generated-only");
+        let (_card, _cluster, _report) = seed_daily_knowledge_report(
+            &store,
+            "generated-only",
+            "Generated-only AI update",
+            "Arcwell generated a previous daily briefing summary without any fresh external evidence.",
+            true,
+        );
+        let (input, _, _) = due_utc_schedule_input(
+            "Generated-only daily briefing",
+            "email:friend@example.com",
+            json!({ "window_hours": 24, "max_reports": 5, "max_source_cards": 10 }),
+        );
+        let schedule = store.upsert_issue_schedule(input).unwrap();
+        let due_at = Utc::now().to_rfc3339();
+        let tick_key = issue_schedule_tick_key(&schedule.id, &due_at, &schedule);
+        let tick = store
+            .create_issue_schedule_tick(&schedule.id, &tick_key, &due_at)
+            .unwrap();
+
+        let result = store
+            .execute_knowledge_daily_briefing(&json!({ "tick_id": tick.id }))
+            .unwrap();
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert!(
+            result
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("generated-only evidence"),
+            "{result:#?}"
+        );
+        let ticks = store.list_issue_schedule_ticks(Some(&schedule.id)).unwrap();
+        assert_eq!(ticks[0].status, "blocked");
+        assert!(ticks[0].candidate_id.is_none());
+        assert!(store.list_digest_candidates().unwrap().is_empty());
+        assert!(store.list_digest_deliveries(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn severe_daily_briefing_auto_approval_policy_denial_is_visible() {
+        // CLAIM: native daily briefing generation does not imply unattended
+        // approval or outbound delivery.
+        // ORACLE: without digest_candidate.auto_approve policy the worker
+        // creates a candidate, records a blocked tick with a policy reason, and
+        // performs no provider/channel delivery.
+        // SEVERITY: Severe because model-score-only or source-existence-only
+        // sends are the dangerous failure mode for proactive alerts.
+        let store = test_store("daily-briefing-auto-policy-deny");
+        let (_card, _cluster, report) = seed_daily_knowledge_report(
+            &store,
+            "policy-denied",
+            "Policy denied AI daily briefing",
+            "OpenAI published a new package while developer reaction and primary-source corroboration were still developing.",
+            false,
+        );
+        let updated_at = (Utc::now() - ChronoDuration::minutes(5)).to_rfc3339();
+        force_knowledge_report_updated_at(&store, &report.id, &updated_at);
+        write_policy(
+            &store,
+            r#"
+[[rules]]
+id = "allow-policy-deny-worker-enqueue-only"
+effect = "allow"
+action = "worker.enqueue"
+package = "arcwell-knowledge"
+source = "knowledge_daily_briefing"
+reason = "allow native daily briefing enqueue but not auto approval"
+priority = 20
+
+[[rules]]
+id = "allow-policy-deny-source-write-only"
+effect = "allow"
+action = "source.write"
+package = "arcwell-llm-wiki"
+provider = "arcwell"
+source = "source_card_add"
+reason = "allow daily briefing candidate materialization but not auto approval"
+priority = 15
+"#,
+        );
+        let (input, created_at, _) = due_utc_schedule_input(
+            "Policy denied daily briefing",
+            "email:friend@example.com",
+            json!({ "window_hours": 24, "max_reports": 5, "max_source_cards": 10 }),
+        );
+        let schedule = store.upsert_issue_schedule(input).unwrap();
+        force_issue_schedule_created_at(&store, &schedule.id, &created_at);
+
+        let worker = store.run_worker_once(5).unwrap();
+        assert_eq!(worker.processed, 1, "{worker:#?}");
+        assert_eq!(worker.jobs[0].status, "completed", "{worker:#?}");
+        let result = worker.jobs[0].result_json.as_ref().unwrap();
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert!(
+            result
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("digest_candidate.auto_approve"),
+            "{result:#?}"
+        );
+        let ticks = store.list_issue_schedule_ticks(Some(&schedule.id)).unwrap();
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].status, "blocked");
+        assert!(ticks[0].candidate_id.is_some());
+        assert!(ticks[0].delivery_id.is_none());
+        let candidates = store.list_digest_candidates().unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].review_status, "unreviewed");
+        assert!(store.list_digest_deliveries(None).unwrap().is_empty());
+        assert!(
+            store
+                .list_channel_delivery_attempts(None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn severe_native_daily_briefing_worker_sends_human_readable_html_email_once() {
+        // CLAIM: the native daily briefing schedule can run end-to-end through
+        // the resident worker and send useful reader-facing HTML email, while
+        // preserving local candidate/tick/delivery lineage and idempotency.
+        // ORACLE: one due schedule creates one source-backed briefing card,
+        // auto-approves through explicit policy, sends one Cloudflare Email
+        // request containing HTML narrative sections, and suppresses duplicate
+        // sends on immediate replay.
+        // SEVERITY: Severe because "sent an email" is insufficient if the body
+        // is a source-id dump, missing HTML, or repeats on every worker pass.
+        let store = test_store("daily-briefing-html-email");
+        let (card, _cluster, report) = seed_daily_knowledge_report(
+            &store,
+            "html-email",
+            "OpenAI package and developer reaction",
+            "OpenAI published a new package, tweeted context about it, and developers discussed how it connects to agent workflows and MCP tooling.",
+            false,
+        );
+        let updated_at = (Utc::now() - ChronoDuration::minutes(5)).to_rfc3339();
+        force_knowledge_report_updated_at(&store, &report.id, &updated_at);
+        write_daily_briefing_email_policy(&store, "email:friend@example.com", "friend@example.com");
+        store
+            .authorize_channel_subject("email", "email:friend@example.com", false, false, true)
+            .unwrap();
+        let (base, requests) = mock_recording_sequence_server(vec![(
+            "200 OK",
+            "",
+            r#"{"success":true,"result":{"id":"daily_briefing_email_ok"}}"#,
+            "application/json",
+        )]);
+        store
+            .set_secret_value("CLOUDFLARE_ACCOUNT_ID", "acctdaily", "email")
+            .unwrap();
+        store
+            .set_secret_value(
+                "CLOUDFLARE_EMAIL_API_TOKEN",
+                "EMAIL_TOKEN_SHOULD_NOT_LEAK",
+                "email",
+            )
+            .unwrap();
+        store
+            .set_secret_value("ARCWELL_AGENT_EMAIL_FROM", "agent@example.com", "email")
+            .unwrap();
+        store
+            .set_secret_value("CLOUDFLARE_EMAIL_API_BASE", &base, "email")
+            .unwrap();
+        let (input, created_at, _) = due_utc_schedule_input(
+            "HTML daily briefing",
+            "email:friend@example.com",
+            json!({
+                "window_hours": 24,
+                "max_reports": 5,
+                "max_source_cards": 10,
+                "max_catch_up_ticks": 3
+            }),
+        );
+        let schedule = store.upsert_issue_schedule(input).unwrap();
+        force_issue_schedule_created_at(&store, &schedule.id, &created_at);
+
+        let worker = store.run_worker_once(5).unwrap();
+        assert_eq!(worker.processed, 1, "{worker:#?}");
+        assert_eq!(worker.issue_schedule.as_ref().unwrap().enqueued, 1);
+        assert_eq!(worker.jobs[0].kind, "knowledge_daily_briefing");
+        assert_eq!(worker.jobs[0].status, "completed");
+        let result = worker.jobs[0].result_json.as_ref().unwrap();
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("sent"));
+        let ticks = store.list_issue_schedule_ticks(Some(&schedule.id)).unwrap();
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].status, "sent");
+        assert!(ticks[0].candidate_id.is_some());
+        assert!(ticks[0].delivery_id.is_some());
+        let candidates = store.list_digest_candidates().unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].review_status, "approved");
+        assert!(
+            candidates[0]
+                .source_card_ids
+                .iter()
+                .any(|id| id == &card.id),
+            "underlying evidence card must stay linked to the candidate"
+        );
+        let deliveries = store.list_digest_deliveries(None).unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].status, "sent");
+        let attempts = store.list_channel_delivery_attempts(None).unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert!(attempts[0].ok);
+
+        let captured = requests.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let request = &captured[0];
+        assert!(!format!("{worker:#?}").contains("EMAIL_TOKEN_SHOULD_NOT_LEAK"));
+        assert!(!format!("{attempts:#?}").contains("EMAIL_TOKEN_SHOULD_NOT_LEAK"));
+        let body = request
+            .split("\r\n\r\n")
+            .nth(1)
+            .expect("request body should be captured");
+        let body_json: Value = serde_json::from_str(body).unwrap();
+        let text = body_json.get("text").and_then(Value::as_str).unwrap();
+        let html = body_json.get("html").and_then(Value::as_str).unwrap();
+        assert!(text.contains("AI Daily Briefing"));
+        assert!(text.contains("Bottom Line"), "{text}");
+        assert!(text.contains("What Changed"), "{text}");
+        assert!(text.contains("Why It Matters"), "{text}");
+        assert!(text.contains("Story Development"), "{text}");
+        assert!(
+            text.contains("OpenAI package and developer reaction"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Filed evidence") && !text.contains("Recommended follow-up"),
+            "{text}"
+        );
+        assert!(html.contains("<h1"), "{html}");
+        assert!(html.contains("<h2"), "{html}");
+        assert!(html.contains("AI Daily Briefing"), "{html}");
+
+        drop(captured);
+        let duplicate = store.run_worker_once(5).unwrap();
+        assert_eq!(duplicate.processed, 0, "{duplicate:#?}");
+        assert_eq!(
+            store
+                .list_issue_schedule_ticks(Some(&schedule.id))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(store.list_digest_deliveries(None).unwrap().len(), 1);
+        assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
     }
 
     #[test]

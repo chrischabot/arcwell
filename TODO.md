@@ -175,9 +175,14 @@ PR, implementation note, or final report:
       Current real-home 2026-06-27 slice: warm four-times-daily watch-source
       cadence is configured locally for X bookmarks, source adapters, backlog
       clustering, model clustering, model writing, and entity resolution;
-      Codex automations run six-hour catch-up scans and a 7am daily editorial
-      briefing; high-confidence breaking candidates route through the Arcwell
-      digest-alert schedule `Breaking AI knowledge alerts`. The worker now
+      Codex automations still run six-hour catch-up scans, but the 7am daily
+      editorial briefing is now also a native Arcwell issue schedule:
+      real-home schedule `isch-093a064e3b5ecba50704d090` runs
+      `knowledge_daily_briefing` at 7:00 local with 72-hour catch-up, 20 reports,
+      120 source cards, email delivery policy, channel authorization, ops
+      visibility, and zero ticks before the first due slot. High-confidence
+      breaking candidates route through the Arcwell digest-alert schedule
+      `Breaking AI knowledge alerts`. The worker now
       filters due sources before applying the batch cap, advances source health
       using watch-source cadence, classifies entity-resolution model jobs under
       `arcwell-knowledge/openai`, and byte-truncates knowledge-event titles and
@@ -186,10 +191,12 @@ PR, implementation note, or final report:
       retried and completed the two formerly dead-lettered backlog jobs,
       clustered 500 source cards into 38 durable clusters, and auto-enqueued
       38 editorial follow-ups. Remaining before this checkbox can close:
-      replace Codex-side 7am/catch-up automations with first-class native
-      Arcwell fixed-time issue scheduling, record multi-day sleep/shutdown/
-      restart catch-up proof, broaden live X quota/tier coverage, and prove
-      recurring live external delivery over time without manual drains.
+      replace the remaining Codex-side six-hour catch-up wrapper with native
+      fixed-time scan scheduling or prove watch-source cadence is sufficient,
+      record the first real 7am daily issue tick and external email, record
+      multi-day sleep/shutdown/restart catch-up proof, broaden live X quota/tier
+      coverage, and prove recurring live external delivery over time without
+      manual drains.
       First substrate slice now exists in `arcwell-core`: durable
       `knowledge_events`, `knowledge_event_sources`, `knowledge_clusters`,
       `knowledge_editorial_decisions`, and `knowledge_reports`, with source-card

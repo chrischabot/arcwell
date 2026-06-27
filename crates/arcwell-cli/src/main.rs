@@ -3,15 +3,15 @@ use arcwell_core::{
     AppPaths, CommerceAvailabilityProofInput, CommerceCandidateInput, CommerceContextFactInput,
     CommerceRenderedPageCheckInput, CommerceReportJudgmentInput, CommerceRunConfigInput,
     CommerceVerificationAttemptInput, DigestAlertScheduleInput, DoctorOptions, ImportRunFinish,
-    KnowledgeClusterProposalModelInput, KnowledgeClusterWriterModelInput, KnowledgeEntityInput,
-    KnowledgeEntityResolutionModelInput, OpsSnapshot, PolicyRequest, ProcedureCandidateInput,
-    RadarDeliveryInput, RadarProfileInput, RadarRun, RenderedPageSnapshotInput,
-    ResearchActiveFactCheckInput, ResearchArtifactInput, ResearchConvergenceCloseLoopInput,
-    ResearchConvergenceProviderSearchInput, ResearchConvergenceStartInput,
-    ResearchConvergenceStepInput, ResearchDocumentInput, ResearchEditorialInvokeInput,
-    ResearchEditorialRunInput, ResearchHostSearchInput, ResearchHostSearchResultInput,
-    ResearchRoleRunStart, ResearchSourceInput, SourceCardInput, Store, WebSearchConfig,
-    XStatsReport, personal_memory_eval_corpus,
+    IssueScheduleInput, KnowledgeClusterProposalModelInput, KnowledgeClusterWriterModelInput,
+    KnowledgeEntityInput, KnowledgeEntityResolutionModelInput, OpsSnapshot, PolicyRequest,
+    ProcedureCandidateInput, RadarDeliveryInput, RadarProfileInput, RadarRun,
+    RenderedPageSnapshotInput, ResearchActiveFactCheckInput, ResearchArtifactInput,
+    ResearchConvergenceCloseLoopInput, ResearchConvergenceProviderSearchInput,
+    ResearchConvergenceStartInput, ResearchConvergenceStepInput, ResearchDocumentInput,
+    ResearchEditorialInvokeInput, ResearchEditorialRunInput, ResearchHostSearchInput,
+    ResearchHostSearchResultInput, ResearchRoleRunStart, ResearchSourceInput, SourceCardInput,
+    Store, WebSearchConfig, XStatsReport, personal_memory_eval_corpus,
 };
 use axum::{
     Json, Router,
@@ -2060,6 +2060,33 @@ enum KnowledgeSubcommand {
         cadence: String,
         #[arg(long, default_value = "active")]
         status: String,
+    },
+    ScheduleDailyBriefing {
+        #[arg(long, default_value = "Arcwell AI daily briefing")]
+        name: String,
+        #[arg(long, default_value = "email")]
+        channel: String,
+        #[arg(long)]
+        recipient_ref: String,
+        #[arg(long, default_value = "local")]
+        time_zone: String,
+        #[arg(long, default_value_t = 7)]
+        hour: i64,
+        #[arg(long, default_value_t = 0)]
+        minute: i64,
+        #[arg(long, default_value_t = 72)]
+        catch_up_hours: i64,
+        #[arg(long, default_value_t = 12)]
+        max_reports: usize,
+        #[arg(long, default_value_t = 80)]
+        max_source_cards: usize,
+        #[arg(long, default_value = "active")]
+        status: String,
+    },
+    IssueSchedules,
+    IssueScheduleTicks {
+        #[arg(long)]
+        schedule_id: Option<String>,
     },
     EntityResolutions {
         #[arg(long, default_value_t = 50)]
@@ -4364,6 +4391,39 @@ fn knowledge(store: Store, args: KnowledgeCommand) -> Result<()> {
             &cadence,
             &status,
         )?),
+        KnowledgeSubcommand::ScheduleDailyBriefing {
+            name,
+            channel,
+            recipient_ref,
+            time_zone,
+            hour,
+            minute,
+            catch_up_hours,
+            max_reports,
+            max_source_cards,
+            status,
+        } => print_json(&store.upsert_issue_schedule(IssueScheduleInput {
+            name,
+            kind: "knowledge_daily_briefing".to_string(),
+            channel,
+            recipient_ref,
+            time_zone,
+            hour,
+            minute,
+            catch_up_hours,
+            metadata: serde_json::json!({
+                "window_hours": 24,
+                "max_reports": max_reports,
+                "max_source_cards": max_source_cards,
+                "max_catch_up_ticks": 3,
+                "created_from": "arcwell-cli knowledge schedule-daily-briefing"
+            }),
+            status: Some(status),
+        })?),
+        KnowledgeSubcommand::IssueSchedules => print_json(&store.list_issue_schedules()?),
+        KnowledgeSubcommand::IssueScheduleTicks { schedule_id } => {
+            print_json(&store.list_issue_schedule_ticks(schedule_id.as_deref())?)
+        }
         KnowledgeSubcommand::EntityResolutions { limit } => {
             print_json(&store.list_knowledge_entity_resolutions(limit)?)
         }
