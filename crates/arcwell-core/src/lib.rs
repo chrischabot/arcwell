@@ -37378,12 +37378,22 @@ impl Store {
             r#"
             UPDATE x_items
             SET text = CASE WHEN text = '' THEN ?2 ELSE text END,
-                metrics_json = CASE WHEN ?3 != '{}' THEN ?3 ELSE metrics_json END,
-                raw_json = CASE WHEN ?4 != '{}' THEN ?4 ELSE raw_json END,
-                retrieved_at = ?5
+                author = CASE WHEN author = 'unknown' AND ?3 != 'unknown' THEN ?3 ELSE author END,
+                url = CASE WHEN url LIKE 'https://x.com/i/web/status/%' AND ?4 NOT LIKE 'https://x.com/i/web/status/%' THEN ?4 ELSE url END,
+                metrics_json = CASE WHEN ?5 != '{}' THEN ?5 ELSE metrics_json END,
+                raw_json = CASE WHEN ?6 != '{}' THEN ?6 ELSE raw_json END,
+                retrieved_at = ?7
             WHERE x_id = ?1
             "#,
-            params![input.x_id, input.text, metrics_json, raw_json, retrieved_at],
+            params![
+                input.x_id,
+                input.text,
+                input.author,
+                input.url,
+                metrics_json,
+                raw_json,
+                retrieved_at
+            ],
         )?;
         Ok(())
     }
@@ -85674,6 +85684,47 @@ reason = "X monitor network blocked for test"
         assert_eq!(items.len(), 1);
         assert!(items[0].source_card_id.is_some());
         assert!(items[0].wiki_page_id.is_some());
+    }
+
+    #[test]
+    fn x_duplicate_import_upgrades_unknown_author_and_canonical_url() {
+        let store = test_store("x-import-upgrade-author");
+        store
+            .import_x_json_value(&json!([
+                {
+                    "id": "repair-author-1",
+                    "author": "unknown",
+                    "text": "Browser bookmark recovered before author extraction was fixed.",
+                    "url": "https://x.com/i/web/status/repair-author-1",
+                    "source_kind": "bookmark",
+                    "source_detail": "x-browser-bookmarks"
+                }
+            ]))
+            .unwrap();
+
+        let report = store
+            .import_x_json_value(&json!([
+                {
+                    "id": "repair-author-1",
+                    "author": "openai",
+                    "text": "Browser bookmark recovered before author extraction was fixed.",
+                    "url": "https://x.com/openai/status/repair-author-1",
+                    "source_kind": "bookmark",
+                    "source_detail": "x-browser-bookmarks",
+                    "source_metadata": { "x_author_id": "u1" }
+                }
+            ]))
+            .unwrap();
+
+        assert_eq!(report.imported, 0);
+        assert_eq!(report.skipped_duplicates, 1);
+        let item = store
+            .list_x_items(Some("Browser bookmark recovered"))
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(item.author, "openai");
+        assert_eq!(item.url, "https://x.com/openai/status/repair-author-1");
     }
 
     #[test]
