@@ -37309,7 +37309,7 @@ impl Store {
             title: format!("X: {} {}", input.author, input.x_id),
             url: input.url.clone(),
             source_type: "x".to_string(),
-            provider: "x-import".to_string(),
+            provider: "x".to_string(),
             summary: input.text.clone(),
             claims: vec![SourceClaim {
                 claim: input.text.clone(),
@@ -55435,7 +55435,7 @@ fn x_source_card_input_from_repair(candidate: &RepairableXTweetProjection) -> So
         title: format!("X: {} {}", candidate.author, candidate.x_id),
         url: candidate.url.clone(),
         source_type: "x".to_string(),
-        provider: "x-import".to_string(),
+        provider: "x".to_string(),
         summary: candidate.text.clone(),
         claims: vec![SourceClaim {
             claim: candidate.text.clone(),
@@ -60260,9 +60260,13 @@ fn x_search_response_to_import_items(
             users
                 .iter()
                 .filter_map(|user| {
+                    let id = user.get("id")?.as_str()?.to_string();
                     Some((
-                        user.get("id")?.as_str()?.to_string(),
-                        user.get("username")?.as_str()?.to_string(),
+                        id,
+                        json!({
+                            "username": user.get("username").and_then(Value::as_str),
+                            "name": user.get("name").and_then(Value::as_str),
+                        }),
                     ))
                 })
                 .collect::<std::collections::HashMap<_, _>>()
@@ -60287,9 +60291,17 @@ fn x_search_response_to_import_items(
             .get("text")
             .and_then(Value::as_str)
             .context("x tweet item missing text")?;
-        let author = users
-            .get(author_id)
-            .cloned()
+        let user_metadata = users.get(author_id).cloned().unwrap_or_else(|| {
+            json!({
+                "username": null,
+                "name": null,
+            })
+        });
+        let author = user_metadata
+            .get("username")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
             .unwrap_or_else(|| author_id.to_string());
         out.push(json!({
             "id": id,
@@ -60305,6 +60317,9 @@ fn x_search_response_to_import_items(
                 "source_kind": source_kind,
                 "source_detail": source_detail,
                 "imported_from": "x_api",
+                "x_author_id": author_id,
+                "author_username": user_metadata.get("username").and_then(Value::as_str),
+                "author_name": user_metadata.get("name").and_then(Value::as_str),
                 "newest_id": value.pointer("/meta/newest_id").and_then(Value::as_str)
             }
         }));
@@ -88484,6 +88499,28 @@ reason = "test denies X link expansion"
         assert_eq!(item.author, "openai");
         assert_eq!(item.metrics["like_count"], 3);
         assert_eq!(item.sources[0].source_kind, "recent_search");
+        let source_card_id = item
+            .source_card_id
+            .as_deref()
+            .expect("recent search item should create a source card");
+        let provider: String = store
+            .conn
+            .query_row(
+                "SELECT provider FROM source_cards WHERE id = ?1",
+                params![source_card_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(provider, "x");
+        let profile_user_id: String = store
+            .conn
+            .query_row(
+                "SELECT x_user_id FROM x_profiles WHERE handle = 'openai'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(profile_user_id, "u1");
         let stats = store.x_stats().unwrap();
         assert_eq!(stats.canonical.sync_runs, 1);
         assert_eq!(stats.latest_sync_runs[0].stream, "recent_search");
