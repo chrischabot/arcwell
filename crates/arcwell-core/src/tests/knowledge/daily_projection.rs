@@ -425,14 +425,14 @@ fn severe_native_daily_briefing_worker_sends_human_readable_html_email_once() {
         text.contains("](https://example.com/daily-knowledge/html-email)"),
         "{text}"
     );
-    assert!(text.contains("What This Changes"), "{text}");
+    assert!(text.contains("Context"), "{text}");
     assert!(
-        text.contains("existing thread around")
-            || text.contains("new evidence changes the standing interpretation"),
+        text.contains("This changes the earlier read")
+            || text.contains("later sources confirm, narrow, or contradict"),
         "{text}"
     );
-    assert!(text.contains("Why It Matters"), "{text}");
-    assert!(text.contains("What To Watch"), "{text}");
+    assert!(text.contains("Editor's Read"), "{text}");
+    assert!(text.contains("Watch Next"), "{text}");
     assert!(
         text.contains("OpenAI package and developer reaction"),
         "{text}"
@@ -532,50 +532,50 @@ fn severe_daily_briefing_projection_ledger_becomes_reader_story() {
     };
     let cards = vec![
         SourceCard {
-            id: "src-reka-vllm".to_string(),
-            title: "GitHub repo reka-ai/vllm-reka".to_string(),
-            url: "https://github.com/reka-ai/vllm-reka".to_string(),
+            id: "src-databricks-sdk-js".to_string(),
+            title: "GitHub repo databricks/sdk-js".to_string(),
+            url: "https://github.com/databricks/sdk-js".to_string(),
             source_type: "github_repo".to_string(),
             provider: "github".to_string(),
-            summary: "vLLM plugin for Reka models".to_string(),
+            summary: "Databricks Modular SDKs for JavaScript".to_string(),
             claims: vec![SourceClaim {
-                claim: "reka-ai/vllm-reka is a public GitHub repository.".to_string(),
+                claim: "databricks/sdk-js is a public GitHub repository.".to_string(),
                 kind: "fact".to_string(),
                 confidence: 0.95,
             }],
-            retrieved_at: "2026-06-22T05:35:47Z".to_string(),
-            wiki_page_id: "source-card-reka-vllm".to_string(),
+            retrieved_at: "2026-06-30T06:24:51Z".to_string(),
+            wiki_page_id: "source-card-databricks-sdk-js".to_string(),
             content_sha256: "sha".to_string(),
             metadata: json!({
-                "language": "Python",
+                "language": "TypeScript",
                 "raw": {
-                    "pushed_at": "2026-06-22T05:35:47Z",
-                    "stargazers_count": 9
+                    "pushed_at": "2026-06-30T06:24:51Z",
+                    "stargazers_count": 220
                 }
             }),
             created_at: now(),
             updated_at: now(),
         },
         SourceCard {
-            id: "src-reka-li".to_string(),
-            title: "GitHub repo reka-ai/llama_index".to_string(),
-            url: "https://github.com/reka-ai/llama_index".to_string(),
+            id: "src-databricks-spark-csv".to_string(),
+            title: "GitHub repo databricks/spark-csv".to_string(),
+            url: "https://github.com/databricks/spark-csv".to_string(),
             source_type: "github_repo".to_string(),
             provider: "github".to_string(),
-            summary: "LlamaIndex is a data framework for your LLM applications".to_string(),
+            summary: "CSV Data Source for Apache Spark 1.x".to_string(),
             claims: vec![SourceClaim {
-                claim: "reka-ai/llama_index is a public GitHub repository.".to_string(),
+                claim: "databricks/spark-csv is a public GitHub repository.".to_string(),
                 kind: "fact".to_string(),
                 confidence: 0.95,
             }],
-            retrieved_at: "2026-03-24T18:54:18Z".to_string(),
-            wiki_page_id: "source-card-reka-llama-index".to_string(),
+            retrieved_at: "2018-12-13T09:50:29Z".to_string(),
+            wiki_page_id: "source-card-databricks-spark-csv".to_string(),
             content_sha256: "sha".to_string(),
             metadata: json!({
-                "language": "Python",
+                "language": "Scala",
                 "raw": {
-                    "pushed_at": "2026-03-24T18:54:18Z",
-                    "stargazers_count": 4
+                    "pushed_at": "2018-12-13T09:50:29Z",
+                    "stargazers_count": 840
                 }
             }),
             created_at: now(),
@@ -583,14 +583,14 @@ fn severe_daily_briefing_projection_ledger_becomes_reader_story() {
         },
     ];
     let report = KnowledgeReport {
-        id: "krpt-reka".to_string(),
-        cluster_id: "kcl-reka".to_string(),
-        title: "Knowledge Report: Reka Ai: model release activity".to_string(),
-        body_markdown: "## What happened\nthe system projected 2 durable source rows into the unified knowledge pipeline for **Reka Ai: model release activity**. The evidence spans 1 provider family buckets ({\"github\": 2}) and is stored as source references: source evidence, source evidence.\n\nsource evidence: GitHub repo reka-ai/vllm-reka. vLLM plugin for Reka models\nsource evidence: GitHub repo reka-ai/llama_index. LlamaIndex is a data framework for your LLM applications\n\n## Next Investigation\n- Verify official primary sources before promoting release, benchmark, pricing, availability, or adoption claims.".to_string(),
+        id: "krpt-databricks".to_string(),
+        cluster_id: "kcl-databricks".to_string(),
+        title: "Knowledge Cluster Expansion: Databricks: release and launch activity".to_string(),
+        body_markdown: "Cluster: `kcl-c64a172ce8a442bf` Status: `candidate` Scores: novelty 0.92, momentum 1.00, stale 0.00 First seen: `2018-12-13T09:50:29Z` Last seen: `2026-06-28T05:30:47Z` Proof level: `Local Proof` Source family: `source_card_backlog_storying` the system expanded this shared knowledge story from 10 durable sources across 1 provider buckets ({\"github\": 10}). The practical value is the relationship between the evidence surfaces, not a raw list of links: this page ties saved available evidence to one reviewable topic, keeps uncertainty visible, and gives later writer passes a stable page to enrich with deeper primary research.\n\n[S1] source evidence from `github` / `github_repo`: **GitHub repo databricks/spark-csv**. CSV Data Source for Apache Spark 1.x.\n[S2] source evidence from `github` / `github_repo`: **GitHub repo databricks/sdk-js**. Databricks Modular SDKs for JavaScript.\n\n#### Further Reading\n- [GitHub repo databricks/spark-csv](https://github.com/databricks/spark-csv) - databricks/spark-csv is a public GitHub repository.".to_string(),
         status: "draft".to_string(),
         source_card_ids: cards.iter().map(|card| card.id.clone()).collect(),
         quality_findings: Vec::new(),
-        metadata: json!({ "reporter": "deterministic_source_card_projection_v1" }),
+        metadata: json!({ "origin": "knowledge_cluster_editor_v1" }),
         created_at: now(),
         updated_at: now(),
     };
@@ -605,23 +605,31 @@ fn severe_daily_briefing_projection_ledger_becomes_reader_story() {
     );
 
     assert!(text.contains("Today's Stories"), "{text}");
-    assert!(text.contains("Reka AI: model release activity"), "{text}");
+    assert!(text.contains("Databricks repo activity: sdk-js"), "{text}");
     assert!(
         text.contains("visible in GitHub repository activity"),
         "{text}"
     );
     assert!(
-        text.contains("[reka-ai/vllm-reka](https://github.com/reka-ai/vllm-reka)"),
+        text.contains("[databricks/sdk-js](https://github.com/databricks/sdk-js)"),
         "{text}"
     );
-    assert!(text.contains("Last pushed 2026-06-22"), "{text}");
+    assert!(text.contains("Last pushed 2026-06-30"), "{text}");
+    assert!(!text.contains("spark-csv"), "{text}");
     for forbidden in [
         "Knowledge Report",
+        "Knowledge Cluster Expansion",
+        "Cluster:",
         "What Changed",
-        "the system projected",
-        "durable source rows",
+        "Today's issue is led",
+        "the system expanded",
+        "durable sources",
         "unified knowledge pipeline",
-        "provider family buckets",
+        "unified knowledge system",
+        "provider buckets",
+        "Source family",
+        "Proof level",
+        "Local Proof",
         "source evidence",
         "source references",
         "is a public GitHub repository",
@@ -640,7 +648,7 @@ fn severe_daily_briefing_projection_ledger_becomes_reader_story() {
 fn severe_daily_briefing_prior_context_section_is_conditional() {
     // CLAIM: daily briefing prior-context analysis is not boilerplate.
     // ORACLE: a normal story with no explicit prior-context/change signal
-    // emits no "What This Changes" insight, while a story that actually
+    // emits no Context insight, while a story that actually
     // carries a relationship-to-prior-context signal does.
     // SEVERITY: Severe because a repeated insight block becomes
     // meaningless filler and trains the reader to ignore the report.

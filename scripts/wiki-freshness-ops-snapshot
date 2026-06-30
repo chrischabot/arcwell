@@ -177,12 +177,18 @@ def source_health_snapshot(
         if str(row.get("watch_status") or "unknown").lower() not in {"active", "unknown"}
     ]
     stale_healthy = []
+    active_stale_healthy = []
+    inactive_stale_healthy = []
     for row in all_rows:
         if str(row.get("status") or "").lower() not in {"healthy", "ok", "success"}:
             continue
         last_success = parse_time(row.get("last_success_at"))
         if last_success is None or last_success < stale_cutoff:
             stale_healthy.append(row)
+            if str(row.get("watch_status") or "unknown").lower() in {"active", "unknown"}:
+                active_stale_healthy.append(row)
+            else:
+                inactive_stale_healthy.append(row)
     active_attention.sort(
         key=lambda row: (
             parse_time(row.get("last_failure_at"))
@@ -203,6 +209,14 @@ def source_health_snapshot(
         key=lambda row: parse_time(row.get("last_success_at"))
         or datetime.min.replace(tzinfo=UTC)
     )
+    active_stale_healthy.sort(
+        key=lambda row: parse_time(row.get("last_success_at"))
+        or datetime.min.replace(tzinfo=UTC)
+    )
+    inactive_stale_healthy.sort(
+        key=lambda row: parse_time(row.get("last_success_at"))
+        or datetime.min.replace(tzinfo=UTC)
+    )
     return {
         "available": True,
         "total": len(all_rows),
@@ -215,10 +229,13 @@ def source_health_snapshot(
         "attention_rows": len(active_attention),
         "all_non_healthy_rows": len(non_healthy),
         "inactive_attention_rows": len(inactive_attention),
-        "stale_healthy_rows": len(stale_healthy),
+        "stale_healthy_rows": len(active_stale_healthy),
+        "all_stale_healthy_rows": len(stale_healthy),
+        "inactive_stale_healthy_rows": len(inactive_stale_healthy),
         "recent_attention": active_attention[:failure_limit],
         "recent_inactive_attention": inactive_attention[:failure_limit],
-        "oldest_stale_healthy": stale_healthy[:failure_limit],
+        "oldest_stale_healthy": active_stale_healthy[:failure_limit],
+        "oldest_inactive_stale_healthy": inactive_stale_healthy[:failure_limit],
     }
 
 
@@ -257,6 +274,32 @@ def cursor_snapshot(
         return {"available": False}
     all_rows = rows(conn, "SELECT key, value, updated_at FROM cursors ORDER BY updated_at DESC")
     watch_status_by_key: dict[tuple[str, str], str] = {}
+    health_by_cursor_key: dict[str, dict[str, Any]] = {}
+    if table_exists(conn, "source_health"):
+        for health in rows(
+            conn,
+            """
+            SELECT key, status, cursor_key, last_success_at, updated_at
+            FROM source_health
+            WHERE cursor_key IS NOT NULL AND cursor_key != ''
+            """,
+        ):
+            cursor_key = str(health.get("cursor_key") or "")
+            if not cursor_key:
+                continue
+            existing = health_by_cursor_key.get(cursor_key)
+            health_freshness = (
+                parse_time(health.get("last_success_at"))
+                or parse_time(health.get("updated_at"))
+                or datetime.min.replace(tzinfo=UTC)
+            )
+            existing_freshness = (
+                parse_time(existing.get("last_success_at"))
+                or parse_time(existing.get("updated_at"))
+                or datetime.min.replace(tzinfo=UTC)
+            ) if existing else None
+            if existing is None or health_freshness > existing_freshness:
+                health_by_cursor_key[cursor_key] = health
     if table_exists(conn, "watch_sources"):
         for source in rows(conn, "SELECT source_kind, locator, status FROM watch_sources"):
             watch_status_by_key[
@@ -332,21 +375,32 @@ def cursor_snapshot(
         )
         bucket["count"] += 1
         updated_at = parse_time(row.get("updated_at"))
-        if updated_at is not None:
-            current_newest = parse_time(bucket["newest_updated_at"])
-            current_oldest = parse_time(bucket["oldest_updated_at"])
-            if current_newest is None or updated_at > current_newest:
-                bucket["newest_updated_at"] = iso(updated_at)
-            if current_oldest is None or updated_at < current_oldest:
-                bucket["oldest_updated_at"] = iso(updated_at)
-            if updated_at < stale_cutoff:
-                stale.append(row)
-                if str(watch_status).lower() in {"active", "unknown"}:
-                    bucket["stale_count"] += 1
-                    active_stale.append(row)
-                else:
-                    inactive_stale.append(row)
-        else:
+        health = health_by_cursor_key.get(key)
+        health_status = str(health.get("status") or "") if health else ""
+        health_last_success = parse_time(health.get("last_success_at")) if health else None
+        health_updated_at = parse_time(health.get("updated_at")) if health else None
+        effective_updated_at = updated_at
+        if health_status.lower() in {"healthy", "ok", "success"}:
+            for candidate in (health_last_success, health_updated_at):
+                if candidate is not None and (
+                    effective_updated_at is None or candidate > effective_updated_at
+                ):
+                    effective_updated_at = candidate
+        if health:
+            row["source_health_key"] = health.get("key")
+            row["source_health_status"] = health_status
+            row["source_health_last_success_at"] = health.get("last_success_at")
+            row["source_health_updated_at"] = health.get("updated_at")
+        if effective_updated_at is not None:
+            row["freshness_updated_at"] = iso(effective_updated_at)
+        current_newest = parse_time(bucket["newest_updated_at"])
+        current_oldest = parse_time(bucket["oldest_updated_at"])
+        if effective_updated_at is not None:
+            if current_newest is None or effective_updated_at > current_newest:
+                bucket["newest_updated_at"] = iso(effective_updated_at)
+            if current_oldest is None or effective_updated_at < current_oldest:
+                bucket["oldest_updated_at"] = iso(effective_updated_at)
+        if effective_updated_at is None or effective_updated_at < stale_cutoff:
             stale.append(row)
             if str(watch_status).lower() in {"active", "unknown"}:
                 bucket["stale_count"] += 1
@@ -354,15 +408,18 @@ def cursor_snapshot(
             else:
                 inactive_stale.append(row)
     stale.sort(
-        key=lambda row: parse_time(row.get("updated_at"))
+        key=lambda row: parse_time(row.get("freshness_updated_at"))
+        or parse_time(row.get("updated_at"))
         or datetime.min.replace(tzinfo=UTC)
     )
     active_stale.sort(
-        key=lambda row: parse_time(row.get("updated_at"))
+        key=lambda row: parse_time(row.get("freshness_updated_at"))
+        or parse_time(row.get("updated_at"))
         or datetime.min.replace(tzinfo=UTC)
     )
     inactive_stale.sort(
-        key=lambda row: parse_time(row.get("updated_at"))
+        key=lambda row: parse_time(row.get("freshness_updated_at"))
+        or parse_time(row.get("updated_at"))
         or datetime.min.replace(tzinfo=UTC)
     )
     return {
@@ -552,7 +609,8 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Source-health rows: `{health.get('total', 0)}`",
         f"- Active attention rows: `{health.get('attention_rows', 0)}`",
         f"- Inactive non-healthy rows: `{health.get('inactive_attention_rows', 0)}`",
-        f"- Stale healthy rows: `{health.get('stale_healthy_rows', 0)}`",
+        f"- Active stale healthy rows: `{health.get('stale_healthy_rows', 0)}`",
+        f"- Inactive stale healthy rows: `{health.get('inactive_stale_healthy_rows', 0)}`",
         f"- Cursor rows: `{cursors.get('total', 0)}`",
         f"- Active stale cursor rows: `{cursors.get('stale_rows', 0)}`",
         f"- Inactive stale cursor rows: `{cursors.get('inactive_stale_rows', 0)}`",
@@ -633,8 +691,14 @@ def assessment(summary: dict[str, Any]) -> dict[str, Any]:
         add(
             "hold",
             "stale healthy rows",
-            f"{health['stale_healthy_rows']} healthy rows have old or missing success timestamps.",
+            f"{health['stale_healthy_rows']} active healthy rows have old or missing success timestamps.",
         )
+    else:
+        inactive = health.get("inactive_stale_healthy_rows", 0)
+        detail = "No active stale healthy rows by the configured threshold."
+        if inactive:
+            detail += f" {inactive} missing or paused healthy rows remain visible."
+        add("pass", "stale healthy rows", detail)
 
     if cursors.get("stale_rows", 0):
         add(
@@ -730,6 +794,10 @@ def main() -> int:
         "source_health_inactive_attention_csv": str(
             args.proof_dir / "source_health_inactive_attention.csv"
         ),
+        "source_health_stale_healthy_csv": str(args.proof_dir / "source_health_stale_healthy.csv"),
+        "source_health_inactive_stale_healthy_csv": str(
+            args.proof_dir / "source_health_inactive_stale_healthy.csv"
+        ),
         "stale_cursors_csv": str(args.proof_dir / "stale_cursors.csv"),
         "inactive_stale_cursors_csv": str(args.proof_dir / "inactive_stale_cursors.csv"),
         "source_cards_by_provider_csv": str(args.proof_dir / "source_cards_by_provider.csv"),
@@ -746,6 +814,14 @@ def main() -> int:
     write_csv(
         Path(artifacts["source_health_inactive_attention_csv"]),
         summary["source_health"].get("recent_inactive_attention", []),
+    )
+    write_csv(
+        Path(artifacts["source_health_stale_healthy_csv"]),
+        summary["source_health"].get("oldest_stale_healthy", []),
+    )
+    write_csv(
+        Path(artifacts["source_health_inactive_stale_healthy_csv"]),
+        summary["source_health"].get("oldest_inactive_stale_healthy", []),
     )
     write_csv(Path(artifacts["stale_cursors_csv"]), summary["cursors"].get("oldest_stale", []))
     write_csv(
@@ -771,6 +847,12 @@ def main() -> int:
                 "source_health_attention_rows": summary["source_health"].get("attention_rows", 0),
                 "source_health_inactive_attention_rows": summary["source_health"].get(
                     "inactive_attention_rows", 0
+                ),
+                "source_health_stale_healthy_rows": summary["source_health"].get(
+                    "stale_healthy_rows", 0
+                ),
+                "source_health_inactive_stale_healthy_rows": summary["source_health"].get(
+                    "inactive_stale_healthy_rows", 0
                 ),
                 "stale_cursors": summary["cursors"].get("stale_rows", 0),
                 "inactive_stale_cursors": summary["cursors"].get("inactive_stale_rows", 0),

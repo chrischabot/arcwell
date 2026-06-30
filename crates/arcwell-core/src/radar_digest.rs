@@ -810,88 +810,136 @@ pub(crate) fn daily_briefing_wiki_page_is_story_context(page: &WikiPageSummary) 
 }
 
 pub(crate) fn render_knowledge_daily_briefing(
-    schedule: &IssueSchedule,
+    _schedule: &IssueSchedule,
     tick: &IssueScheduleTick,
     reports: &[KnowledgeReport],
     source_cards: &[SourceCard],
-    _window_start: &str,
-    _window_end: &str,
+    window_start: &str,
+    window_end: &str,
     related_wiki_pages: &BTreeMap<String, Vec<WikiPageSummary>>,
 ) -> String {
     let day = issue_schedule_day_label(&tick.due_at);
-    let source_family_count = source_cards
-        .iter()
-        .map(|card| card.provider.to_ascii_lowercase())
-        .collect::<BTreeSet<_>>()
-        .len();
+    let window = daily_briefing_window(window_start, window_end);
+    let stories = daily_briefing_reader_stories(reports, source_cards, window);
     let mut lines = vec![
         format!("# AI Daily Briefing - {day}"),
         String::new(),
         "## Bottom Line".to_string(),
-        daily_briefing_lede(schedule, reports, source_family_count),
+        daily_briefing_lede_for_titles(
+            &stories
+                .iter()
+                .map(|story| story.title.as_str())
+                .collect::<Vec<_>>(),
+        ),
         String::new(),
         "## Today's Stories".to_string(),
     ];
-    for (index, report) in reports.iter().take(10).enumerate() {
-        let story_cards = daily_briefing_report_source_cards(report, source_cards);
-        let body = daily_briefing_story_body(report, &story_cards);
+    for (index, story) in stories.iter().take(10).enumerate() {
+        let report = story.report;
         let wiki_pages = related_wiki_pages
             .get(&report.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        lines.push(format!(
-            "### {}. {}",
-            index + 1,
-            daily_briefing_report_display_title(report)
-        ));
-        lines.push(body);
+        lines.push(format!("### {}. {}", index + 1, story.title));
+        lines.push(story.body.clone());
         lines.push(String::new());
         if let Some(prior_context_insight) =
-            daily_briefing_prior_context_insight(report, &story_cards, wiki_pages)
+            daily_briefing_prior_context_insight(report, &story.source_cards, wiki_pages)
         {
-            lines.push("#### What This Changes".to_string());
+            lines.push("#### Context".to_string());
             lines.push(prior_context_insight);
             lines.push(String::new());
         }
         lines.push("#### Further Reading".to_string());
-        lines.extend(daily_briefing_key_source_lines(&story_cards, 3));
+        lines.extend(daily_briefing_key_source_lines(&story.source_cards, 3));
         lines.push(String::new());
     }
-    lines.push("## Why It Matters".to_string());
-    lines.push("The common thread is that model launches are no longer enough. The important movement is in runtime surfaces, memory, evaluation, access, reproducibility, and the developer workflows that turn a model claim into software people can actually use.".to_string());
+    lines.push("## Editor's Read".to_string());
+    lines.push(daily_briefing_issue_read(&stories));
     lines.push(String::new());
-    lines.push("## Competitive Position".to_string());
-    lines.push("The useful comparison is not who posted the loudest announcement. It is who is making the surrounding system easier to trust: runnable examples, clear access paths, credible benchmarks, operational visibility, pricing clarity, and enough public reaction to separate launch copy from lived developer experience.".to_string());
-    lines.push(String::new());
-    lines.push("## What To Watch".to_string());
-    lines.push("The next meaningful updates are broad access, pricing, reproducible benchmarks, adoption reports, integration examples, and credible reversals. Later scans should fold those developments back into the same story threads instead of treating each new mention as an unrelated alert.".to_string());
+    lines.push("## Watch Next".to_string());
+    lines.push(daily_briefing_watch_next(&stories));
     lines.join("\n")
 }
 
-pub(crate) fn daily_briefing_lede(
-    _schedule: &IssueSchedule,
-    reports: &[KnowledgeReport],
-    _source_family_count: usize,
-) -> String {
-    let titles = reports
-        .iter()
-        .take(3)
-        .map(daily_briefing_report_display_title)
-        .filter(|title| !title.is_empty())
-        .collect::<Vec<_>>();
-    match titles.as_slice() {
-        [] => "No story cleared the editorial threshold for this issue. The useful read is still whether model access, agent interfaces, evaluation, and developer workflow are changing in ways that alter the standing map.".to_string(),
+struct DailyBriefingReaderStory<'a> {
+    report: &'a KnowledgeReport,
+    title: String,
+    body: String,
+    source_cards: Vec<&'a SourceCard>,
+}
+
+pub(crate) fn daily_briefing_window(
+    window_start: &str,
+    window_end: &str,
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let start = DateTime::parse_from_rfc3339(window_start)
+        .ok()?
+        .with_timezone(&Utc);
+    let end = DateTime::parse_from_rfc3339(window_end)
+        .ok()?
+        .with_timezone(&Utc);
+    Some((start, end))
+}
+
+fn daily_briefing_reader_stories<'a>(
+    reports: &'a [KnowledgeReport],
+    source_cards: &'a [SourceCard],
+    window: Option<(DateTime<Utc>, DateTime<Utc>)>,
+) -> Vec<DailyBriefingReaderStory<'a>> {
+    let mut stories = Vec::new();
+    for report in reports.iter().take(20) {
+        let story_cards =
+            daily_briefing_report_fresh_source_cards(report, source_cards, window.as_ref());
+        if story_cards.is_empty() {
+            continue;
+        }
+        let title = daily_briefing_story_title(report, &story_cards);
+        let body = daily_briefing_story_body(report, &story_cards);
+        if daily_briefing_output_has_forbidden_reader_language(&title)
+            || daily_briefing_output_has_forbidden_reader_language(&body)
+        {
+            continue;
+        }
+        stories.push(DailyBriefingReaderStory {
+            report,
+            title,
+            body,
+            source_cards: story_cards,
+        });
+        if stories.len() >= 10 {
+            break;
+        }
+    }
+    stories
+}
+
+fn daily_briefing_issue_read(stories: &[DailyBriefingReaderStory<'_>]) -> String {
+    if stories.is_empty() {
+        return "The honest read is that the latest run did not produce a clean newsletter item."
+            .to_string();
+    }
+    "The useful read is whether the primary links are backed by docs, releases, benchmarks, or credible developer use.".to_string()
+}
+
+fn daily_briefing_watch_next(stories: &[DailyBriefingReaderStory<'_>]) -> String {
+    if stories.is_empty() {
+        return "Wait for fresh primary links or credible independent reaction before sending a stronger issue.".to_string();
+    }
+    "Check official release notes or docs first, then look for independent developer use before promoting any item into a trend.".to_string()
+}
+
+pub(crate) fn daily_briefing_lede_for_titles(titles: &[&str]) -> String {
+    match titles {
+        [] => "No clean AI story cleared the freshness and evidence filter for this issue. That is a valid result: stale repository backlogs and generated notes should not be dressed up as news.".to_string(),
         [lead] => format!(
-            "Today's lead is {}. The useful read is whether it changes the standing map of model access, agent interfaces, evaluation, and developer workflow.",
-            lead
+            "The clearest item today is {lead}. Treat it as a concrete signal to check, not as a launch claim unless the linked source actually says so."
         ),
         [lead, second] => format!(
-            "Today's issue is led by {}, with {} as the second story. The useful read is how these developments change the standing map of model access, agent interfaces, evaluation, and developer workflow.",
-            lead, second
+            "Today's useful items are {lead} and {second}. The interesting part is whether these are isolated source movements or the start of something that shows up in docs, releases, benchmarks, or developer use."
         ),
         [lead, second, third, ..] => format!(
-            "Today's issue is led by {}, with important movement around {} and {}. The useful read is how these developments change the standing map of model access, agent interfaces, evaluation, and developer workflow.",
-            lead, second, third
+            "Today's useful items are {lead}, {second}, and {third}. None of that should be inflated into a trend by itself; the point is to track which signals earn corroboration."
         ),
     }
 }
@@ -925,6 +973,68 @@ pub(crate) fn daily_briefing_humanize_title(title: &str) -> String {
     out
 }
 
+pub(crate) fn daily_briefing_story_title(
+    report: &KnowledgeReport,
+    source_cards: &[&SourceCard],
+) -> String {
+    let topic = daily_briefing_report_display_title(report);
+    if source_cards
+        .iter()
+        .all(|card| card.provider.eq_ignore_ascii_case("github"))
+    {
+        let repo_names = source_cards
+            .iter()
+            .map(|card| daily_briefing_source_label(card))
+            .filter(|label| label.contains('/'))
+            .map(|label| {
+                label
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(label.as_str())
+                    .trim()
+                    .to_string()
+            })
+            .filter(|label| !label.is_empty())
+            .take(3)
+            .collect::<Vec<_>>();
+        if !repo_names.is_empty() {
+            if let Some(entity) = daily_briefing_title_entity(&topic) {
+                return format!("{entity} repo activity: {}", repo_names.join(", "));
+            }
+            return format!("GitHub activity: {}", repo_names.join(", "));
+        }
+    }
+    daily_briefing_title_entity(&topic).unwrap_or(topic)
+}
+
+fn daily_briefing_title_entity(title: &str) -> Option<String> {
+    let mut topic = title.trim();
+    for suffix in [
+        ": release and launch activity",
+        ": model release activity",
+        ": benchmarks and evaluation",
+        ": MCP and agent infrastructure",
+        ": repository and package activity",
+        ": community reaction",
+        ": AI usage practices",
+    ] {
+        if let Some(stripped) = topic.strip_suffix(suffix) {
+            topic = stripped.trim();
+            break;
+        }
+    }
+    if topic.is_empty()
+        || topic.eq_ignore_ascii_case("release and launch activity")
+        || topic.eq_ignore_ascii_case("model release activity")
+        || topic.eq_ignore_ascii_case("community reaction")
+        || topic.eq_ignore_ascii_case("repository and package activity")
+    {
+        None
+    } else {
+        Some(topic.to_string())
+    }
+}
+
 pub(crate) fn daily_briefing_report_source_cards<'a>(
     report: &KnowledgeReport,
     source_cards: &'a [SourceCard],
@@ -936,11 +1046,55 @@ pub(crate) fn daily_briefing_report_source_cards<'a>(
         .collect()
 }
 
+pub(crate) fn daily_briefing_report_fresh_source_cards<'a>(
+    report: &KnowledgeReport,
+    source_cards: &'a [SourceCard],
+    window: Option<&(DateTime<Utc>, DateTime<Utc>)>,
+) -> Vec<&'a SourceCard> {
+    daily_briefing_report_source_cards(report, source_cards)
+        .into_iter()
+        .filter(|card| daily_briefing_source_card_is_in_window(card, window))
+        .collect()
+}
+
+pub(crate) fn daily_briefing_source_card_is_in_window(
+    card: &SourceCard,
+    window: Option<&(DateTime<Utc>, DateTime<Utc>)>,
+) -> bool {
+    let Some((start, end)) = window else {
+        return true;
+    };
+    let Some(timestamp) = daily_briefing_source_card_evidence_time(card) else {
+        return true;
+    };
+    timestamp >= *start && timestamp <= *end
+}
+
+pub(crate) fn daily_briefing_source_card_evidence_time(card: &SourceCard) -> Option<DateTime<Utc>> {
+    for value in [
+        daily_briefing_source_metadata_string(card, "published_at"),
+        daily_briefing_source_metadata_string(card, "pushed_at"),
+        daily_briefing_source_metadata_string(card, "created_at"),
+        daily_briefing_source_metadata_string(card, "updated_at"),
+        Some(card.retrieved_at.clone()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Ok(parsed) = DateTime::parse_from_rfc3339(value.trim()) {
+            return Some(parsed.with_timezone(&Utc));
+        }
+    }
+    None
+}
+
 pub(crate) fn daily_briefing_story_body(
     report: &KnowledgeReport,
     source_cards: &[&SourceCard],
 ) -> String {
-    if daily_briefing_report_body_is_projection_boilerplate(&report.body_markdown) {
+    if daily_briefing_report_is_generated_storying_artifact(report)
+        || daily_briefing_report_body_is_projection_boilerplate(&report.body_markdown)
+    {
         return daily_briefing_source_card_story(report, source_cards);
     }
     let source_ids = report.source_card_ids.iter().collect::<Vec<_>>();
@@ -1006,9 +1160,46 @@ pub(crate) fn daily_briefing_story_body(
     }
 }
 
+pub(crate) fn daily_briefing_report_is_generated_storying_artifact(
+    report: &KnowledgeReport,
+) -> bool {
+    let title = report.title.to_ascii_lowercase();
+    if title.starts_with("knowledge cluster expansion:")
+        || title.starts_with("model-written knowledge cluster expansion:")
+    {
+        return true;
+    }
+    let origin = report
+        .metadata
+        .get("origin")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        origin.as_str(),
+        "knowledge_cluster_editor_v1"
+            | "knowledge_cluster_model_writer_v1"
+            | "deterministic_source_card_projection_v1"
+    )
+}
+
 pub(crate) fn daily_briefing_report_body_is_projection_boilerplate(markdown: &str) -> bool {
     let lower = markdown.to_ascii_lowercase();
     [
+        "knowledge cluster expansion",
+        "cluster:",
+        "source family:",
+        "proof level:",
+        "scores: novelty",
+        "first seen:",
+        "last seen:",
+        "source_card_backlog_storying",
+        "the system expanded this shared knowledge story",
+        "arcwell expanded this shared knowledge cluster",
+        "durable sources across",
+        "provider buckets",
+        "unified evidence-backed knowledge story",
+        "unified knowledge system",
         "durable source-card rows into the unified knowledge pipeline",
         "durable source rows into the unified knowledge pipeline",
         "provider family buckets",
@@ -1028,7 +1219,7 @@ pub(crate) fn daily_briefing_source_card_story(
     report: &KnowledgeReport,
     source_cards: &[&SourceCard],
 ) -> String {
-    let topic = daily_briefing_report_display_title(report);
+    let topic = daily_briefing_story_title(report, source_cards);
     if source_cards.is_empty() {
         return format!(
             "There is not enough readable evidence attached to {topic} to make this a story. Hold stronger claims until the next scan has a source people can inspect."
@@ -1188,11 +1379,7 @@ pub(crate) fn daily_briefing_key_source_lines(
 }
 
 pub(crate) fn daily_briefing_source_label(card: &SourceCard) -> String {
-    let title = html_unescape_basic(card.title.trim());
-    if let Some(rest) = title.strip_prefix("GitHub repo ") {
-        return rest.trim().to_string();
-    }
-    Store::digest_source_label(card)
+    knowledge_projection_source_label(card)
 }
 
 pub(crate) fn daily_briefing_source_takeaway(card: &SourceCard) -> String {
@@ -1239,7 +1426,10 @@ pub(crate) fn daily_briefing_source_takeaway_text(card: &SourceCard, max_chars: 
         {
             continue;
         }
-        return excerpt(&candidate, max_chars);
+        return excerpt(
+            &strip_bare_urls(&html_unescape_basic(&candidate)),
+            max_chars,
+        );
     }
     String::new()
 }
@@ -1280,7 +1470,7 @@ pub(crate) fn daily_briefing_prior_context_insight(
     let angle = daily_briefing_interpretive_angle(report, source_cards);
     if let Some(context) = explicit_context {
         return Some(format!(
-            "The new evidence changes the standing interpretation rather than merely adding another matching link: {} The practical implication is to update the existing thread around {} and watch whether the next sources confirm, narrow, or contradict that shift.",
+            "This changes the earlier read rather than merely adding another matching link: {} The practical question is whether later sources confirm, narrow, or contradict that shift around {}.",
             daily_briefing_rewrite_reader_language(&strip_source_card_ids_for_reader(
                 &context,
                 &report.source_card_ids.iter().collect::<Vec<_>>()
@@ -1301,7 +1491,7 @@ pub(crate) fn daily_briefing_prior_context_insight(
         return None;
     }
     Some(format!(
-        "Compared with {}, this update shifts the emphasis toward {}. The question for the next update is whether the older framing was too broad, whether a previously secondary layer is becoming central, or whether the new sources create tension with earlier assumptions.",
+        "Compared with {}, this update shifts the emphasis toward {}. The next check is whether the older framing was too broad, whether a previously secondary layer is becoming central, or whether later sources contradict the shift.",
         human_join(&titles),
         angle
     ))
@@ -1352,10 +1542,14 @@ pub(crate) fn daily_briefing_interpretive_angle(
     report: &KnowledgeReport,
     source_cards: &[&SourceCard],
 ) -> String {
+    let report_context = if daily_briefing_report_is_generated_storying_artifact(report) {
+        daily_briefing_report_display_title(report)
+    } else {
+        format!("{}\n{}", report.title, report.body_markdown)
+    };
     let haystack = format!(
-        "{}\n{}\n{}",
-        report.title,
-        report.body_markdown,
+        "{}\n{}",
+        report_context,
         source_cards
             .iter()
             .map(|card| format!("{} {}", card.title, card.summary))
@@ -1394,10 +1588,15 @@ pub(crate) fn daily_briefing_interpretive_angle(
     {
         "availability, verification, and access control becoming as important as the model claim"
             .to_string()
+    } else if source_cards
+        .iter()
+        .all(|card| card.provider.eq_ignore_ascii_case("github"))
+    {
+        "repository activity that only matters if release notes, docs, or developers connect it to a shipped change".to_string()
     } else {
         format!(
             "the topic moving from isolated evidence toward a trackable developing story about {}",
-            excerpt(&report.title, 120)
+            excerpt(&daily_briefing_report_display_title(report), 120)
         )
     }
 }
@@ -1456,10 +1655,16 @@ pub(crate) fn daily_briefing_rewrite_reader_language(text: &str) -> String {
         ("project metadata", "project details"),
         ("metadata", "details"),
         ("source evidence", "linked source"),
+        ("Knowledge Cluster Expansion:", ""),
+        ("Knowledge Report:", ""),
     ] {
         out = out.replace(from, to);
     }
     out
+}
+
+pub(crate) fn daily_briefing_output_has_forbidden_reader_language(text: &str) -> bool {
+    daily_briefing_contains_forbidden_reader_language(text)
 }
 
 pub(crate) fn daily_briefing_contains_forbidden_reader_language(text: &str) -> bool {
@@ -1474,12 +1679,22 @@ pub(crate) fn daily_briefing_contains_forbidden_reader_language(text: &str) -> b
         "source card id",
         "source-card id",
         "source-backed",
+        "knowledge report",
+        "knowledge cluster expansion",
+        "cluster",
+        "proof level",
+        "source family",
         "backlog projection",
+        "source_card_backlog",
         "knowledge:",
         "durable source rows",
         "durable source-card rows",
+        "durable sources",
         "unified knowledge pipeline",
+        "unified knowledge system",
+        "unified evidence-backed knowledge",
         "provider family bucket",
+        "provider buckets",
         "primary-source-style",
         "github repositories detected",
         "external domains detected",

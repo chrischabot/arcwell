@@ -322,9 +322,13 @@ pub(crate) fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> R
                 "source_snapshots_json",
                 json!({}),
             )?;
+            let delivery = arguments
+                .get("delivery")
+                .filter(|value| !value.is_null())
+                .cloned();
             let cadence = optional_string(&arguments, "cadence", "warm");
             let status = optional_string(&arguments, "status", "active");
-            Ok(json!(store.schedule_job_radar_refresh(
+            Ok(json!(store.schedule_job_radar_refresh_with_delivery(
                 &profile_id,
                 &scope,
                 source_ids,
@@ -332,6 +336,7 @@ pub(crate) fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> R
                 source_snapshots,
                 &cadence,
                 &status,
+                delivery,
             )?))
         }
         "job_radar_enqueue" => {
@@ -345,12 +350,17 @@ pub(crate) fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> R
                 "source_snapshots_json",
                 json!({}),
             )?;
-            Ok(json!(store.enqueue_job_radar_refresh_job(
+            let delivery = arguments
+                .get("delivery")
+                .filter(|value| !value.is_null())
+                .cloned();
+            Ok(json!(store.enqueue_job_radar_refresh_job_with_delivery(
                 &profile_id,
                 &scope,
                 source_ids,
                 fetch_live,
                 source_snapshots,
+                delivery,
             )?))
         }
         "job_refresh_manual" => Ok(json!(

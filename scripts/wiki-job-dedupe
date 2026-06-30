@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Supersede duplicate pending Arcwell wiki jobs while keeping one live job per source key."""
+"""Supersede duplicate active Arcwell wiki jobs while keeping one live job per source key."""
 
 from __future__ import annotations
 
@@ -20,6 +20,13 @@ SUPPORTED_KINDS = {
     "github_repo",
     "ingest_url",
     "rss_fetch",
+}
+ACTIVE_STATUSES = {"pending", "deferred", "running"}
+SUPERSEDABLE_STATUSES = {"pending", "deferred"}
+KEEP_STATUS_PRIORITY = {
+    "running": 3,
+    "pending": 2,
+    "deferred": 1,
 }
 
 
@@ -77,7 +84,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Supersede older duplicate pending wiki jobs by source key."
+        description="Supersede older duplicate active wiki jobs by source key."
     )
     parser.add_argument("--db", type=Path, default=default_db_path())
     parser.add_argument(
@@ -107,22 +114,22 @@ def main() -> int:
 
     with sqlite3.connect(args.db) as conn:
         conn.row_factory = sqlite3.Row
-        pending = [
+        active_jobs = [
             dict(row)
             for row in conn.execute(
                 """
-                SELECT id, kind, input_json, attempts, max_attempts,
+                SELECT id, kind, status, input_json, attempts, max_attempts,
                        created_at, updated_at
                 FROM wiki_jobs
-                WHERE status = 'pending'
-                ORDER BY kind, created_at, updated_at, id
+                WHERE status IN ('pending', 'deferred', 'running')
+                ORDER BY kind, status, created_at, updated_at, id
                 """
             ).fetchall()
             if row["kind"] in kinds
         ]
         groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
         skipped_missing_key = []
-        for row in pending:
+        for row in active_jobs:
             key = job_key(row["kind"], row["input_json"])
             if not key:
                 skipped_missing_key.append(row)
@@ -132,25 +139,35 @@ def main() -> int:
 
         duplicate_groups = []
         supersede_rows = []
+        non_supersedable_duplicate_rows = []
         for (kind, key), group in sorted(groups.items()):
             if len(group) < 2:
                 continue
             ordered = sorted(
                 group,
                 key=lambda row: (
+                    KEEP_STATUS_PRIORITY.get(str(row.get("status") or ""), 0),
                     str(row.get("updated_at") or ""),
                     str(row.get("created_at") or ""),
                     str(row.get("id") or ""),
                 ),
             )
             keep = ordered[-1]
-            older = ordered[:-1]
+            older = [row for row in ordered[:-1] if row["status"] in SUPERSEDABLE_STATUSES]
+            non_supersedable = [
+                row for row in ordered[:-1] if row["status"] not in SUPERSEDABLE_STATUSES
+            ]
             duplicate_groups.append({
                 "kind": kind,
                 "dedupe_key": key,
-                "pending_count": len(group),
+                "active_count": len(group),
+                "pending_count": sum(1 for row in group if row["status"] == "pending"),
+                "deferred_count": sum(1 for row in group if row["status"] == "deferred"),
+                "running_count": sum(1 for row in group if row["status"] == "running"),
                 "keep_job_id": keep["id"],
+                "keep_status": keep["status"],
                 "supersede_count": len(older),
+                "non_supersedable_count": len(non_supersedable),
                 "oldest_created_at": ordered[0]["created_at"],
                 "newest_updated_at": keep["updated_at"],
             })
@@ -158,8 +175,21 @@ def main() -> int:
                 supersede_rows.append({
                     "id": row["id"],
                     "kind": kind,
+                    "status": row["status"],
                     "dedupe_key": key,
                     "keep_job_id": keep["id"],
+                    "keep_status": keep["status"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                })
+            for row in non_supersedable:
+                non_supersedable_duplicate_rows.append({
+                    "id": row["id"],
+                    "kind": kind,
+                    "status": row["status"],
+                    "dedupe_key": key,
+                    "keep_job_id": keep["id"],
+                    "keep_status": keep["status"],
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 })
@@ -174,11 +204,11 @@ def main() -> int:
                     SET status = 'superseded',
                         error = COALESCE(error || ' | ', '') || ?2,
                         updated_at = ?3
-                    WHERE id = ?1 AND status = 'pending'
+                    WHERE id = ?1 AND status IN ('pending', 'deferred')
                     """,
                     (
                         row["id"],
-                        f"superseded duplicate pending wiki job; kept {row['keep_job_id']}",
+                        f"superseded duplicate active wiki job; kept {row['keep_job_id']} ({row['keep_status']})",
                         generated_at,
                     ),
                 )
@@ -191,27 +221,35 @@ def main() -> int:
             "proof_dir": str(args.proof_dir),
             "applied": bool(args.apply),
             "kinds": sorted(kinds),
-            "pending_scanned": len(pending),
+            "active_scanned": len(active_jobs),
+            "pending_scanned": sum(1 for row in active_jobs if row["status"] == "pending"),
+            "deferred_scanned": sum(1 for row in active_jobs if row["status"] == "deferred"),
+            "running_scanned": sum(1 for row in active_jobs if row["status"] == "running"),
             "duplicate_group_count": len(duplicate_groups),
             "supersede_candidates": len(supersede_rows),
             "superseded": len(capped_supersede_rows) if args.apply else 0,
+            "non_supersedable_duplicate_rows": len(non_supersedable_duplicate_rows),
             "max_supersede": args.max_supersede,
             "capped": len(supersede_rows) > len(capped_supersede_rows),
             "skipped_missing_key": len(skipped_missing_key),
             "artifacts": {
                 "duplicate_groups_csv": str(artifact_dir / "duplicate-groups.csv"),
                 "supersede_candidates_csv": str(artifact_dir / "supersede-candidates.csv"),
+                "non_supersedable_duplicates_csv": str(
+                    artifact_dir / "non-supersedable-duplicates.csv"
+                ),
                 "summary_json": str(artifact_dir / "summary.json"),
             },
             "non_claims": [
                 "does not delete jobs",
-                "does not supersede running, deferred, failed, completed, dead-lettered, or already superseded jobs",
+                "does not supersede running, failed, completed, dead-lettered, or already superseded jobs",
                 "does not prove the kept job will succeed",
             ],
         }
 
     write_csv(artifact_dir / "duplicate-groups.csv", duplicate_groups)
     write_csv(artifact_dir / "supersede-candidates.csv", capped_supersede_rows)
+    write_csv(artifact_dir / "non-supersedable-duplicates.csv", non_supersedable_duplicate_rows)
     (artifact_dir / "summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -223,12 +261,15 @@ def main() -> int:
             f"Generated: `{generated_at}`",
             f"DB: `{args.db}`",
             f"Applied: `{args.apply}`",
+            f"Active scanned: `{summary['active_scanned']}`",
             f"Pending scanned: `{summary['pending_scanned']}`",
+            f"Deferred scanned: `{summary['deferred_scanned']}`",
+            f"Running scanned: `{summary['running_scanned']}`",
             f"Duplicate groups: `{summary['duplicate_group_count']}`",
             f"Supersede candidates: `{summary['supersede_candidates']}`",
             f"Superseded: `{summary['superseded']}`",
             "",
-            "This proof only supersedes older duplicate pending jobs while keeping the newest pending job for each source key.",
+            "This proof supersedes older duplicate pending/deferred jobs while preserving running work and keeping the best active job for each source key.",
             "",
         ]),
         encoding="utf-8",

@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+DB="$TMPDIR/arcwell.sqlite3"
+PROOF_DIR="$TMPDIR/proof"
+
+python3 - "$DB" <<'PY'
+import json
+import sqlite3
+import sys
+
+db = sys.argv[1]
+conn = sqlite3.connect(db)
+conn.execute("""
+CREATE TABLE wiki_jobs (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  input_json TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  result_json TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)
+""")
+
+def insert(id, kind, status, input, minute):
+    ts = f"2026-06-30T11:{minute:02d}:00+00:00"
+    conn.execute(
+        """
+        INSERT INTO wiki_jobs
+          (id, kind, status, input_json, attempts, max_attempts, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, 0, 3, ?5, ?5)
+        """,
+        (id, kind, status, json.dumps(input, sort_keys=True), ts),
+    )
+
+insert("owner-old-deferred", "github_owner", "deferred", {"owner": "openai"}, 1)
+insert("owner-new-pending", "github_owner", "pending", {"owner": "openai"}, 2)
+insert("repo-old-pending", "github_repo", "pending", {"owner": "vercel", "repo": "ai", "mode": "releases"}, 3)
+insert("repo-running", "github_repo", "running", {"owner": "vercel", "repo": "ai", "mode": "releases"}, 4)
+insert("rss-only", "rss_fetch", "deferred", {"url": "https://example.com/feed.xml"}, 5)
+insert("completed-ignored", "github_owner", "completed", {"owner": "openai"}, 6)
+conn.commit()
+PY
+
+"$ROOT/scripts/wiki-job-dedupe" --db "$DB" --proof-dir "$PROOF_DIR" --apply --max-supersede 10 > "$TMPDIR/output.json"
+
+python3 - "$DB" "$PROOF_DIR/artifacts/summary.json" <<'PY'
+import json
+import sqlite3
+import sys
+
+db, summary_path = sys.argv[1:3]
+summary = json.load(open(summary_path, encoding="utf-8"))
+assert summary["active_scanned"] == 5, summary
+assert summary["duplicate_group_count"] == 2, summary
+assert summary["supersede_candidates"] == 2, summary
+assert summary["superseded"] == 2, summary
+
+conn = sqlite3.connect(db)
+statuses = dict(conn.execute("SELECT id, status FROM wiki_jobs").fetchall())
+assert statuses["owner-old-deferred"] == "superseded", statuses
+assert statuses["owner-new-pending"] == "pending", statuses
+assert statuses["repo-old-pending"] == "superseded", statuses
+assert statuses["repo-running"] == "running", statuses
+assert statuses["rss-only"] == "deferred", statuses
+assert statuses["completed-ignored"] == "completed", statuses
+
+active_duplicate_groups = conn.execute(
+    """
+    SELECT COUNT(*) FROM (
+      SELECT kind, input_json, COUNT(*) AS c
+      FROM wiki_jobs
+      WHERE status IN ('pending', 'deferred', 'running')
+      GROUP BY kind, input_json
+      HAVING c > 1
+    )
+    """
+).fetchone()[0]
+assert active_duplicate_groups == 0, active_duplicate_groups
+PY
+
+echo "wiki-job-dedupe-test ok"

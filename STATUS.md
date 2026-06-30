@@ -283,6 +283,18 @@ They prove replay orchestration and local failure/recovery semantics only, not
 live provider recovery, recurrence, one-day freshness, or operational
 monitoring.
 
+Job-hunting scheduled-report email addendum: severe test
+`severe_job_radar_schedule_replay_refreshes_sources_and_reports` now covers
+`job_radar` schedule/enqueue delivery metadata. The worker carries optional
+email delivery metadata from CLI/MCP scheduling into `job_radar_refresh`,
+compiles the job report with `New openings found`, `Currently open roles`, and
+`Roles removed` sections, prepares the report delivery, and sends it through a
+controlled Cloudflare Email-compatible provider path using configured delivery
+settings. This proves the scheduled-report email path under controlled provider
+conditions; it is not live external email proof, broad job-source coverage,
+one-day recurrence, operational-home monitoring, application delivery, warm
+intros, or outcome proof.
+
 Job-hunting live-radar recurrence addendum: preserved controlled proof root
 `.arcwell-dev/proofs/job-radar-live-recurrence-controlled-proof/artifacts/proof-packet.json`
 passed as bounded Production Data Proof. It copied the expanded direct-role

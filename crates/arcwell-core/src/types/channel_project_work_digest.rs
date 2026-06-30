@@ -652,6 +652,7 @@ pub struct ImportRunFinish {
 #[derive(Debug, Serialize)]
 pub struct OpsSnapshot {
     pub health: HealthReport,
+    pub worker: Option<WorkerHeartbeat>,
     pub x_stats: XStatsReport,
     pub radar_runs: Vec<RadarRun>,
     pub radar_source_quality: Vec<RadarSourceQuality>,

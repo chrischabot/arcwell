@@ -1302,6 +1302,8 @@ arcwell job source-refresh <source-id> --body-path source.html
 arcwell job source-refresh <source-id> --fetch-live
 arcwell job radar-schedule <profile-id> --scope <scope> --source-id <id>
 arcwell job radar-enqueue <profile-id> --scope <scope> --source-id <id>
+arcwell job radar-schedule <profile-id> --scope <scope> --source-id <id> --fetch-live --cadence cold --email-to <email>
+arcwell job radar-enqueue <profile-id> --scope <scope> --source-id <id> --fetch-live --email-to <email>
 
 arcwell job score-add <role-id> --profile-id <profile-id>
 arcwell job shortlist <profile-id>
@@ -1471,6 +1473,11 @@ and the existing P1 shortlist:
    and failed health for missing snapshots. Proof:
    `.arcwell-dev/proofs/job-radar-scheduled-local-proof-20260629T121212Z-42806/artifacts/proof-packet.json`.
    Rerunnable proof script: `scripts/job-radar-scheduled-local-proof`.
+   Follow-up severe coverage proves optional CLI/MCP delivery metadata can be
+   carried from a scheduled/enqueued `job_radar_refresh` into report
+   preparation and a controlled Cloudflare Email-compatible provider send. This
+   remains controlled provider-path proof, not live external email proof or
+   operational recurrence.
 11. Completed as local failure-health proof: a queued live
     `job_radar_refresh` blocked by provider-network policy writes failed
     generic source health for `job:radar:<profile_id>` and no job-source or
@@ -1666,10 +1673,12 @@ and the existing P1 shortlist:
     gate, or promote the job-hunting system to Operational.
 
 Do not call scheduled job radar operational until the one-day wall-clock
-refresh, broader operational-home recurrence, live policy/cost recovery, and
-ops proof gates pass. The bounded live `fetch_live` worker slice proves one
-scheduled drain, and the live-radar recurrence proof covers one selected
-hot-cadence interval only. Do not call manual refresh live coverage unless the caller has
-supplied current source-health evidence for the run. Do not treat
+refresh, broader operational-home recurrence, live policy/cost recovery, live
+external provider-send proof, and ops proof gates pass. The bounded live
+`fetch_live` worker slice proves one scheduled drain, the live-radar recurrence
+proof covers one selected hot-cadence interval only, and scheduled-report email
+coverage is controlled provider-path proof only. Do not call manual refresh live
+coverage unless the caller has supplied current source-health evidence for the
+run. Do not treat
 company-target reports as apply-ready role evidence outside the bounded sources
 where canonical current role cards exist and role-level scoring has been run.

@@ -2145,7 +2145,7 @@ pub(crate) fn knowledge_projection_source_summary(card: &SourceCard) -> String {
     }
 }
 
-fn strip_bare_urls(text: &str) -> String {
+pub(crate) fn strip_bare_urls(text: &str) -> String {
     text.split_whitespace()
         .filter(|part| {
             let trimmed = part.trim_matches(|ch: char| {

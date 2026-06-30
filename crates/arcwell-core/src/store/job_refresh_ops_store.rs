@@ -792,6 +792,8 @@ impl Store {
         for role_input in parsed.roles {
             let source_url = role_input.source_url.clone();
             let role = self.record_job_role_card(role_input)?;
+            let is_new_live_role =
+                role.created_at == role.updated_at && role.current_status == "live";
             accepted_role_keys.insert(job_role_refresh_key(
                 &role.company,
                 &role.role_title,
@@ -804,6 +806,16 @@ impl Store {
                 confidence: role.source_confidence.clone(),
                 evidence_excerpt: Some("Observed during job source refresh.".to_string()),
             })?);
+            if is_new_live_role {
+                self.record_job_role_status_event(JobRoleStatusEventInput {
+                    role_id: role.id.clone(),
+                    run_id: None,
+                    status: "new".to_string(),
+                    previous_tier: None,
+                    current_tier: None,
+                    note: Some(JOB_SOURCE_REFRESH_NEW_ROLE_EVENT_NOTE.to_string()),
+                })?;
+            }
             roles.push(role);
         }
 

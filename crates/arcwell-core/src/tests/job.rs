@@ -2959,6 +2959,16 @@ fn severe_job_source_refresh_writes_roles_health_and_stales_missing_roles() {
             .iter()
             .any(|warning| warning.contains("caller-supplied page text/html"))
     );
+    let first_role_ids = std::iter::once(first.roles[0].id.clone()).collect::<BTreeSet<_>>();
+    let first_events = store
+        .list_job_role_status_events_for_roles_recent(&first_role_ids, 10)
+        .unwrap();
+    assert_eq!(first_events.len(), 1);
+    assert_eq!(first_events[0].status, "new");
+    assert_eq!(
+        first_events[0].note.as_deref(),
+        Some(JOB_SOURCE_REFRESH_NEW_ROLE_EVENT_NOTE)
+    );
 
     let second = store
         .run_job_source_refresh(JobSourceRefreshInput {
@@ -3643,6 +3653,53 @@ fn severe_job_radar_schedule_replay_refreshes_sources_and_reports() {
     // operational while only manual refresh commands actually work.
     let store = test_store("job-radar-scheduled-replay");
     let profile = job_fixture_profile(&store);
+    let api = mock_status_server(
+        "200 OK",
+        "",
+        r#"{"success":true,"result":{"id":"job_radar_scheduled_email_ok"}}"#,
+        "application/json",
+    );
+    store
+        .set_secret_value("CLOUDFLARE_ACCOUNT_ID", "acct123", "email")
+        .unwrap();
+    store
+        .set_secret_value("CLOUDFLARE_EMAIL_API_TOKEN", "TOKEN", "email")
+        .unwrap();
+    store
+        .set_secret_value("ARCWELL_AGENT_EMAIL_FROM", "agent@example.com", "email")
+        .unwrap();
+    store
+        .set_secret_value("CLOUDFLARE_EMAIL_API_BASE", &api, "email")
+        .unwrap();
+    store
+        .authorize_channel_subject("email", "email:job-proof@example.com", false, false, true)
+        .unwrap();
+    write_policy(
+        &store,
+        r#"
+[[rules]]
+id = "allow-job-radar-scheduled-worker-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+package = "arcwell-job-hunting"
+source = "job_radar_refresh"
+reason = "allow controlled scheduled job radar refresh enqueue"
+priority = 10
+
+[[rules]]
+id = "allow-job-radar-scheduled-report-email-send"
+effect = "allow"
+action = "channel.send"
+package = "arcwell-email"
+provider = "cloudflare_email"
+source = "job_weekly_report_delivery"
+channel = "email"
+subject = "email:job-proof@example.com"
+target = "job-proof@example.com"
+reason = "allow controlled scheduled job radar report email send"
+priority = 10
+"#,
+    );
     let source = store
         .record_job_source(JobSourceInput {
             source_family: "company".to_string(),
@@ -3668,7 +3725,7 @@ fn severe_job_radar_schedule_replay_refreshes_sources_and_reports() {
             }),
         );
     let scheduled = store
-        .schedule_job_radar_refresh(
+        .schedule_job_radar_refresh_with_delivery(
             &profile.id,
             "London agent platform roles",
             vec![source.id.clone()],
@@ -3676,6 +3733,12 @@ fn severe_job_radar_schedule_replay_refreshes_sources_and_reports() {
             Value::Object(snapshots),
             "warm",
             "active",
+            Some(json!({
+                "channel": "email",
+                "subject": "email:job-proof@example.com",
+                "target": "email:job-proof@example.com",
+                "idempotency_key": "job-radar-scheduled-report-email",
+            })),
         )
         .unwrap();
     assert_eq!(scheduled.source_kind, "job_radar");
@@ -3695,6 +3758,8 @@ fn severe_job_radar_schedule_replay_refreshes_sources_and_reports() {
     assert_eq!(result["proof_level"], "local_proof");
     assert_eq!(result["error_count"], 0);
     assert_eq!(result["observed_role_count"], 1);
+    assert_eq!(result["delivery"]["status"], "sent");
+    assert_eq!(result["delivery"]["sent"], true);
     let search_run_id = result["search_run_id"].as_str().unwrap();
     let weekly_report_id = result["weekly_report_id"].as_str().unwrap();
 
@@ -3715,12 +3780,21 @@ fn severe_job_radar_schedule_replay_refreshes_sources_and_reports() {
     assert_eq!(watch_health.status, "healthy");
     assert_eq!(watch_health.last_item_id.as_deref(), Some(search_run_id));
     assert!(watch_health.next_run_at.is_some());
+    let weekly_report = store
+        .read_job_weekly_report(weekly_report_id)
+        .unwrap()
+        .unwrap();
+    assert!(weekly_report.body.contains("## New openings found"));
     assert!(
-        store
-            .read_job_weekly_report(weekly_report_id)
-            .unwrap()
-            .is_some()
+        weekly_report
+            .body
+            .contains("Staff Agent Platform Engineer at Example"),
+        "{}",
+        weekly_report.body
     );
+    assert!(weekly_report.body.contains("## Currently open roles"));
+    assert!(weekly_report.body.contains("## Roles removed"));
+    assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
 
     let second_pass = store.run_worker_once(1).unwrap();
     assert_eq!(second_pass.processed, 0);
@@ -3914,6 +3988,7 @@ fn severe_job_radar_refresh_policy_recovery_retries_same_failed_job() {
             vec![source.id.clone()],
             true,
             Value::Object(snapshots),
+            None,
             Some(json!({
                 "watch_source_key": format!("job:radar:{}", profile.id),
                 "source_kind": "job_radar",

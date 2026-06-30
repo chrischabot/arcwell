@@ -419,10 +419,13 @@ pub(crate) fn job(store: Store, args: JobCommand) -> Result<()> {
             source_snapshots_path,
             cadence,
             status,
+            email_to,
+            delivery_idempotency_key,
         } => {
             let source_snapshots =
                 parse_json_arg_or_file(&source_snapshots_json, source_snapshots_path.as_ref())?;
-            print_json(&store.schedule_job_radar_refresh(
+            let delivery = job_radar_email_delivery(email_to.as_deref(), delivery_idempotency_key)?;
+            print_json(&store.schedule_job_radar_refresh_with_delivery(
                 &profile_id,
                 &scope,
                 source_ids,
@@ -430,6 +433,7 @@ pub(crate) fn job(store: Store, args: JobCommand) -> Result<()> {
                 source_snapshots,
                 &cadence,
                 &status,
+                delivery,
             )?)
         }
         JobSubcommand::RadarEnqueue {
@@ -439,15 +443,19 @@ pub(crate) fn job(store: Store, args: JobCommand) -> Result<()> {
             fetch_live,
             source_snapshots_json,
             source_snapshots_path,
+            email_to,
+            delivery_idempotency_key,
         } => {
             let source_snapshots =
                 parse_json_arg_or_file(&source_snapshots_json, source_snapshots_path.as_ref())?;
-            print_json(&store.enqueue_job_radar_refresh_job(
+            let delivery = job_radar_email_delivery(email_to.as_deref(), delivery_idempotency_key)?;
+            print_json(&store.enqueue_job_radar_refresh_job_with_delivery(
                 &profile_id,
                 &scope,
                 source_ids,
                 fetch_live,
                 source_snapshots,
+                delivery,
             )?)
         }
         JobSubcommand::RoleAdd {
@@ -809,6 +817,23 @@ pub(crate) fn job(store: Store, args: JobCommand) -> Result<()> {
             print_json(&store.list_job_weekly_report_deliveries(report_id.as_deref())?)
         }
     }
+}
+
+fn job_radar_email_delivery(
+    email_to: Option<&str>,
+    idempotency_key: Option<String>,
+) -> Result<Option<Value>> {
+    let Some(email_to) = email_to else {
+        return Ok(None);
+    };
+    let email = normalize_cli_email(email_to)?;
+    let subject = format!("email:{email}");
+    Ok(Some(json!({
+        "channel": "email",
+        "subject": subject,
+        "target": subject,
+        "idempotency_key": idempotency_key,
+    })))
 }
 
 pub(crate) fn radar(store: Store, args: RadarCommand) -> Result<()> {

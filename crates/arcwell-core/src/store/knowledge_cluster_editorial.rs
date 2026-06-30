@@ -1670,7 +1670,7 @@ impl Store {
             .with_context(|| format!("knowledge cluster wiki page not found: {wiki_page_id}"))?;
         let report = self.record_knowledge_report(KnowledgeReportInput {
             cluster_id: cluster.id.clone(),
-            title: format!("Knowledge Cluster Expansion: {}", cluster.topic),
+            title: cluster.topic.clone(),
             body_markdown: markdown.clone(),
             status: "draft".to_string(),
             source_card_ids: cluster.source_card_ids.clone(),
@@ -1860,10 +1860,7 @@ impl Store {
         })?;
         let report = self.record_knowledge_report(KnowledgeReportInput {
             cluster_id: cluster.id.clone(),
-            title: format!(
-                "Model-Written Knowledge Cluster Expansion: {}",
-                cluster.topic
-            ),
+            title: format!("{} (model draft)", cluster.topic),
             body_markdown: markdown.clone(),
             status: "draft".to_string(),
             source_card_ids: cluster.source_card_ids.clone(),

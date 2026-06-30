@@ -1418,6 +1418,17 @@ PR, implementation note, or final report:
       records failed health for missing snapshots. This is replay proof, not
       live recurring market monitoring. Rerunnable proof script:
       `scripts/job-radar-scheduled-local-proof`.
+- [x] Add optional scheduled job-radar report email delivery without promoting
+      job radar to operational. Severe test
+      `severe_job_radar_schedule_replay_refreshes_sources_and_reports` now
+      proves CLI/MCP delivery metadata is persisted on scheduled `job_radar`
+      watch sources, copied into queued `job_radar_refresh` input, rendered with
+      `New openings found`, `Currently open roles`, and `Roles removed`
+      sections, prepared as a weekly-report delivery, and sent through a
+      controlled Cloudflare Email-compatible provider path using configured
+      delivery settings. This does not prove live external email delivery,
+      one-day recurrence, broad job-source coverage, application delivery, warm
+      intros, or outcomes.
 - [x] Add bounded scheduled live-fetch proof for selected direct-role sources
       without promoting job radar to operational. Proof at
       `.arcwell-dev/proofs/job-radar-live-fetch-proof-20260629T053332Z-16818/artifacts/proof-packet.json`

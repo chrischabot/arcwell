@@ -680,6 +680,8 @@ pub(crate) const JOB_MAX_SHORT_TEXT: usize = 500;
 pub(crate) const JOB_MAX_TEXT: usize = 4_000;
 pub(crate) const JOB_MAX_PACKET_TEXT: usize = 12_000;
 pub(crate) const JOB_MAX_SOURCE_REFRESH_BODY_CHARS: usize = 1_000_000;
+pub(crate) const JOB_SOURCE_REFRESH_NEW_ROLE_EVENT_NOTE: &str =
+    "Job source refresh observed this role for the first time.";
 
 pub(crate) fn normalize_job_candidate_profile_input(
     mut input: JobCandidateProfileInput,
@@ -2833,11 +2835,13 @@ pub(crate) fn render_job_weekly_report(
 ) -> String {
     let mut tier_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut role_labels: BTreeMap<String, String> = BTreeMap::new();
+    let mut role_entries: BTreeMap<String, &JobShortlistEntry> = BTreeMap::new();
     for entry in &shortlist.entries {
         role_labels.insert(
             entry.role.id.clone(),
             format!("{} - {}", entry.role.company, entry.role.role_title),
         );
+        role_entries.insert(entry.role.id.clone(), entry);
         let tier = entry
             .score
             .as_ref()
@@ -2884,10 +2888,22 @@ pub(crate) fn render_job_weekly_report(
     let next_actions =
         render_job_weekly_next_actions(intro_paths, &contact_names, &role_labels, applications);
     let role_changes = render_job_weekly_role_changes(role_events, &role_labels);
+    let new_openings =
+        render_job_opening_events(role_events, &role_entries, &role_labels, &["new"]);
+    let open_roles = render_job_current_open_roles(&shortlist.entries);
+    let removed_roles = render_job_opening_events(
+        role_events,
+        &role_entries,
+        &role_labels,
+        &["closed", "stale"],
+    );
     format!(
-        "# Job Weekly Report\n\nProfile: {}\nGenerated: {}\n\n## Shortlist\n\n{}\n\n## Tier Counts\n\n{}\n\n## Role Changes\n\n{}\n\n## Applications\n\n{}\n\n## Intro Status\n\n{}\n\n## Next Actions\n\n{}\n\n## Source Health\n\n{}\n",
+        "# Job Weekly Report\n\nProfile: {}\nGenerated: {}\n\n## New openings found\n\n{}\n\n## Currently open roles\n\n{}\n\n## Roles removed\n\n{}\n\n## Shortlist\n\n{}\n\n## Tier Counts\n\n{}\n\n## Role Changes\n\n{}\n\n## Applications\n\n{}\n\n## Intro Status\n\n{}\n\n## Next Actions\n\n{}\n\n## Source Health\n\n{}\n",
         shortlist.profile_id,
         shortlist.generated_at,
+        new_openings,
+        open_roles,
+        removed_roles,
         if top_roles.is_empty() {
             "- No scored roles recorded.".to_string()
         } else {
@@ -2900,6 +2916,115 @@ pub(crate) fn render_job_weekly_report(
         next_actions,
         render_job_count_map(&health_counts),
     )
+}
+
+pub(crate) fn render_job_current_open_roles(entries: &[JobShortlistEntry]) -> String {
+    let roles = entries
+        .iter()
+        .filter(|entry| entry.role.current_status == "live")
+        .filter(|entry| entry.score.is_some())
+        .filter(|entry| {
+            entry
+                .score
+                .as_ref()
+                .map(|score| !matches!(score.tier.as_str(), "pass" | "blocked"))
+                .unwrap_or(true)
+        })
+        .take(25)
+        .map(render_job_role_digest_entry)
+        .collect::<Vec<_>>();
+    if roles.is_empty() {
+        "- none".to_string()
+    } else {
+        roles.join("\n\n")
+    }
+}
+
+pub(crate) fn render_job_opening_events(
+    role_events: &[JobRoleStatusEvent],
+    role_entries: &BTreeMap<String, &JobShortlistEntry>,
+    role_labels: &BTreeMap<String, String>,
+    statuses: &[&str],
+) -> String {
+    let mut seen = BTreeSet::new();
+    let mut lines = Vec::new();
+    for event in role_events {
+        if lines.len() >= 25 {
+            break;
+        }
+        if !statuses.iter().any(|status| *status == event.status) {
+            continue;
+        }
+        if !seen.insert((event.role_id.clone(), event.status.clone())) {
+            continue;
+        }
+        if let Some(entry) = role_entries.get(&event.role_id) {
+            if event.status == "new" {
+                lines.push(render_job_role_digest_entry(entry));
+            } else {
+                lines.push(format!(
+                    "- {} at {} ({})",
+                    entry.role.role_title, entry.role.company, event.status
+                ));
+            }
+        } else {
+            let label = role_labels
+                .get(&event.role_id)
+                .cloned()
+                .unwrap_or_else(|| event.role_id.clone());
+            lines.push(format!("- {label} ({})", event.status));
+        }
+    }
+    if lines.is_empty() {
+        "- none".to_string()
+    } else {
+        lines.join("\n\n")
+    }
+}
+
+pub(crate) fn render_job_role_digest_entry(entry: &JobShortlistEntry) -> String {
+    let role = &entry.role;
+    let mut details = Vec::new();
+    match (&role.location, &role.work_mode) {
+        (Some(location), Some(work_mode)) => details.push(format!("{location}; {work_mode}")),
+        (Some(location), None) => details.push(location.clone()),
+        (None, Some(work_mode)) => details.push(work_mode.clone()),
+        (None, None) => {}
+    }
+    if let Some(stage) = role
+        .company_stage_or_size
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
+        details.push(stage.clone());
+    }
+    if let Some(problem) = role
+        .implied_business_problem
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
+        details.push(problem.clone());
+    } else if let Some(why) = role
+        .why_they_might_need_user
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
+        details.push(why.clone());
+    } else if let Some(requirement) = role.core_requirements.first() {
+        details.push(requirement.clone());
+    }
+    if let Some(score) = &entry.score {
+        details.push(format!(
+            "Fit: {} ({:.1}).",
+            score.tier, score.weighted_score
+        ));
+    }
+    let details = if details.is_empty() {
+        "No brief description recorded yet.".to_string()
+    } else {
+        details.join(" ")
+    };
+    format!("- {} at {}\n  {}", role.role_title, role.company, details)
 }
 
 pub(crate) fn render_job_count_map(counts: &BTreeMap<String, usize>) -> String {

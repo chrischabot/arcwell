@@ -548,6 +548,20 @@ impl Store {
             &window_end.to_rfc3339(),
             &related_wiki_pages,
         );
+        if daily_briefing_output_has_forbidden_reader_language(&body) {
+            let error = "knowledge daily briefing renderer produced internal pipeline language";
+            let updated =
+                self.update_issue_schedule_tick(&tick.id, "blocked", None, None, Some(error))?;
+            return Ok(json!({
+                "tick": updated,
+                "schedule": schedule,
+                "status": "blocked",
+                "error": error,
+                "window_start": window_start.to_rfc3339(),
+                "window_end": window_end.to_rfc3339(),
+                "proof_level": "Blocked: reader-facing daily briefing failed editorial hygiene gate before source-card materialization"
+            }));
+        }
         let briefing_summary = excerpt_preserving_whitespace(&body, 19_500);
         let briefing_card = self.add_source_card(SourceCardInput {
             title: format!("Arcwell AI daily briefing {}", issue_schedule_day_label(&tick.due_at)),

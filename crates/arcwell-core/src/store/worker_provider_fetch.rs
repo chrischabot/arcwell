@@ -94,17 +94,16 @@ impl Store {
             })?;
             card_ids.insert(card.id);
             last_item_id = Some(item_id);
-            if item_date.is_some() {
-                last_item_date = item_date;
-            }
+            remember_latest_rfc3339(&mut last_item_date, item_date);
         }
         let card_ids: Vec<String> = card_ids.into_iter().collect();
         let cursor_key = source_key.to_string();
         let cursor_before = self.get_cursor(&cursor_key)?.map(|cursor| cursor.value);
-        let cursor_value = last_item_date
-            .clone()
-            .or_else(|| last_item_id.clone())
-            .unwrap_or_else(now);
+        let cursor_value = non_regressing_cursor_value(
+            cursor_before.as_deref(),
+            last_item_date.as_deref(),
+            last_item_id.as_deref(),
+        );
         self.set_cursor(&cursor_key, &cursor_value)?;
         self.record_source_success(SourceHealthUpdate {
             key: source_key,
@@ -188,15 +187,16 @@ impl Store {
                     github_release_to_source_card(owner, repo, item)?
                 };
                 last_item_id = github_item_id(item);
-                last_item_date = card_input.retrieved_at.clone().or(last_item_date);
+                remember_latest_rfc3339(&mut last_item_date, card_input.retrieved_at.clone());
                 let card = self.add_source_card(card_input)?;
                 card_ids.insert(card.id);
             }
             let cursor_before = self.get_cursor(&cursor_key)?.map(|cursor| cursor.value);
-            let cursor_value = last_item_date
-                .clone()
-                .or_else(|| last_item_id.clone())
-                .unwrap_or_else(now);
+            let cursor_value = non_regressing_cursor_value(
+                cursor_before.as_deref(),
+                last_item_date.as_deref(),
+                last_item_id.as_deref(),
+            );
             self.set_cursor(&cursor_key, &cursor_value)?;
             self.record_source_success(SourceHealthUpdate {
                 key: &cursor_key,
@@ -267,15 +267,16 @@ impl Store {
             for item in repos.iter().take(limit.clamp(1, 30)) {
                 let card_input = github_repo_summary_to_source_card(owner, item)?;
                 last_item_id = item.get("id").map(|id| id.to_string()).or(last_item_id);
-                last_item_date = card_input.retrieved_at.clone().or(last_item_date);
+                remember_latest_rfc3339(&mut last_item_date, card_input.retrieved_at.clone());
                 let card = self.add_source_card(card_input)?;
                 card_ids.insert(card.id);
             }
             let cursor_before = self.get_cursor(&cursor_key)?.map(|cursor| cursor.value);
-            let cursor_value = last_item_date
-                .clone()
-                .or_else(|| last_item_id.clone())
-                .unwrap_or_else(now);
+            let cursor_value = non_regressing_cursor_value(
+                cursor_before.as_deref(),
+                last_item_date.as_deref(),
+                last_item_id.as_deref(),
+            );
             self.set_cursor(&cursor_key, &cursor_value)?;
             self.record_source_success(SourceHealthUpdate {
                 key: &cursor_key,
@@ -358,15 +359,14 @@ impl Store {
                 })?;
                 card_ids.insert(card.id);
                 last_item_id = Some(item_id);
-                if item_date.is_some() {
-                    last_item_date = item_date;
-                }
+                remember_latest_rfc3339(&mut last_item_date, item_date);
             }
             let cursor_before = self.get_cursor(&cursor_key)?.map(|cursor| cursor.value);
-            let cursor_value = last_item_date
-                .clone()
-                .or_else(|| last_item_id.clone())
-                .unwrap_or_else(now);
+            let cursor_value = non_regressing_cursor_value(
+                cursor_before.as_deref(),
+                last_item_date.as_deref(),
+                last_item_id.as_deref(),
+            );
             self.set_cursor(&cursor_key, &cursor_value)?;
             self.record_source_success(SourceHealthUpdate {
                 key: &cursor_key,
@@ -922,5 +922,72 @@ impl Store {
             }
         }
         Ok(out)
+    }
+}
+
+fn remember_latest_rfc3339(current: &mut Option<String>, candidate: Option<String>) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+    if rfc3339_is_after(&candidate, current.as_deref()) {
+        *current = Some(candidate);
+    }
+}
+
+fn non_regressing_cursor_value(
+    previous_cursor: Option<&str>,
+    last_item_date: Option<&str>,
+    last_item_id: Option<&str>,
+) -> String {
+    let observed = last_item_date
+        .or(last_item_id)
+        .map(str::to_string)
+        .unwrap_or_else(now);
+    if let Some(previous) = previous_cursor
+        && rfc3339_is_after(previous, Some(&observed))
+    {
+        return previous.to_string();
+    }
+    observed
+}
+
+fn rfc3339_is_after(candidate: &str, current: Option<&str>) -> bool {
+    let Some(current) = current else {
+        return true;
+    };
+    let Ok(candidate) = chrono::DateTime::parse_from_rfc3339(candidate) else {
+        return false;
+    };
+    let Ok(current) = chrono::DateTime::parse_from_rfc3339(current) else {
+        return true;
+    };
+    candidate > current
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn severe_provider_fetch_cursor_uses_newest_observed_timestamp_without_regressing() {
+        let mut latest = None;
+        remember_latest_rfc3339(&mut latest, Some("2026-06-30T09:00:00Z".to_string()));
+        remember_latest_rfc3339(&mut latest, Some("2026-06-30T07:00:00Z".to_string()));
+        remember_latest_rfc3339(&mut latest, Some("2026-06-30T10:00:00Z".to_string()));
+        assert_eq!(latest.as_deref(), Some("2026-06-30T10:00:00Z"));
+
+        let cursor = non_regressing_cursor_value(
+            Some("2026-06-30T11:00:00Z"),
+            latest.as_deref(),
+            Some("repo-id"),
+        );
+        assert_eq!(cursor, "2026-06-30T11:00:00Z");
+
+        let cursor = non_regressing_cursor_value(
+            Some("2026-06-30T08:00:00Z"),
+            latest.as_deref(),
+            Some("repo-id"),
+        );
+        assert_eq!(cursor, "2026-06-30T10:00:00Z");
     }
 }

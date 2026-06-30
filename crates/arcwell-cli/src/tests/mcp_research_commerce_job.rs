@@ -1469,6 +1469,11 @@ fn severe_mcp_job_hunting_round_trips_local_proof_workflow() {
             .pointer("/inputSchema/properties/source_snapshots")
             .is_some()
     );
+    assert!(
+        radar_schedule_tool
+            .pointer("/inputSchema/properties/delivery")
+            .is_some()
+    );
     let report_delivery_tool = tools
         .iter()
         .find(|tool| {
@@ -1662,12 +1667,22 @@ fn severe_mcp_job_hunting_round_trips_local_proof_workflow() {
             "scope": "London agent platform roles",
             "source_ids": [source_id],
             "source_snapshots": Value::Object(schedule_snapshots),
+            "delivery": {
+                "channel": "email",
+                "subject": "email:job-proof@example.com",
+                "target": "email:job-proof@example.com",
+                "idempotency_key": "mcp-job-radar-schedule-email"
+            },
             "cadence": "warm",
             "status": "active"
         }),
     )
     .unwrap();
     assert_eq!(radar_schedule["source_kind"], json!("job_radar"));
+    assert_eq!(
+        radar_schedule["metadata"]["delivery"]["target"],
+        json!("email:job-proof@example.com")
+    );
     let mut enqueue_snapshots = serde_json::Map::new();
     enqueue_snapshots.insert(
             source_id.to_string(),
@@ -1680,12 +1695,22 @@ fn severe_mcp_job_hunting_round_trips_local_proof_workflow() {
             "profile_id": profile_id,
             "scope": "London agent platform roles",
             "source_ids": [source_id],
-            "source_snapshots": Value::Object(enqueue_snapshots)
+            "source_snapshots": Value::Object(enqueue_snapshots),
+            "delivery": {
+                "channel": "email",
+                "subject": "email:job-proof@example.com",
+                "target": "email:job-proof@example.com",
+                "idempotency_key": "mcp-job-radar-enqueue-email"
+            }
         }),
     )
     .unwrap();
     assert_eq!(radar_job["kind"], json!("job_radar_refresh"));
     assert_eq!(radar_job["status"], json!("pending"));
+    assert_eq!(
+        radar_job["input_json"]["delivery"]["target"],
+        json!("email:job-proof@example.com")
+    );
 
     let evidence = call_mcp_tool(
         &paths,

@@ -471,13 +471,13 @@ pub(crate) fn mcp_tools() -> Vec<Value> {
         ),
         tool_with_schema(
             "job_radar_schedule",
-            "Schedule recurring job radar refresh for configured source ids. Replay snapshots provide local proof; fetch_live=true is provider-policy and cost gated. This is local scheduled proof until wall-clock/live recurrence is proven.",
+            "Schedule recurring job radar refresh for configured source ids, optionally carrying report-delivery metadata to the worker. Replay snapshots provide local proof; fetch_live=true is provider-policy and cost gated. This is local scheduled proof until wall-clock/live recurrence is proven.",
             job_radar_schedule_tool_properties(),
             &["profile_id", "scope", "source_ids"],
         ),
         tool_with_schema(
             "job_radar_enqueue",
-            "Enqueue one job radar refresh job for configured source ids. Replay snapshots provide local proof; fetch_live=true is provider-policy and cost gated.",
+            "Enqueue one job radar refresh job for configured source ids, optionally carrying report-delivery metadata to the worker. Replay snapshots provide local proof; fetch_live=true is provider-policy and cost gated.",
             job_radar_enqueue_tool_properties(),
             &["profile_id", "scope", "source_ids"],
         ),

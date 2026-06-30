@@ -310,6 +310,10 @@ pub(crate) fn job_radar_enqueue_tool_properties() -> Value {
         "source_snapshots": {
             "type": "object",
             "description": "Optional replay snapshots keyed by source id. Each value may be a string body or an object with body and fetched_url. Replay snapshots prove local scheduled behavior, not current live freshness."
+        },
+        "delivery": {
+            "type": "object",
+            "description": "Optional prepared-report delivery metadata for the worker, such as {\"channel\":\"email\",\"subject\":\"email:user@example.com\",\"target\":\"email:user@example.com\",\"idempotency_key\":\"stable-key\"}. Provider send remains authorization and policy gated."
         }
     })
 }

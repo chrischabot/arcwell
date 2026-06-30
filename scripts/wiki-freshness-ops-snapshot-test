@@ -152,6 +152,20 @@ with sqlite3.connect(db) as conn:
         ),
     )
     conn.execute(
+        "INSERT INTO watch_sources VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "watch-4",
+            "x_handle",
+            "QuietSource",
+            "Quiet Source",
+            "warm",
+            "active",
+            "{}",
+            "2026-06-29T00:00:00Z",
+            "2026-06-30T00:00:00Z",
+        ),
+    )
+    conn.execute(
         "INSERT INTO source_health VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             "rss:https://example.com/feed.xml",
@@ -192,6 +206,25 @@ with sqlite3.connect(db) as conn:
     conn.execute(
         "INSERT INTO source_health VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
+            "github-owner:retired",
+            "github",
+            "github_owner",
+            "retired",
+            "healthy",
+            "2026-06-27T08:15:00Z",
+            None,
+            None,
+            "repo-1",
+            "2026-06-27T08:15:00Z",
+            "github-owner:retired",
+            "repo-1",
+            None,
+            "2026-06-27T08:15:00Z",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO source_health VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
             "rss:https://broken.example.com/feed.xml",
             "rss",
             "rss",
@@ -208,11 +241,34 @@ with sqlite3.connect(db) as conn:
             "2026-06-30T08:30:00Z",
         ),
     )
+    conn.execute(
+        "INSERT INTO source_health VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "x:watch:QuietSource",
+            "x",
+            "x_handle",
+            "QuietSource",
+            "healthy",
+            "2026-06-30T08:45:00Z",
+            None,
+            None,
+            "tweet-10",
+            "2026-06-30T08:45:00Z",
+            "x:watch:QuietSource",
+            "tweet-10",
+            None,
+            "2026-06-30T08:45:00Z",
+        ),
+    )
     conn.execute("INSERT INTO cursors VALUES (?, ?, ?)", ("rss:good", "item-1", "2026-06-30T08:00:00Z"))
     conn.execute("INSERT INTO cursors VALUES (?, ?, ?)", ("github-owner:stale", "repo-1", "2026-06-27T08:00:00Z"))
     conn.execute(
         "INSERT INTO cursors VALUES (?, ?, ?)",
         ("rss:https://broken.example.com/feed.xml", "item-2", "2026-06-27T09:00:00Z"),
+    )
+    conn.execute(
+        "INSERT INTO cursors VALUES (?, ?, ?)",
+        ("x:watch:QuietSource", "tweet-10", "2026-06-27T10:00:00Z"),
     )
     conn.execute(
         "INSERT INTO source_cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -337,15 +393,20 @@ import sys
 
 summary = json.load(open(sys.argv[1], encoding="utf-8"))
 assert summary["assessment"]["status"] == "hold", summary["assessment"]
-assert summary["watch_sources"]["total"] == 3, summary["watch_sources"]
+assert summary["watch_sources"]["total"] == 4, summary["watch_sources"]
 assert summary["source_health"]["attention_rows"] == 1, summary["source_health"]
 assert summary["source_health"]["inactive_attention_rows"] == 1, summary["source_health"]
+assert summary["source_health"]["stale_healthy_rows"] == 0, summary["source_health"]
+assert summary["source_health"]["inactive_stale_healthy_rows"] == 1, summary["source_health"]
 assert summary["source_health"]["recent_attention"][0]["watch_status"] == "active"
 assert summary["source_health"]["recent_inactive_attention"][0]["watch_status"] == "paused"
 assert summary["cursors"]["stale_rows"] == 1, summary["cursors"]
 assert summary["cursors"]["inactive_stale_rows"] == 1, summary["cursors"]
 assert summary["cursors"]["oldest_stale"][0]["watch_status"] == "active"
 assert summary["cursors"]["oldest_inactive_stale"][0]["watch_status"] == "missing"
+assert not any(
+    row["key"] == "x:watch:QuietSource" for row in summary["cursors"]["oldest_stale"]
+), summary["cursors"]
 assert summary["source_cards"]["recent"] == 1, summary["source_cards"]
 assert summary["decision_ledger"]["rows"] == 1, summary["decision_ledger"]
 assert summary["latest_workflow"]["blocked_source_rows_total"] == 2, summary["latest_workflow"]

@@ -1,5 +1,9 @@
 use super::*;
 
+const DIGEST_CANDIDATE_DELIVERY_TEXT_MAX_BYTES: usize = 12_000;
+const DIGEST_CANDIDATE_DELIVERY_OMISSION_NOTE: &str =
+    "\n\n_Additional source details were omitted to keep this notification deliverable._";
+
 impl Store {
     pub fn create_digest_candidate(
         &self,
@@ -413,8 +417,11 @@ impl Store {
                 delivery.id
             );
         }
-        let text = self.digest_candidate_delivery_text(&gate.candidate)?;
         let subject_line = digest_candidate_email_subject(&gate.candidate);
+        let (text, html) = Self::digest_candidate_email_body(
+            &subject_line,
+            self.digest_candidate_delivery_text(&gate.candidate)?,
+        )?;
         match self.send_cloudflare_email(
             account_id,
             api_token,
@@ -422,7 +429,7 @@ impl Store {
             &to,
             &subject_line,
             &text,
-            None,
+            Some(&html),
             None,
             api_base,
         ) {
@@ -511,8 +518,8 @@ impl Store {
                     .read_source_card(source_card_id)?
                     .with_context(|| format!("digest source card not found: {source_card_id}"))?;
                 if digest_source_card_is_knowledge_daily_briefing(&card) {
-                    return Ok(Self::knowledge_daily_briefing_delivery_text(
-                        candidate, &card,
+                    return Ok(Self::cap_digest_candidate_delivery_text(
+                        Self::knowledge_daily_briefing_delivery_text(candidate, &card),
                     ));
                 }
             }
@@ -525,7 +532,9 @@ impl Store {
             cards.push(card);
         }
         if cards.iter().any(digest_source_card_is_credential_reminder) {
-            return Ok(Self::credential_reminder_delivery_text(candidate, &cards));
+            return Ok(Self::cap_digest_candidate_delivery_text(
+                Self::credential_reminder_delivery_text(candidate, &cards),
+            ));
         }
         let topic = Self::digest_human_topic(&candidate.topic);
         let mut lines = vec![
@@ -575,7 +584,7 @@ impl Store {
                 candidate.source_card_ids.len().saturating_sub(cards.len())
             ));
         }
-        Ok(lines.join("\n"))
+        Ok(Self::cap_digest_candidate_delivery_text(lines.join("\n")))
     }
 
     pub(crate) fn knowledge_daily_briefing_delivery_text(
@@ -592,16 +601,7 @@ impl Store {
                 body
             )
         };
-        if text.len() <= 10_000 {
-            text
-        } else {
-            let mut excerpt = excerpt_preserving_whitespace(&text, 10_000);
-            excerpt.truncate(excerpt.trim_end().len());
-            excerpt.push_str(
-                "\n\n_Additional source details were omitted to keep this email deliverable._",
-            );
-            excerpt
-        }
+        Self::cap_digest_candidate_delivery_text(text)
     }
 
     pub(crate) fn credential_reminder_delivery_text(
@@ -681,6 +681,45 @@ impl Store {
             ));
         }
         lines.join("\n")
+    }
+
+    pub(crate) fn cap_digest_candidate_delivery_text(text: String) -> String {
+        Self::cap_digest_candidate_delivery_text_to(text, DIGEST_CANDIDATE_DELIVERY_TEXT_MAX_BYTES)
+    }
+
+    pub(crate) fn digest_candidate_email_body(
+        subject: &str,
+        text: String,
+    ) -> Result<(String, String)> {
+        let mut max_bytes = text.len().min(DIGEST_CANDIDATE_DELIVERY_TEXT_MAX_BYTES);
+        loop {
+            let current = Self::cap_digest_candidate_delivery_text_to(text.clone(), max_bytes);
+            match render_email_html_from_markdown(subject, &current) {
+                Ok(html) => return Ok((current, html)),
+                Err(error)
+                    if error.to_string().contains("notes are too long") && max_bytes > 2_000 =>
+                {
+                    max_bytes = (max_bytes * 3 / 4).max(2_000);
+                }
+                Err(error) => return Err(error).context("digest candidate email body is invalid"),
+            }
+        }
+    }
+
+    pub(crate) fn cap_digest_candidate_delivery_text_to(text: String, max_bytes: usize) -> String {
+        if text.len() <= max_bytes {
+            return text;
+        }
+        let note = DIGEST_CANDIDATE_DELIVERY_OMISSION_NOTE;
+        let budget = max_bytes.saturating_sub(note.len());
+        let mut capped = excerpt_preserving_whitespace(&text, budget);
+        capped.truncate(capped.trim_end().len());
+        capped.push_str(note);
+        if capped.len() <= max_bytes {
+            capped
+        } else {
+            excerpt_preserving_whitespace(&capped, max_bytes)
+        }
     }
 
     pub(crate) fn digest_human_topic(topic: &str) -> String {

@@ -85,8 +85,10 @@ Current status:
 - `Controlled Local Proof`:
   `scripts/job-radar-scheduled-local-proof` reruns the severe replay-backed
   scheduled-radar tests for the `job_radar` watch-source path, missing-snapshot
-  failure health, and MCP schedule/enqueue coverage. This is replay proof, not
-  live freshness, recurrence, or operational monitoring.
+  failure health, MCP schedule/enqueue coverage, and optional scheduled-report
+  email delivery metadata through a controlled Cloudflare Email-compatible
+  provider path. This is replay/provider-path proof, not live freshness, live
+  external email proof, recurrence, or operational monitoring.
 - `Controlled Local Proof`:
   `scripts/job-radar-failure-health-proof` and
   `scripts/job-radar-retry-recovery-local-proof` rerun the severe tests for
@@ -393,10 +395,14 @@ Use this pipeline for serious searches:
      operational-home monitoring, or live external delivery.
    - Use MCP `job_radar_schedule` / `job_radar_enqueue`, or the matching local
      `arcwell job radar-schedule` / `arcwell job radar-enqueue` CLI
-     subcommands, only when configured source ids exist. Replay snapshots are
-     Local Proof for scheduled worker behavior; `fetch_live=true` is explicit
-     policy/cost-gated live access and still needs recurrence proof before the
-     radar is called operational.
+     subcommands, only when configured source ids exist. Add `--email-to
+     <address>` on CLI schedules/enqueues, or a `delivery` object in MCP, only
+     when the recipient is authorized and the report should be delivered after
+     the worker compiles it. Replay snapshots are Local Proof for scheduled
+     worker behavior; `fetch_live=true` is explicit policy/cost-gated live
+     access, and scheduled report delivery is not live external email proof by
+     itself. The radar still needs recurrence proof before it is called
+     operational.
 
 ## Role Source Card
 
@@ -663,7 +669,8 @@ Use precise status language:
 - `Scaffold`: skill text, templates, or prompts exist.
 - `Local Proof`: fixture roles can be normalized, deduped, clustered, scored,
   imported from reviewed packets, reconciled through manual refresh, replayed
-  through scheduled job radar, and rejected when stale or low-fit.
+  through scheduled job radar, optionally routed through controlled report-email
+  delivery, and rejected when stale or low-fit.
 - `Production Data Proof`: a live pass over real sources produces source
   cards, clusters, fit scores, and a verified shortlist where apply-now roles
   are still live. Source-family boundary proof can also be production-data

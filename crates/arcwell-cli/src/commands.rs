@@ -1720,6 +1720,10 @@ pub(crate) enum JobSubcommand {
         cadence: String,
         #[arg(long, default_value = "active")]
         status: String,
+        #[arg(long)]
+        email_to: Option<String>,
+        #[arg(long)]
+        delivery_idempotency_key: Option<String>,
     },
     RadarEnqueue {
         profile_id: String,
@@ -1733,6 +1737,10 @@ pub(crate) enum JobSubcommand {
         source_snapshots_json: String,
         #[arg(long)]
         source_snapshots_path: Option<PathBuf>,
+        #[arg(long)]
+        email_to: Option<String>,
+        #[arg(long)]
+        delivery_idempotency_key: Option<String>,
     },
     RoleAdd {
         #[arg(long)]

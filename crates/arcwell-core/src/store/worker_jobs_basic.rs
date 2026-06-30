@@ -459,6 +459,10 @@ impl Store {
             report_artifact_id: None,
         })?;
         let weekly_report = self.compile_job_weekly_report(&profile.id, &scope)?;
+        let delivery_report = self.run_job_radar_weekly_report_delivery(
+            weekly_report.id.as_str(),
+            input.get("delivery"),
+        )?;
 
         if let Some(lineage) = input.get("lineage") {
             if let Some(source_key) = lineage.get("watch_source_key").and_then(Value::as_str) {
@@ -528,7 +532,81 @@ impl Store {
             "error_count": refresh_report.error_count,
             "errors": errors,
             "warnings": warnings,
+            "delivery": delivery_report,
         }))
+    }
+
+    pub(crate) fn run_job_radar_weekly_report_delivery(
+        &self,
+        weekly_report_id: &str,
+        delivery: Option<&Value>,
+    ) -> Result<Option<Value>> {
+        let Some(delivery) = delivery else {
+            return Ok(None);
+        };
+        if delivery.is_null() {
+            return Ok(None);
+        }
+        let Some(object) = delivery.as_object() else {
+            bail!("job radar delivery config must be an object");
+        };
+        let channel = object
+            .get("channel")
+            .and_then(Value::as_str)
+            .unwrap_or("email")
+            .to_string();
+        let subject = object
+            .get("subject")
+            .and_then(Value::as_str)
+            .context("job radar delivery missing subject")?
+            .to_string();
+        let target = object
+            .get("target")
+            .and_then(Value::as_str)
+            .context("job radar delivery missing target")?
+            .to_string();
+        let idempotency_key = object
+            .get("idempotency_key")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+
+        let prepared = self.prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: weekly_report_id.to_string(),
+            channel,
+            subject,
+            target,
+            idempotency_key,
+        })?;
+        if prepared.delivery.status != "prepared" {
+            return Ok(Some(json!({
+                "status": prepared.delivery.status,
+                "delivery_id": prepared.delivery.id,
+                "report_id": weekly_report_id,
+                "channel_message_id": prepared.delivery.channel_message_id,
+                "error": prepared.delivery.error,
+                "sent": false,
+            })));
+        }
+
+        let sent = self.send_job_weekly_report_delivery(JobWeeklyReportDeliverySendInput {
+            delivery_id: prepared.delivery.id.clone(),
+            telegram_bot_token: None,
+            email_account_id: None,
+            email_api_token: None,
+            email_from: None,
+            api_base: None,
+        })?;
+        Ok(Some(json!({
+            "status": sent.delivery.status,
+            "delivery_id": sent.delivery.id,
+            "report_id": weekly_report_id,
+            "channel_message_id": sent.delivery.channel_message_id,
+            "channel_delivery_attempt_id": sent.channel_delivery_attempt.as_ref().map(|attempt| attempt.id.clone()),
+            "sent": sent.channel_delivery_attempt.as_ref().map(|attempt| attempt.ok).unwrap_or(false),
+            "proof_level": sent.proof_level,
+            "non_claims": sent.non_claims,
+            "error": sent.delivery.error,
+        })))
     }
 
     pub(crate) fn guard_wiki_job_provider_policy(&self, job: &WikiJob) -> Result<()> {

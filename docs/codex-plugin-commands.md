@@ -253,18 +253,19 @@ typing part of the name. Use the displayed command name from the picker.
   manifest without recording sent/applied status, track application status,
   import reviewed JSON packets, refresh one configured job source from
   supplied page text/html or explicit live fetch, schedule or enqueue
-  replay-backed job-radar refresh jobs, compile local-proof company-target
-  scouting reports from durable company cards, reconcile caller-supplied
-  refresh observations, audit durable refresh history against the two-refresh
+  replay-backed job-radar refresh jobs, optionally carry report-delivery
+  metadata into the scheduled worker job, compile local-proof company-target
+  scouting reports from durable company cards, reconcile caller-supplied refresh
+  observations, audit durable refresh history against the two-refresh
   elapsed-time transition gate, compile local weekly reports, prepare
   weekly-report channel messages after channel-send authorization and privacy
-  checks, and explicitly send prepared weekly-report messages through a
-  provider path that records delivery attempts.
+  checks, and explicitly send prepared weekly-report messages through a provider
+  path that records delivery attempts.
 - They do not prove exhaustive live role discovery, broad market coverage,
   operational scheduled recurrence, broad source-health recurrence, or
-  operational job radar. Weekly-report provider-send is still not recurrence,
-  live source discovery, application submission, or proof that any employer was
-  contacted.
+  operational job radar. Weekly-report provider-send, including scheduled
+  report-delivery metadata, is still not recurrence, live source discovery,
+  application submission, or proof that any employer was contacted.
 
 ### Watch Sources And Adapters
 

@@ -78,6 +78,85 @@ fn x_recent_search_uses_sqlite_secret_and_updates_cursor() {
 }
 
 #[test]
+fn severe_x_recent_search_recovers_from_provider_rejected_stale_since_id() {
+    // CLAIM: X recent search recovers when an old stored since_id ages out of X's accepted window.
+    // PRECONDITIONS: A stale cursor exists and X rejects the first request with the provider's since_id freshness error.
+    // POSTCONDITIONS: Arcwell retries once without since_id, imports durable evidence, and advances the cursor only after success.
+    // ORACLE: captured request URLs, imported item, cursor value, source health, and sync-run cursor transition.
+    // SEVERITY: Severe because stale cursors otherwise permanently block scheduled freshness while looking configured.
+    let store = test_store("x-recent-stale-since-id-retry");
+    store
+        .set_secret_value("X_BEARER_TOKEN", "test-token", "x")
+        .unwrap();
+    store
+        .set_cursor("x:recent-search:from:openai", "100")
+        .unwrap();
+    let stale_cursor_error = r#"{
+      "errors": [
+        {
+          "parameters": { "since_id": ["100"] },
+          "message": "'since_id' must be a tweet id created after 2026-06-23T10:50Z. Please use a 'since_id' that is larger than 150"
+        }
+      ],
+      "title": "Invalid Request",
+      "detail": "One or more parameters to your request was invalid.",
+      "type": "https://api.twitter.com/2/problems/invalid-request"
+    }"#;
+    let success = r#"{
+      "data": [
+        {
+          "id": "220",
+          "author_id": "u1",
+          "text": "Recovered X recent search.",
+          "created_at": "2026-06-30T10:00:00Z"
+        }
+      ],
+      "includes": { "users": [{ "id": "u1", "username": "openai", "name": "OpenAI" }] },
+      "meta": { "newest_id": "220" }
+    }"#;
+    let (base, requests) = mock_recording_sequence_server(vec![
+        (
+            "400 Bad Request",
+            "",
+            stale_cursor_error,
+            "application/json",
+        ),
+        ("200 OK", "", success, "application/json"),
+    ]);
+
+    let report = store
+        .x_recent_search_with_base("from:openai", 10, &base)
+        .unwrap();
+
+    assert_eq!(report.imported, 1);
+    assert_eq!(
+        store
+            .get_cursor("x:recent-search:from:openai")
+            .unwrap()
+            .unwrap()
+            .value,
+        "220"
+    );
+    let captured = requests.lock().unwrap();
+    assert_eq!(captured.len(), 2);
+    assert!(captured[0].contains("since_id=100"), "{}", captured[0]);
+    assert!(!captured[1].contains("since_id="), "{}", captured[1]);
+    let health = store
+        .get_source_health("x:recent-search:from:openai")
+        .unwrap()
+        .expect("successful retry should write healthy source state");
+    assert_eq!(health.status, "healthy");
+    assert_eq!(health.cursor_value.as_deref(), Some("220"));
+    let stats = store.x_stats().unwrap();
+    assert_eq!(stats.latest_sync_runs[0].status, "completed");
+    assert_eq!(
+        stats.latest_sync_runs[0].previous_cursor.as_deref(),
+        Some("100")
+    );
+    assert_eq!(stats.latest_sync_runs[0].new_cursor.as_deref(), Some("220"));
+}
+
+#[test]
 fn severe_x_recent_search_refreshes_expired_bearer_before_provider_fetch() {
     // CLAIM: X provider fetches can recover from an expired stored bearer by refreshing OAuth first.
     // PRECONDITIONS: The environment has no bearer override, SQLite has an expired bearer, a refresh token, and a client id.

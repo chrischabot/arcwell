@@ -1479,6 +1479,27 @@ impl Store {
         Ok(events)
     }
 
+    pub(crate) fn list_job_source_refresh_new_role_status_events_recent(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<JobRoleStatusEvent>> {
+        let limit = limit.clamp(1, 500) as i64;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, role_id, run_id, status, previous_tier, current_tier, note, created_at
+            FROM job_role_status_events
+            WHERE status = 'new'
+              AND note = ?1
+            ORDER BY created_at DESC, id ASC
+            LIMIT ?2
+            "#,
+        )?;
+        rows(stmt.query_map(
+            params![JOB_SOURCE_REFRESH_NEW_ROLE_EVENT_NOTE, limit],
+            job_role_status_event_from_row,
+        )?)
+    }
+
     pub fn record_job_application(&self, input: JobApplicationInput) -> Result<JobApplication> {
         let input = normalize_job_application_input(input)?;
         self.read_job_role_card(&input.role_id)?
@@ -1571,8 +1592,24 @@ impl Store {
             .filter(|path| scored_role_ids.contains(&path.role_id))
             .collect::<Vec<_>>();
         let contacts = self.list_job_contacts()?;
-        let role_events =
+        let mut role_events =
             self.list_job_role_status_events_for_roles_recent(&scored_role_ids, 50)?;
+        let mut seen_role_events = role_events
+            .iter()
+            .map(|event| event.id.clone())
+            .collect::<BTreeSet<_>>();
+        for event in self.list_job_source_refresh_new_role_status_events_recent(50)? {
+            if seen_role_events.insert(event.id.clone()) {
+                role_events.push(event);
+            }
+        }
+        role_events.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        role_events.truncate(50);
         let body = render_job_weekly_report(
             &shortlist,
             &applications,
@@ -1849,9 +1886,17 @@ impl Store {
         let send_result: Result<(bool, u16, ChannelMessage, ChannelDeliveryAttempt)> =
             (|| match delivery.channel.as_str() {
                 "telegram" => {
-                    let token = input.telegram_bot_token.as_deref().context(
-                        "telegram_bot_token is required for telegram weekly report delivery",
-                    )?;
+                    let token = input
+                        .telegram_bot_token
+                        .clone()
+                        .or(self.configured_telegram_bot_token()?)
+                        .context(
+                            "TELEGRAM_BOT_TOKEN is required for telegram weekly report delivery",
+                        )?;
+                    let api_base = input
+                        .api_base
+                        .clone()
+                        .or(self.configured_telegram_api_base()?);
                     let chat_id = delivery
                         .target
                         .strip_prefix("telegram:chat:")
@@ -1883,40 +1928,47 @@ impl Store {
                     )?;
                     let report = self.send_existing_telegram_message_preflighted(
                         message_id,
-                        token,
+                        &token,
                         chat_id,
                         &weekly_report.body,
-                        input.api_base.as_deref(),
+                        api_base.as_deref(),
                     )?;
                     Ok((report.ok, report.status, report.message, report.delivery))
                 }
                 "email" => {
                     let account_id = input
                         .email_account_id
-                        .as_deref()
+                        .clone()
+                        .or(self.configured_cloudflare_account_id()?)
                         .context("email_account_id is required for email weekly report delivery")?;
                     let api_token = input
                         .email_api_token
-                        .as_deref()
+                        .clone()
+                        .or(self.configured_cloudflare_email_api_token()?)
                         .context("email_api_token is required for email weekly report delivery")?;
                     let from = input
                         .email_from
-                        .as_deref()
+                        .clone()
+                        .or(self.configured_agent_email_from()?)
                         .context("email_from is required for email weekly report delivery")?;
+                    let api_base = input
+                        .api_base
+                        .clone()
+                        .or(self.configured_cloudflare_email_api_base()?);
                     let to = delivery
                         .target
                         .strip_prefix("email:")
                         .unwrap_or(&delivery.target);
-                    let subject = format!("Arcwell job weekly report: {}", weekly_report.scope);
+                    let subject = format!("Arcwell job scan: {}", weekly_report.scope);
                     let report = self.send_existing_cloudflare_email_message_with_context(
-                        account_id,
-                        api_token,
-                        from,
+                        &account_id,
+                        &api_token,
+                        &from,
                         message_id,
                         to,
                         &subject,
                         &weekly_report.body,
-                        input.api_base.as_deref(),
+                        api_base.as_deref(),
                         "job_weekly_report_delivery",
                         "Job weekly report email delivery",
                         json!({

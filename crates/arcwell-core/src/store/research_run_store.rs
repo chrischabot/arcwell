@@ -2,8 +2,11 @@ use super::*;
 
 impl Store {
     pub fn ops_snapshot(&self) -> Result<OpsSnapshot> {
+        let health = self.health()?;
+        let worker = health.latest_worker_heartbeat.clone();
         Ok(OpsSnapshot {
-            health: self.health()?,
+            health,
+            worker,
             x_stats: self.x_stats()?,
             radar_runs: self.list_radar_runs()?.into_iter().take(50).collect(),
             radar_source_quality: self.list_all_radar_source_quality()?,

@@ -1519,6 +1519,147 @@ priority = 10
 }
 
 #[test]
+fn severe_generic_digest_candidate_email_caps_body_before_provider_send() {
+    // CLAIM: Generic digest candidate delivery has its own body-length guard,
+    // not just the daily-briefing renderer, so approved source-card-heavy
+    // candidates cannot get stuck in the delivery ledger as "notes are too long".
+    // ORACLE: a generic approved candidate with pathological but valid source
+    // URLs and evidence sends through the Cloudflare Email path, records the
+    // channel attempt, stays below validate_notes' hard limit, and marks the
+    // omission explicitly for the reader.
+    // SEVERITY: Severe because a successful analysis pipeline is worthless if
+    // the final outbound delivery silently wedges on large evidence sets.
+    let store = test_store("generic-digest-candidate-email-body-cap");
+    fs::write(
+        store.paths.home.join("arcwell-policy.toml"),
+        r#"
+[[rules]]
+id = "allow-large-source-card-writes"
+effect = "allow"
+action = "source.write"
+package = "arcwell-llm-wiki"
+provider = "x"
+source = "source_card_add"
+reason = "allow large generic digest evidence source cards"
+priority = 20
+
+[[rules]]
+id = "allow-large-reviewed-digest-email"
+effect = "allow"
+action = "digest_candidate.deliver"
+package = "arcwell-x"
+source = "x_digest_delivery"
+channel = "email"
+subject = "email:friend@example.com"
+target = "email:friend@example.com"
+reason = "allow reviewed large digest email destination"
+priority = 10
+
+[[rules]]
+id = "allow-large-reviewed-digest-email-send"
+effect = "allow"
+action = "channel.send"
+package = "arcwell-email"
+provider = "cloudflare_email"
+channel = "email"
+subject = "email:friend@example.com"
+target = "friend@example.com"
+reason = "allow reviewed large digest email provider send"
+priority = 10
+"#,
+    )
+    .unwrap();
+    store
+        .authorize_channel_subject("email", "email:friend@example.com", false, false, true)
+        .unwrap();
+
+    let cards = (0..12)
+        .map(|index| {
+            let long_query = "launch-agent-sdk-mcp-benchmark".repeat(70);
+            store
+                .add_source_card(SourceCardInput {
+                    title: format!("X: huge_source_{index} 2069000000000000{index:02}"),
+                    url: format!(
+                        "https://x.com/huge_source_{index}/status/2069000000000000{index:02}?{}",
+                        long_query
+                    ),
+                    source_type: "x_tweet".to_string(),
+                    provider: "x".to_string(),
+                    summary: format!(
+                        "Large but valid digest evidence {index}: an AI launch, MCP adapter, benchmark reaction, and developer tooling reception are all described here. {}",
+                        "substantial context ".repeat(300)
+                    ),
+                    claims: vec![SourceClaim {
+                        claim: format!(
+                            "Large digest item {index} says a new agent SDK launch included MCP adapters, benchmark positioning, and developer reception. {}",
+                            "reader-useful context ".repeat(300)
+                        ),
+                        kind: "fact".to_string(),
+                        confidence: 0.82,
+                    }],
+                    retrieved_at: None,
+                    metadata: json!({ "x_id": format!("2069000000000000{index:02}") }),
+                })
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let source_ids = cards.iter().map(|card| card.id.clone()).collect::<Vec<_>>();
+    let digest = store
+        .create_digest_candidate(
+            "X bookmark trend: large AI launch evidence package",
+            &source_ids,
+        )
+        .unwrap();
+    let digest = store
+        .approve_digest_candidate(&digest.id, Some("severe-test"), Some("large generic body"))
+        .unwrap();
+    let body = store.digest_candidate_delivery_text(&digest).unwrap();
+    assert!(body.len() <= 12_000, "body length was {}", body.len());
+    assert!(
+        body.contains("Additional source details were omitted"),
+        "generic digest cap must be visible to the reader:\n{body}"
+    );
+    validate_notes(&body).unwrap();
+
+    let api = mock_status_server(
+        "200 OK",
+        "",
+        r#"{"success":true,"result":{"id":"large_digest_email_123"}}"#,
+        "application/json",
+    );
+    let delivered = store
+        .send_digest_candidate_email(
+            &digest.id,
+            "account123",
+            "SECRET_CF_DIGEST_TOKEN",
+            "agent@example.com",
+            "friend@example.com",
+            Some("large-generic-digest-email-key"),
+            Some(&api),
+        )
+        .unwrap();
+    assert_eq!(delivered.digest_delivery.status, "sent");
+    let email = delivered.email.as_ref().expect("email send report");
+    assert!(email.ok);
+    assert!(email.message.body.len() <= 12_000);
+    assert!(
+        email
+            .message
+            .body
+            .contains("Additional source details were omitted")
+    );
+    assert!(
+        !delivered
+            .digest_delivery
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("notes are too long")
+    );
+    assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
+}
+
+#[test]
 fn severe_digest_candidate_notification_is_report_not_link_dump() {
     // CLAIM: A delivered digest is human-usable without clicking every X
     // link; source URLs are citations, not the product.

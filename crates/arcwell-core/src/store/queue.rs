@@ -474,10 +474,35 @@ impl Store {
         cadence: &str,
         status: &str,
     ) -> Result<WatchSource> {
+        self.schedule_job_radar_refresh_with_delivery(
+            profile_id,
+            scope,
+            source_ids,
+            fetch_live,
+            source_snapshots,
+            cadence,
+            status,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn schedule_job_radar_refresh_with_delivery(
+        &self,
+        profile_id: &str,
+        scope: &str,
+        source_ids: Vec<String>,
+        fetch_live: bool,
+        source_snapshots: Value,
+        cadence: &str,
+        status: &str,
+        delivery: Option<Value>,
+    ) -> Result<WatchSource> {
         let profile = self.require_job_profile(profile_id)?;
         let scope = sanitize_required_job_text(scope, "job radar scope", JOB_MAX_TEXT)?;
         let source_ids = self.validate_job_source_ids(source_ids)?;
         let source_snapshots = sanitize_work_json(source_snapshots)?;
+        let delivery = delivery.map(sanitize_work_json).transpose()?;
         validate_watch_source_cadence(cadence)?;
         validate_watch_source_status(status)?;
         self.upsert_watch_source(WatchSourceInput {
@@ -493,6 +518,7 @@ impl Store {
                 "source_ids": source_ids,
                 "fetch_live": fetch_live,
                 "source_snapshots": source_snapshots,
+                "delivery": delivery,
             }),
         })
     }
@@ -512,6 +538,27 @@ impl Store {
             fetch_live,
             source_snapshots,
             None,
+            None,
+        )
+    }
+
+    pub fn enqueue_job_radar_refresh_job_with_delivery(
+        &self,
+        profile_id: &str,
+        scope: &str,
+        source_ids: Vec<String>,
+        fetch_live: bool,
+        source_snapshots: Value,
+        delivery: Option<Value>,
+    ) -> Result<WikiJob> {
+        self.enqueue_job_radar_refresh_job_with_lineage(
+            profile_id,
+            scope,
+            source_ids,
+            fetch_live,
+            source_snapshots,
+            delivery,
+            None,
         )
     }
 
@@ -522,12 +569,14 @@ impl Store {
         source_ids: Vec<String>,
         fetch_live: bool,
         source_snapshots: Value,
+        delivery: Option<Value>,
         lineage: Option<Value>,
     ) -> Result<WikiJob> {
         let profile = self.require_job_profile(profile_id)?;
         let scope = sanitize_required_job_text(scope, "job radar scope", JOB_MAX_TEXT)?;
         let source_ids = self.validate_job_source_ids(source_ids)?;
         let source_snapshots = sanitize_work_json(source_snapshots)?;
+        let delivery = delivery.map(sanitize_work_json).transpose()?;
         let proof_level =
             job_radar_refresh_derived_proof_level(fetch_live, &source_ids, &source_snapshots)?;
         let mut input = json!({
@@ -537,6 +586,7 @@ impl Store {
             "fetch_live": fetch_live,
             "source_snapshots": source_snapshots,
             "proof_level": proof_level,
+            "delivery": delivery,
         });
         if let Some(lineage) = lineage {
             input["lineage"] = sanitize_work_json(lineage)?;
@@ -2302,6 +2352,7 @@ impl Store {
                         source_ids,
                         fetch_live,
                         source_snapshots,
+                        source.metadata.get("delivery").cloned(),
                         Some(json!({
                             "trigger": "watch_source_due",
                             "watch_source_id": source.id,

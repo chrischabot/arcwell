@@ -770,7 +770,7 @@ fn severe_x_ops_and_doctor_surface_drift_without_secret_leak() {
     store
             .conn
             .execute(
-                "UPDATE x_projections SET status = 'failed', last_error = 'projection failed token=sk-projection-secret' WHERE entity_id = 'opsdrift1'",
+                "UPDATE x_projections SET status = 'failed', last_error = 'projection failed token=fake_projection_secret_for_redaction' WHERE entity_id = 'opsdrift1'",
                 [],
             )
             .unwrap();
@@ -780,7 +780,7 @@ fn severe_x_ops_and_doctor_surface_drift_without_secret_leak() {
             "x",
             "x_monitor",
             "opsdrift",
-            "provider failed access_token=sk-source-health-secret",
+            "provider failed access_token=fake_source_health_secret_for_redaction",
         )
         .unwrap();
     let leaked_sync_secret = "ghp_cccccccccccccccccccccccccccccccccccccccccccccccc";
@@ -813,6 +813,19 @@ fn severe_x_ops_and_doctor_surface_drift_without_secret_leak() {
         .unwrap();
 
     let ops = store.ops_snapshot().unwrap();
+    assert_eq!(
+        ops.worker.as_ref().map(|worker| worker.worker_id.as_str()),
+        Some("worker-test"),
+        "ops snapshot must expose worker heartbeat at the top level"
+    );
+    assert_eq!(
+        ops.health
+            .latest_worker_heartbeat
+            .as_ref()
+            .map(|worker| worker.worker_id.as_str()),
+        Some("worker-test"),
+        "health heartbeat remains available for compatibility"
+    );
     assert_eq!(ops.x_stats.drift.tweets_without_fts, 1);
     assert_eq!(ops.x_stats.drift.projection_failures, 1);
     assert_eq!(ops.x_stats.drift.non_healthy_sources, 1);
@@ -845,9 +858,13 @@ fn severe_x_ops_and_doctor_surface_drift_without_secret_leak() {
         ops.health.warnings
     );
     let ops_json = serde_json::to_string(&ops).unwrap();
+    assert!(ops_json.contains("\"worker\""), "{ops_json}");
     assert!(ops_json.contains("[REDACTED]"), "{ops_json}");
     assert!(!ops_json.contains(leaked_sync_secret), "{ops_json}");
-    assert!(!ops_json.contains("sk-source-health-secret"), "{ops_json}");
+    assert!(
+        !ops_json.contains("fake_source_health_secret_for_redaction"),
+        "{ops_json}"
+    );
 
     let doctor = store
         .doctor(DoctorOptions {
