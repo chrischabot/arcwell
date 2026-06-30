@@ -206,6 +206,16 @@ pub(crate) fn provider_probe_evidence_passes(
             .get("success")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        ProviderProbeEvidence::CloudflareAccount => {
+            value
+                .get("success")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                && value
+                    .pointer("/result/id")
+                    .and_then(Value::as_str)
+                    .is_some()
+        }
     }
 }
 
@@ -237,6 +247,9 @@ pub(crate) fn provider_probe_success_evidence(
         }
         ProviderProbeEvidence::CloudflareTokenVerify => {
             "provider accepted credential and verified Cloudflare API token".to_string()
+        }
+        ProviderProbeEvidence::CloudflareAccount => {
+            "provider accepted credential and returned Cloudflare account details".to_string()
         }
     }
 }

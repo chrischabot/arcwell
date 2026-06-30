@@ -747,6 +747,16 @@ fn severe_x_repair_health_reconciles_success_and_defers_quota_without_fake_green
     let later_success = "2026-06-25T05:10:00+00:00";
     let expired_backoff = "2026-06-25T06:00:00+00:00";
     store
+        .upsert_watch_source(WatchSourceInput {
+            source_kind: "x_handle".to_string(),
+            locator: "quota".to_string(),
+            label: "Quota".to_string(),
+            cadence: "warm".to_string(),
+            status: "active".to_string(),
+            metadata: json!({ "test": true }),
+        })
+        .unwrap();
+    store
         .conn
         .execute(
             r#"
@@ -758,7 +768,13 @@ fn severe_x_repair_health_reconciles_success_and_defers_quota_without_fake_green
                   ('x:bookmarks', 'x', 'x_import_bookmarks', 'bookmarks', 'failed',
                    NULL, ?1, 'expired bearer', NULL, NULL, NULL, NULL, ?3, ?1),
                   ('x:watch:quota', 'x', 'x_monitor', 'quota', 'rate_limited',
-                   NULL, ?1, 'rate limit', NULL, NULL, 'x:watch:quota', NULL, ?3, ?1)
+                   NULL, ?1, 'rate limit', NULL, NULL, 'x:watch:quota', NULL, ?3, ?1),
+                  ('x:handle:legacy-following-noise', 'x', 'x_handle', 'legacy-following-noise',
+                   'failed', NULL, ?1, 'policy deferred worker.enqueue', NULL, NULL,
+                   NULL, NULL, ?3, ?1),
+                  ('x:watch:legacy-monitor-noise', 'x', 'x_monitor', 'legacy-monitor-noise',
+                   'failed', NULL, ?1, 'old full-following monitor failure', NULL, NULL,
+                   NULL, NULL, ?3, ?1)
                 "#,
             params![old_failure, later_success, expired_backoff],
         )
@@ -803,14 +819,36 @@ fn severe_x_repair_health_reconciles_success_and_defers_quota_without_fake_green
             metadata: json!({}),
         })
         .unwrap();
+    store
+        .record_x_sync_run(XSyncRunInsert {
+            account_id: None,
+            stream: "watch_monitor",
+            transport: "x_api",
+            status: "failed",
+            started_at: old_failure,
+            completed_at: old_failure,
+            seen: 0,
+            inserted: 0,
+            updated: 0,
+            skipped_duplicates: 0,
+            rejected: 0,
+            cursor_key: Some("x:watch:legacy-monitor-noise"),
+            previous_cursor: None,
+            new_cursor: None,
+            error: Some("old full-following monitor failure"),
+            metadata: json!({}),
+        })
+        .unwrap();
 
     let before = store.x_stats().unwrap();
-    assert_eq!(before.drift.non_healthy_sources, 2);
+    assert_eq!(before.drift.non_healthy_sources, 4);
     assert_eq!(before.unresolved_failed_sync_runs, 1);
 
     let report = store.x_repair_health(24, 100).unwrap();
     assert_eq!(report.repaired_bookmark_health, 1);
     assert_eq!(report.repaired_watch_health, 0);
+    assert_eq!(report.retired_legacy_x_handle_health, 1);
+    assert_eq!(report.retired_orphan_x_monitor_health, 1);
     assert_eq!(report.rate_limited_deferred, 1);
 
     let bookmark = store.get_source_health("x:bookmarks").unwrap().unwrap();
@@ -819,6 +857,18 @@ fn severe_x_repair_health_reconciles_success_and_defers_quota_without_fake_green
     let quota = store.get_source_health("x:watch:quota").unwrap().unwrap();
     assert_eq!(quota.status, "rate_limited");
     assert!(quota.next_run_at.unwrap() > now());
+    assert!(
+        store
+            .get_source_health("x:handle:legacy-following-noise")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_source_health("x:watch:legacy-monitor-noise")
+            .unwrap()
+            .is_none()
+    );
 
     let after = store.x_stats().unwrap();
     assert_eq!(after.drift.non_healthy_sources, 0);

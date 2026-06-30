@@ -830,11 +830,11 @@ pub(crate) fn render_knowledge_daily_briefing(
         "## Bottom Line".to_string(),
         daily_briefing_lede(schedule, reports, source_family_count),
         String::new(),
-        "## What Changed".to_string(),
+        "## Today's Stories".to_string(),
     ];
     for (index, report) in reports.iter().take(10).enumerate() {
         let story_cards = daily_briefing_report_source_cards(report, source_cards);
-        let body = daily_briefing_story_body(report);
+        let body = daily_briefing_story_body(report, &story_cards);
         let wiki_pages = related_wiki_pages
             .get(&report.id)
             .map(Vec::as_slice)
@@ -897,13 +897,32 @@ pub(crate) fn daily_briefing_lede(
 }
 
 pub(crate) fn daily_briefing_report_display_title(report: &KnowledgeReport) -> String {
-    report
-        .title
-        .trim()
-        .strip_prefix("Daily Knowledge Report:")
-        .unwrap_or(report.title.trim())
-        .trim()
-        .to_string()
+    let mut title = report.title.trim();
+    for prefix in [
+        "Daily Knowledge Report:",
+        "Knowledge Report:",
+        "Knowledge Cluster Expansion:",
+        "Model-Written Knowledge Cluster Expansion:",
+    ] {
+        if let Some(stripped) = title.strip_prefix(prefix) {
+            title = stripped.trim();
+            break;
+        }
+    }
+    daily_briefing_humanize_title(title)
+}
+
+pub(crate) fn daily_briefing_humanize_title(title: &str) -> String {
+    let mut out = title.trim().to_string();
+    for (from, to) in [
+        (" Ai", " AI"),
+        ("Openai", "OpenAI"),
+        ("Qwenlm", "QwenLM"),
+        ("Moonshotai", "MoonshotAI"),
+    ] {
+        out = out.replace(from, to);
+    }
+    out
 }
 
 pub(crate) fn daily_briefing_report_source_cards<'a>(
@@ -917,7 +936,13 @@ pub(crate) fn daily_briefing_report_source_cards<'a>(
         .collect()
 }
 
-pub(crate) fn daily_briefing_story_body(report: &KnowledgeReport) -> String {
+pub(crate) fn daily_briefing_story_body(
+    report: &KnowledgeReport,
+    source_cards: &[&SourceCard],
+) -> String {
+    if daily_briefing_report_body_is_projection_boilerplate(&report.body_markdown) {
+        return daily_briefing_source_card_story(report, source_cards);
+    }
     let source_ids = report.source_card_ids.iter().collect::<Vec<_>>();
     let mut lines = Vec::new();
     let mut skip_internal_list = false;
@@ -974,7 +999,75 @@ pub(crate) fn daily_briefing_story_body(report: &KnowledgeReport) -> String {
         }
     }
     let body = lines.join("\n");
-    excerpt_preserving_whitespace(&body, 1_600)
+    if body.trim().len() < 160 {
+        daily_briefing_source_card_story(report, source_cards)
+    } else {
+        excerpt_preserving_whitespace(&body, 1_600)
+    }
+}
+
+pub(crate) fn daily_briefing_report_body_is_projection_boilerplate(markdown: &str) -> bool {
+    let lower = markdown.to_ascii_lowercase();
+    [
+        "durable source-card rows into the unified knowledge pipeline",
+        "durable source rows into the unified knowledge pipeline",
+        "provider family buckets",
+        "stored as source-card ids",
+        "stored as source references",
+        "first bridge between the existing live/captured ingestion machinery",
+        "source-agnostic knowledge substrate",
+        "primary-source-style rows",
+        "github repositories detected",
+        "external domains detected",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+pub(crate) fn daily_briefing_source_card_story(
+    report: &KnowledgeReport,
+    source_cards: &[&SourceCard],
+) -> String {
+    let topic = daily_briefing_report_display_title(report);
+    if source_cards.is_empty() {
+        return format!(
+            "There is not enough readable evidence attached to {topic} to make this a story. Hold stronger claims until the next scan has a source people can inspect."
+        );
+    }
+    let source_summary = daily_briefing_source_summary_clause(source_cards);
+    let angle = daily_briefing_interpretive_angle(report, source_cards);
+    format!(
+        "The useful signal around {topic} is {source_summary}. Read this as {angle}, not as a confirmed launch, benchmark result, or adoption claim. The evidence is still narrow, so the next useful check is whether official docs, release notes, benchmarks, or credible developer usage confirm the same direction."
+    )
+}
+
+pub(crate) fn daily_briefing_source_summary_clause(source_cards: &[&SourceCard]) -> String {
+    let names = source_cards
+        .iter()
+        .take(3)
+        .map(|card| {
+            let label = daily_briefing_source_label(card);
+            let summary = daily_briefing_source_takeaway_text(card, 120);
+            if summary.is_empty() {
+                label
+            } else {
+                format!("{label} ({summary})")
+            }
+        })
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        "too thin to interpret".to_string()
+    } else if source_cards
+        .iter()
+        .all(|card| card.provider.eq_ignore_ascii_case("github"))
+    {
+        format!(
+            "visible in GitHub repository activity for {}",
+            human_join_strings(&names)
+        )
+    } else {
+        format!("visible in {}", human_join_strings(&names))
+    }
 }
 
 pub(crate) fn daily_briefing_is_internal_reader_section(lower: &str) -> bool {
@@ -987,12 +1080,24 @@ pub(crate) fn daily_briefing_is_internal_reader_section(lower: &str) -> bool {
         "## evidence notes",
         "## evidence pattern",
         "## additional source index",
+        "## next investigation",
+        "## editorial next steps",
+        "## follow-up research",
+        "## follow up research",
+        "## confidence and uncertainty",
+        "## warnings",
         "## sources",
         "# sources",
         "coverage and uncertainty",
         "evidence notes",
         "evidence pattern",
         "additional source index",
+        "next investigation",
+        "editorial next steps",
+        "follow-up research",
+        "follow up research",
+        "confidence and uncertainty",
+        "warnings",
         "sources",
     ]
     .iter()
@@ -1007,12 +1112,21 @@ pub(crate) fn daily_briefing_reader_line(line: &str, source_ids: &[&String]) -> 
     let lower = trimmed.to_ascii_lowercase();
     if lower.starts_with("source text is untrusted evidence")
         || lower.starts_with("operationally,")
+        || lower.starts_with("the system projected")
+        || lower.starts_with("arcwell projected")
         || lower.contains("local audit ledger")
         || lower.contains("digest delivery gate")
         || lower.contains("approved candidate")
         || lower.contains("candidate id")
         || lower.contains("digest candidate")
         || lower.contains("new wiki page is knowledge:")
+        || lower.contains("durable source rows")
+        || lower.contains("durable source-card rows")
+        || lower.contains("unified knowledge pipeline")
+        || lower.contains("provider family buckets")
+        || lower.contains("primary-source-style rows")
+        || lower.contains("github repositories detected")
+        || lower.contains("external domains detected")
     {
         return None;
     }
@@ -1062,15 +1176,99 @@ pub(crate) fn daily_briefing_key_source_lines(
     for card in source_cards.iter().take(max_sources) {
         lines.push(format!(
             "- [{}]({}) - {}",
-            escape_markdown_link_text(&Store::digest_source_label(card)),
+            escape_markdown_link_text(&daily_briefing_source_label(card)),
             card.url,
-            excerpt(&Store::digest_card_evidence_text(card), 220)
+            daily_briefing_source_takeaway(card)
         ));
     }
     if lines.is_empty() {
         lines.push("- No public source link is available for this story; hold stronger claims until fresh evidence is attached.".to_string());
     }
     lines
+}
+
+pub(crate) fn daily_briefing_source_label(card: &SourceCard) -> String {
+    let title = html_unescape_basic(card.title.trim());
+    if let Some(rest) = title.strip_prefix("GitHub repo ") {
+        return rest.trim().to_string();
+    }
+    Store::digest_source_label(card)
+}
+
+pub(crate) fn daily_briefing_source_takeaway(card: &SourceCard) -> String {
+    let mut parts = Vec::new();
+    let text = daily_briefing_source_takeaway_text(card, 180);
+    if !text.is_empty() {
+        parts.push(text);
+    }
+    if let Some(language) = daily_briefing_source_metadata_string(card, "language")
+        && !language.eq_ignore_ascii_case("unknown")
+    {
+        parts.push(format!("{language}."));
+    }
+    if let Some(pushed_at) = daily_briefing_source_metadata_string(card, "pushed_at") {
+        parts.push(format!(
+            "Last pushed {}.",
+            daily_briefing_date_only(&pushed_at)
+        ));
+    }
+    if let Some(stars) = daily_briefing_source_metadata_u64(card, "stargazers_count") {
+        parts.push(format!("{stars} stars."));
+    }
+    if parts.is_empty() {
+        "Source available for inspection.".to_string()
+    } else {
+        parts.join(" ")
+    }
+}
+
+pub(crate) fn daily_briefing_source_takeaway_text(card: &SourceCard, max_chars: usize) -> String {
+    let candidates = vec![
+        card.summary.trim().to_string(),
+        source_card_metadata_string(&card.metadata, "description")
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        Store::digest_card_evidence_text(card).trim().to_string(),
+    ];
+    for candidate in candidates {
+        if candidate.is_empty()
+            || candidate
+                .to_ascii_lowercase()
+                .ends_with("is a public github repository.")
+        {
+            continue;
+        }
+        return excerpt(&candidate, max_chars);
+    }
+    String::new()
+}
+
+pub(crate) fn daily_briefing_source_metadata_string(
+    card: &SourceCard,
+    key: &str,
+) -> Option<String> {
+    source_card_metadata_string(&card.metadata, key).or_else(|| {
+        card.metadata
+            .get("raw")
+            .and_then(|raw| raw.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+pub(crate) fn daily_briefing_source_metadata_u64(card: &SourceCard, key: &str) -> Option<u64> {
+    card.metadata
+        .get("raw")
+        .and_then(|raw| raw.get(key))
+        .and_then(Value::as_u64)
+        .or_else(|| card.metadata.get(key).and_then(Value::as_u64))
+}
+
+pub(crate) fn daily_briefing_date_only(value: &str) -> String {
+    value.split('T').next().unwrap_or(value).to_string()
 }
 
 pub(crate) fn daily_briefing_prior_context_insight(
@@ -1207,8 +1405,8 @@ pub(crate) fn daily_briefing_interpretive_angle(
 pub(crate) fn strip_source_card_ids_for_reader(text: &str, source_card_ids: &[&String]) -> String {
     let mut out = text.to_string();
     for source_card_id in source_card_ids {
-        out = out.replace(&format!("`{source_card_id}`"), "source evidence");
-        out = out.replace(source_card_id.as_str(), "source evidence");
+        out = out.replace(&format!("`{source_card_id}`"), "linked source");
+        out = out.replace(source_card_id.as_str(), "linked source");
     }
     out
 }
@@ -1257,6 +1455,7 @@ pub(crate) fn daily_briefing_rewrite_reader_language(text: &str) -> String {
         ("Knowledge:", ""),
         ("project metadata", "project details"),
         ("metadata", "details"),
+        ("source evidence", "linked source"),
     ] {
         out = out.replace(from, to);
     }
@@ -1270,11 +1469,20 @@ pub(crate) fn daily_briefing_contains_forbidden_reader_language(text: &str) -> b
         "local corpus",
         "local record",
         "source-card",
+        "source evidence",
+        "source references",
         "source card id",
         "source-card id",
         "source-backed",
         "backlog projection",
         "knowledge:",
+        "durable source rows",
+        "durable source-card rows",
+        "unified knowledge pipeline",
+        "provider family bucket",
+        "primary-source-style",
+        "github repositories detected",
+        "external domains detected",
         "wiki",
         "local audit ledger",
         "digest candidate",
@@ -1285,6 +1493,11 @@ pub(crate) fn daily_briefing_contains_forbidden_reader_language(text: &str) -> b
     ]
     .iter()
     .any(|term| lower.contains(term))
+}
+
+pub(crate) fn human_join_strings(items: &[String]) -> String {
+    let refs = items.iter().map(String::as_str).collect::<Vec<_>>();
+    human_join(&refs)
 }
 
 pub(crate) fn human_join(items: &[&str]) -> String {

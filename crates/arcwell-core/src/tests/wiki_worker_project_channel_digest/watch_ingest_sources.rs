@@ -1592,6 +1592,31 @@ fn severe_github_owner_job_defers_before_network_when_credential_probe_failed() 
 }
 
 #[test]
+fn severe_github_fetch_uses_stored_github_token_before_env_fallback() {
+    // CLAIM: GitHub repo/owner fetches use Arcwell's managed local secret
+    // store, not only the process environment.
+    // ORACLE: configured_github_api_token returns the stored GITHUB_TOKEN in
+    // a fresh test store without relying on an env var.
+    // SEVERITY: Severe because env-only fetches silently become
+    // unauthenticated in the resident worker and hit IP rate limits even
+    // though provider probe says GitHub is healthy.
+    let store = test_store("github-fetch-stored-token");
+    store
+        .set_secret_value_with_metadata(
+            "GITHUB_TOKEN",
+            "ghp_stored_token_for_fetch_path",
+            "github",
+            Some("github"),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        store.configured_github_api_token().unwrap().as_deref(),
+        Some("ghp_stored_token_for_fetch_path")
+    );
+}
+
+#[test]
 fn arxiv_parser_extracts_entries_and_authors() {
     let entries = parse_arxiv_entries(
         r#"

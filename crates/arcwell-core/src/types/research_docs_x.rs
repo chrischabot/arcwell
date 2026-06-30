@@ -921,6 +921,8 @@ pub struct XRateLimitDeferReport {
 pub struct XHealthRepairReport {
     pub repaired_bookmark_health: usize,
     pub repaired_watch_health: usize,
+    pub retired_legacy_x_handle_health: usize,
+    pub retired_orphan_x_monitor_health: usize,
     pub rate_limited_scanned: usize,
     pub rate_limited_deferred: usize,
     pub defer_until: String,

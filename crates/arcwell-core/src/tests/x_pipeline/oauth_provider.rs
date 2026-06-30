@@ -448,6 +448,57 @@ priority = 20
 }
 
 #[test]
+fn severe_cloudflare_provider_probe_uses_account_endpoint_for_account_tokens() {
+    // CLAIM: Cloudflare provider probes validate the token against the
+    // configured account when an account id is available, instead of assuming
+    // every useful Cloudflare token passes /user/tokens/verify.
+    // ORACLE: the default Cloudflare probe spec is rewritten to the account
+    // endpoint and expects account response evidence; injected loopback URLs
+    // are left alone for deterministic tests.
+    // SEVERITY: Severe because Wrangler/account-scoped tokens can be valid
+    // for the actual email/worker operations while failing the user-token
+    // verify endpoint, creating false credential outages.
+    let store = test_store("provider-credential-probe-cloudflare-account");
+    store
+        .set_secret_value_with_metadata(
+            "CLOUDFLARE_ACCOUNT_ID",
+            "0123456789abcdef0123456789abcdef",
+            "cloudflare",
+            Some("cloudflare"),
+            None,
+        )
+        .unwrap();
+    let mut spec = provider_credential_probe_specs(&["cloudflare".to_string()])
+        .unwrap()
+        .remove(0);
+    store
+        .prepare_provider_credential_probe_spec(&mut spec)
+        .unwrap();
+    assert_eq!(
+        spec.url,
+        "https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef"
+    );
+    assert!(matches!(
+        spec.evidence,
+        ProviderProbeEvidence::CloudflareAccount
+    ));
+
+    let mut injected = test_provider_probe_spec(
+        "cloudflare",
+        "CLOUDFLARE_API_TOKEN",
+        "http://127.0.0.1:9999/cloudflare",
+    );
+    store
+        .prepare_provider_credential_probe_spec(&mut injected)
+        .unwrap();
+    assert_eq!(injected.url, "http://127.0.0.1:9999/cloudflare");
+    assert!(matches!(
+        injected.evidence,
+        ProviderProbeEvidence::CloudflareTokenVerify
+    ));
+}
+
+#[test]
 fn severe_provider_credential_probe_keeps_policy_missing_quota_failures_visible_and_redacted() {
     // CLAIM: provider credential probing keeps partial failures explicit and
     // fails closed before secret reads/network when policy denies a provider.

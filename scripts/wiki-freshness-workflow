@@ -248,6 +248,8 @@ def write_readme(path: Path, summary: dict) -> None:
         lines.append(f"- DB decision ledger export: `{summary['artifacts']['db_decision_ledger_export_dir']}`")
     if summary["artifacts"].get("db_decision_ledger_import_dir"):
         lines.append(f"- DB decision ledger import: `{summary['artifacts']['db_decision_ledger_import_dir']}`")
+    if summary["artifacts"].get("ops_snapshot_dir"):
+        lines.append(f"- Ops snapshot: `{summary['artifacts']['ops_snapshot_dir']}`")
     lines.extend([
         "",
         "## Counts",
@@ -267,6 +269,9 @@ def write_readme(path: Path, summary: dict) -> None:
         f"- DB decision ledger export rows: `{summary['db_decision_ledger_export'].get('rows', 0)}`",
         f"- DB decision ledger import inserted: `{summary['db_decision_ledger_import'].get('inserted', 0)}`",
         f"- DB decision ledger import conflicts: `{summary['db_decision_ledger_import'].get('conflicts', 0)}`",
+        f"- Ops snapshot status: `{summary.get('ops_snapshot', {}).get('status', 'not_run')}`",
+        f"- Ops snapshot source-health attention rows: `{summary.get('ops_snapshot', {}).get('source_health_attention_rows', 0)}`",
+        f"- Ops snapshot stale cursors: `{summary.get('ops_snapshot', {}).get('stale_cursors', 0)}`",
         f"- Editorial update dry-run rows: `{summary['editorial_update'].get('dry_run', 0)}`",
         f"- Editorial update applied rows: `{summary['editorial_update'].get('applied', 0)}`",
         f"- Editorial update already-cited skips: `{summary['editorial_update'].get('skipped_already_cited', 0)}`",
@@ -477,6 +482,7 @@ def main() -> int:
                 str(args.proof_dir / "db-decision-ledger-import")
                 if args.persist_reviewed_decisions else ""
             ),
+            "ops_snapshot_dir": str(args.proof_dir / "ops-snapshot"),
             "safe_batch_apply_dir": str(safe_batch_dir) if safe_batch_dir else "",
             "editorial_update_apply_dir": str(editorial_update_dir) if editorial_update_dir else "",
             "editorial_agenda": str(args.proof_dir / "editorial_agenda.md"),
@@ -507,6 +513,30 @@ def main() -> int:
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    ops_snapshot_dir = args.proof_dir / "ops-snapshot"
+    steps.append(run_step("ops_snapshot", [
+        str(scripts / "wiki-freshness-ops-snapshot"),
+        "--db", str(args.db),
+        "--proof-dir", str(ops_snapshot_dir),
+        "--proof-root", str(args.proof_dir.parent),
+    ]))
+    ops_snapshot_summary = load_json(ops_snapshot_dir / "wiki_freshness_ops_snapshot.json")
+    summary["ops_snapshot"] = {
+        "status": ops_snapshot_summary.get("assessment", {}).get("status", "unknown"),
+        "summary_json": str(ops_snapshot_dir / "wiki_freshness_ops_snapshot.json"),
+        "summary_md": str(ops_snapshot_dir / "wiki_freshness_ops_snapshot.md"),
+        "source_health_attention_rows": ops_snapshot_summary.get("source_health", {}).get("attention_rows", 0),
+        "stale_healthy_rows": ops_snapshot_summary.get("source_health", {}).get("stale_healthy_rows", 0),
+        "stale_cursors": ops_snapshot_summary.get("cursors", {}).get("stale_rows", 0),
+        "recent_source_cards": ops_snapshot_summary.get("source_cards", {}).get("recent", 0),
+        "decision_ledger_rows": ops_snapshot_summary.get("decision_ledger", {}).get("rows", 0),
+        "findings": ops_snapshot_summary.get("assessment", {}).get("findings", []),
+    }
+    summary["steps"] = [compact_step(step) for step in steps]
+    (args.proof_dir / "workflow_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     write_readme(args.proof_dir / "README.md", summary)
     print(json.dumps({
         "ok": True,
@@ -532,6 +562,9 @@ def main() -> int:
         "editorial_update_skipped_already_cited": editorial_update_summary.get("skipped_already_cited", 0),
         "blocked_source_rows_total": scan_summary.get("blocked_source_rows_total", 0),
         "blocked_source_classes": scan_summary.get("blocked_source_classes", {}),
+        "ops_snapshot_status": summary["ops_snapshot"]["status"],
+        "ops_snapshot_source_health_attention_rows": summary["ops_snapshot"]["source_health_attention_rows"],
+        "ops_snapshot_stale_cursors": summary["ops_snapshot"]["stale_cursors"],
         "editorial_agenda": str(args.proof_dir / "editorial_agenda.md"),
     }, indent=2, sort_keys=True))
     return 0

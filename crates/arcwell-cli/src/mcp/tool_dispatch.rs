@@ -2164,6 +2164,11 @@ pub(crate) fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> R
             Ok(json!(store.get_wiki_job(&id)?))
         }
         "wiki_jobs" => Ok(json!(store.list_wiki_jobs()?)),
+        "wiki_decision_ledger_summary" => Ok(json!(store.wiki_decision_ledger_summary()?)),
+        "wiki_decision_ledger_list" => {
+            let limit = optional_usize(&arguments, "limit", 50);
+            Ok(json!(store.list_wiki_decision_ledger(limit)?))
+        }
         "wiki_enqueue_rss" => {
             let url = required_string(&arguments, "url")?;
             Ok(json!(store.enqueue_rss_job(&url)?))

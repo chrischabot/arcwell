@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""Supersede duplicate pending Arcwell wiki jobs while keeping one live job per source key."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import sqlite3
+from collections import defaultdict
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+
+SUPPORTED_KINDS = {
+    "arxiv_search",
+    "github_owner",
+    "github_repo",
+    "ingest_url",
+    "rss_fetch",
+}
+
+
+def default_db_path() -> Path:
+    return Path(os.environ.get("ARCWELL_HOME", Path.home() / ".arcwell")) / "arcwell.sqlite3"
+
+
+def now_stamp() -> str:
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def load_json_object(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def job_key(kind: str, input_json: str) -> str:
+    value = load_json_object(input_json)
+    if kind == "github_owner":
+        return str(value.get("owner") or "").strip()
+    if kind == "github_repo":
+        owner = str(value.get("owner") or "").strip()
+        repo = str(value.get("repo") or "").strip()
+        mode = str(value.get("mode") or "releases").strip()
+        return f"{owner}/{repo}:{mode}" if owner and repo else ""
+    if kind == "rss_fetch":
+        return str(value.get("url") or "").strip()
+    if kind == "arxiv_search":
+        return str(value.get("query") or "").strip()
+    if kind == "ingest_url":
+        return str(value.get("url") or "").strip()
+    return ""
+
+
+def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Supersede older duplicate pending wiki jobs by source key."
+    )
+    parser.add_argument("--db", type=Path, default=default_db_path())
+    parser.add_argument(
+        "--proof-dir",
+        type=Path,
+        default=Path(".arcwell-dev/proofs") / f"wiki-job-dedupe-{now_stamp()}",
+    )
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--kind",
+        action="append",
+        choices=sorted(SUPPORTED_KINDS),
+        help="Restrict to a job kind. May be repeated.",
+    )
+    parser.add_argument("--max-supersede", type=int, default=1000)
+    args = parser.parse_args()
+
+    if not args.db.exists():
+        raise SystemExit(f"BLOCKED: Arcwell DB not found: {args.db}")
+    if args.max_supersede < 1:
+        raise SystemExit("BLOCKED: --max-supersede must be >= 1")
+
+    kinds = set(args.kind or SUPPORTED_KINDS)
+    args.proof_dir.mkdir(parents=True, exist_ok=True)
+    artifact_dir = args.proof_dir / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    with sqlite3.connect(args.db) as conn:
+        conn.row_factory = sqlite3.Row
+        pending = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT id, kind, input_json, attempts, max_attempts,
+                       created_at, updated_at
+                FROM wiki_jobs
+                WHERE status = 'pending'
+                ORDER BY kind, created_at, updated_at, id
+                """
+            ).fetchall()
+            if row["kind"] in kinds
+        ]
+        groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        skipped_missing_key = []
+        for row in pending:
+            key = job_key(row["kind"], row["input_json"])
+            if not key:
+                skipped_missing_key.append(row)
+                continue
+            row["dedupe_key"] = key
+            groups[(row["kind"], key)].append(row)
+
+        duplicate_groups = []
+        supersede_rows = []
+        for (kind, key), group in sorted(groups.items()):
+            if len(group) < 2:
+                continue
+            ordered = sorted(
+                group,
+                key=lambda row: (
+                    str(row.get("updated_at") or ""),
+                    str(row.get("created_at") or ""),
+                    str(row.get("id") or ""),
+                ),
+            )
+            keep = ordered[-1]
+            older = ordered[:-1]
+            duplicate_groups.append({
+                "kind": kind,
+                "dedupe_key": key,
+                "pending_count": len(group),
+                "keep_job_id": keep["id"],
+                "supersede_count": len(older),
+                "oldest_created_at": ordered[0]["created_at"],
+                "newest_updated_at": keep["updated_at"],
+            })
+            for row in older:
+                supersede_rows.append({
+                    "id": row["id"],
+                    "kind": kind,
+                    "dedupe_key": key,
+                    "keep_job_id": keep["id"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                })
+
+        capped_supersede_rows = supersede_rows[: args.max_supersede]
+        generated_at = now_iso()
+        if args.apply:
+            for row in capped_supersede_rows:
+                conn.execute(
+                    """
+                    UPDATE wiki_jobs
+                    SET status = 'superseded',
+                        error = COALESCE(error || ' | ', '') || ?2,
+                        updated_at = ?3
+                    WHERE id = ?1 AND status = 'pending'
+                    """,
+                    (
+                        row["id"],
+                        f"superseded duplicate pending wiki job; kept {row['keep_job_id']}",
+                        generated_at,
+                    ),
+                )
+            conn.commit()
+
+        summary = {
+            "ok": True,
+            "generated_at": generated_at,
+            "db": str(args.db),
+            "proof_dir": str(args.proof_dir),
+            "applied": bool(args.apply),
+            "kinds": sorted(kinds),
+            "pending_scanned": len(pending),
+            "duplicate_group_count": len(duplicate_groups),
+            "supersede_candidates": len(supersede_rows),
+            "superseded": len(capped_supersede_rows) if args.apply else 0,
+            "max_supersede": args.max_supersede,
+            "capped": len(supersede_rows) > len(capped_supersede_rows),
+            "skipped_missing_key": len(skipped_missing_key),
+            "artifacts": {
+                "duplicate_groups_csv": str(artifact_dir / "duplicate-groups.csv"),
+                "supersede_candidates_csv": str(artifact_dir / "supersede-candidates.csv"),
+                "summary_json": str(artifact_dir / "summary.json"),
+            },
+            "non_claims": [
+                "does not delete jobs",
+                "does not supersede running, deferred, failed, completed, dead-lettered, or already superseded jobs",
+                "does not prove the kept job will succeed",
+            ],
+        }
+
+    write_csv(artifact_dir / "duplicate-groups.csv", duplicate_groups)
+    write_csv(artifact_dir / "supersede-candidates.csv", capped_supersede_rows)
+    (artifact_dir / "summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (args.proof_dir / "proof.md").write_text(
+        "\n".join([
+            "# Wiki Job Dedupe Proof",
+            "",
+            f"Generated: `{generated_at}`",
+            f"DB: `{args.db}`",
+            f"Applied: `{args.apply}`",
+            f"Pending scanned: `{summary['pending_scanned']}`",
+            f"Duplicate groups: `{summary['duplicate_group_count']}`",
+            f"Supersede candidates: `{summary['supersede_candidates']}`",
+            f"Superseded: `{summary['superseded']}`",
+            "",
+            "This proof only supersedes older duplicate pending jobs while keeping the newest pending job for each source key.",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

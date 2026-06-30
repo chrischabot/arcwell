@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+"""Summarize Arcwell wiki freshness ingestion and review state from SQLite."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import sqlite3
+from collections import Counter
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+
+def default_db_path() -> Path:
+    return Path(os.environ.get("ARCWELL_HOME", Path.home() / ".arcwell")) / "arcwell.sqlite3"
+
+
+def now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
+def iso(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def parse_time(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def scalar(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> Any:
+    return conn.execute(sql, params).fetchone()[0]
+
+
+def table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?1",
+            (name,),
+        ).fetchone()
+    )
+
+
+def write_csv(path: Path, records: list[dict[str, Any]]) -> None:
+    if not records:
+        path.write_text("", encoding="utf-8")
+        return
+    fieldnames: list[str] = []
+    for record in records:
+        for key in record:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for record in records:
+            writer.writerow(record)
+
+
+def latest_workflow_summary(proof_root: Path) -> dict[str, Any]:
+    candidates = sorted(
+        proof_root.glob("wiki-freshness-workflow-*/workflow_summary.json"),
+        key=lambda path: path.stat().st_mtime,
+    )
+    if not candidates:
+        return {}
+    path = candidates[-1]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as error:  # pragma: no cover - diagnostic path
+        return {"path": str(path), "error": str(error)}
+    scan = data.get("scan") if isinstance(data.get("scan"), dict) else {}
+    packets = data.get("packets") if isinstance(data.get("packets"), dict) else {}
+    decisions = data.get("decisions") if isinstance(data.get("decisions"), dict) else {}
+    agenda = data.get("agenda") if isinstance(data.get("agenda"), dict) else {}
+    return {
+        "path": str(path),
+        "generated_at": data.get("generated_at"),
+        "candidate_pool_total": scan.get("candidate_pool_total"),
+        "candidate_count": scan.get("candidate_count"),
+        "manual_review_queue_rows": scan.get("manual_review_queue_rows"),
+        "blocked_source_rows_total": scan.get("blocked_source_rows_total"),
+        "blocked_source_classes": scan.get("blocked_source_classes", {}),
+        "safe_batch_candidates": scan.get("safe_batch_candidates"),
+        "packet_count": packets.get("packet_count"),
+        "suppressed_reviewed_decisions": packets.get("suppressed_reviewed_decisions"),
+        "pending_decisions": decisions.get("remaining_pending"),
+        "update_existing_export_rows": decisions.get("update_existing_export_rows"),
+        "decision_ledger_rows": decisions.get("decision_ledger_rows"),
+        "clean_update_candidates": agenda.get("clean_update_candidates"),
+        "source_verification_candidates": agenda.get("source_verification_candidates"),
+        "editorial_agenda": data.get("artifacts", {}).get("editorial_agenda")
+        if isinstance(data.get("artifacts"), dict)
+        else None,
+    }
+
+
+def source_health_snapshot(
+    conn: sqlite3.Connection,
+    stale_cutoff: datetime,
+    failure_limit: int,
+) -> dict[str, Any]:
+    if not table_exists(conn, "source_health"):
+        return {"available": False}
+    all_rows = rows(
+        conn,
+        """
+        SELECT key, provider, source_kind, locator, status, last_success_at,
+               last_failure_at, last_error, last_item_id, last_item_date,
+               cursor_key, cursor_value, next_run_at, updated_at
+        FROM source_health
+        ORDER BY updated_at DESC
+        """,
+    )
+    by_status = Counter(str(row.get("status") or "unknown") for row in all_rows)
+    by_kind_status = Counter(
+        (
+            str(row.get("source_kind") or "unknown"),
+            str(row.get("status") or "unknown"),
+        )
+        for row in all_rows
+    )
+    attention = [
+        row
+        for row in all_rows
+        if str(row.get("status") or "").lower() not in {"healthy", "ok", "success"}
+    ]
+    stale_healthy = []
+    for row in all_rows:
+        if str(row.get("status") or "").lower() not in {"healthy", "ok", "success"}:
+            continue
+        last_success = parse_time(row.get("last_success_at"))
+        if last_success is None or last_success < stale_cutoff:
+            stale_healthy.append(row)
+    attention.sort(
+        key=lambda row: (
+            parse_time(row.get("last_failure_at"))
+            or parse_time(row.get("updated_at"))
+            or datetime.min.replace(tzinfo=UTC)
+        ),
+        reverse=True,
+    )
+    stale_healthy.sort(
+        key=lambda row: parse_time(row.get("last_success_at"))
+        or datetime.min.replace(tzinfo=UTC)
+    )
+    return {
+        "available": True,
+        "total": len(all_rows),
+        "by_status": dict(sorted(by_status.items())),
+        "by_source_kind_status": [
+            {"source_kind": kind, "status": status, "count": count}
+            for (kind, status), count in sorted(by_kind_status.items())
+        ],
+        "attention_rows": len(attention),
+        "stale_healthy_rows": len(stale_healthy),
+        "recent_attention": attention[:failure_limit],
+        "oldest_stale_healthy": stale_healthy[:failure_limit],
+    }
+
+
+def watch_source_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
+    if not table_exists(conn, "watch_sources"):
+        return {"available": False}
+    by_kind_status = rows(
+        conn,
+        """
+        SELECT source_kind, status, cadence, COUNT(*) AS count,
+               MAX(updated_at) AS newest_updated_at,
+               MIN(updated_at) AS oldest_updated_at
+        FROM watch_sources
+        GROUP BY source_kind, status, cadence
+        ORDER BY source_kind, status, cadence
+        """,
+    )
+    total = scalar(conn, "SELECT COUNT(*) FROM watch_sources")
+    active = scalar(conn, "SELECT COUNT(*) FROM watch_sources WHERE status = 'active'")
+    paused = scalar(conn, "SELECT COUNT(*) FROM watch_sources WHERE status = 'paused'")
+    return {
+        "available": True,
+        "total": total,
+        "active": active,
+        "paused": paused,
+        "by_kind_status_cadence": by_kind_status,
+    }
+
+
+def cursor_snapshot(
+    conn: sqlite3.Connection,
+    stale_cutoff: datetime,
+    failure_limit: int,
+) -> dict[str, Any]:
+    if not table_exists(conn, "cursors"):
+        return {"available": False}
+    all_rows = rows(conn, "SELECT key, value, updated_at FROM cursors ORDER BY updated_at DESC")
+    by_prefix: dict[str, dict[str, Any]] = {}
+    stale = []
+    for row in all_rows:
+        key = str(row.get("key") or "")
+        prefix = key.split(":", 1)[0] if ":" in key else key
+        bucket = by_prefix.setdefault(
+            prefix,
+            {
+                "prefix": prefix,
+                "count": 0,
+                "newest_updated_at": None,
+                "oldest_updated_at": None,
+                "stale_count": 0,
+            },
+        )
+        bucket["count"] += 1
+        updated_at = parse_time(row.get("updated_at"))
+        if updated_at is not None:
+            current_newest = parse_time(bucket["newest_updated_at"])
+            current_oldest = parse_time(bucket["oldest_updated_at"])
+            if current_newest is None or updated_at > current_newest:
+                bucket["newest_updated_at"] = iso(updated_at)
+            if current_oldest is None or updated_at < current_oldest:
+                bucket["oldest_updated_at"] = iso(updated_at)
+            if updated_at < stale_cutoff:
+                bucket["stale_count"] += 1
+                stale.append(row)
+        else:
+            bucket["stale_count"] += 1
+            stale.append(row)
+    stale.sort(
+        key=lambda row: parse_time(row.get("updated_at"))
+        or datetime.min.replace(tzinfo=UTC)
+    )
+    return {
+        "available": True,
+        "total": len(all_rows),
+        "by_prefix": sorted(by_prefix.values(), key=lambda row: (-row["count"], row["prefix"])),
+        "stale_rows": len(stale),
+        "oldest_stale": stale[:failure_limit],
+    }
+
+
+def source_card_snapshot(
+    conn: sqlite3.Connection,
+    since_cutoff: datetime,
+    failure_limit: int,
+) -> dict[str, Any]:
+    if not table_exists(conn, "source_cards"):
+        return {"available": False}
+    cutoff = since_cutoff.isoformat()
+    total = scalar(conn, "SELECT COUNT(*) FROM source_cards")
+    recent = scalar(
+        conn,
+        "SELECT COUNT(*) FROM source_cards WHERE retrieved_at >= ?1 OR created_at >= ?1",
+        (cutoff,),
+    )
+    by_provider = rows(
+        conn,
+        """
+        SELECT provider, source_type, COUNT(*) AS count,
+               SUM(CASE WHEN retrieved_at >= ?1 OR created_at >= ?1 THEN 1 ELSE 0 END) AS recent_count,
+               MAX(retrieved_at) AS newest_retrieved_at,
+               MIN(retrieved_at) AS oldest_retrieved_at
+        FROM source_cards
+        GROUP BY provider, source_type
+        ORDER BY recent_count DESC, count DESC, provider, source_type
+        """,
+        (cutoff,),
+    )
+    recent_cards = rows(
+        conn,
+        """
+        SELECT id, title, url, provider, source_type, retrieved_at, created_at
+        FROM source_cards
+        ORDER BY COALESCE(retrieved_at, created_at) DESC
+        LIMIT ?1
+        """,
+        (failure_limit,),
+    )
+    return {
+        "available": True,
+        "total": total,
+        "recent_window_start": iso(since_cutoff),
+        "recent": recent,
+        "by_provider_source_type": by_provider,
+        "recent_cards": recent_cards,
+    }
+
+
+def wiki_snapshot(conn: sqlite3.Connection, since_cutoff: datetime) -> dict[str, Any]:
+    page_summary: dict[str, Any] = {"available": False}
+    if table_exists(conn, "wiki_pages"):
+        cutoff = since_cutoff.isoformat()
+        page_summary = {
+            "available": True,
+            "total": scalar(conn, "SELECT COUNT(*) FROM wiki_pages"),
+            "recent_updates": scalar(
+                conn,
+                "SELECT COUNT(*) FROM wiki_pages WHERE updated_at >= ?1",
+                (cutoff,),
+            ),
+            "by_source_status": rows(
+                conn,
+                """
+                SELECT source, status, COUNT(*) AS count,
+                       MAX(updated_at) AS newest_updated_at
+                FROM wiki_pages
+                GROUP BY source, status
+                ORDER BY count DESC, source, status
+                """,
+            ),
+        }
+    job_summary: dict[str, Any] = {"available": False}
+    if table_exists(conn, "wiki_jobs"):
+        job_summary = {
+            "available": True,
+            "total": scalar(conn, "SELECT COUNT(*) FROM wiki_jobs"),
+            "by_kind_status": rows(
+                conn,
+                """
+                SELECT kind, status, COUNT(*) AS count,
+                       MAX(updated_at) AS newest_updated_at
+                FROM wiki_jobs
+                GROUP BY kind, status
+                ORDER BY kind, status
+                """,
+            ),
+            "recent_problem_jobs": rows(
+                conn,
+                """
+                SELECT id, kind, status, attempts, max_attempts, error,
+                       next_run_at, dead_lettered_at, updated_at
+                FROM wiki_jobs
+                WHERE status NOT IN ('completed', 'succeeded')
+                   OR error IS NOT NULL
+                   OR dead_lettered_at IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 20
+                """,
+            ),
+        }
+    return {"pages": page_summary, "jobs": job_summary}
+
+
+def decision_ledger_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
+    if not table_exists(conn, "wiki_editorial_decision_ledger"):
+        return {"available": False}
+    totals = rows(
+        conn,
+        """
+        SELECT COUNT(*) AS rows,
+               COUNT(DISTINCT page_id) AS pages,
+               MAX(reviewed_at) AS newest_reviewed_at,
+               MIN(reviewed_at) AS oldest_reviewed_at
+        FROM wiki_editorial_decision_ledger
+        """,
+    )[0]
+    return {
+        "available": True,
+        **totals,
+        "by_decision": rows(
+            conn,
+            """
+            SELECT decision, COUNT(*) AS count
+            FROM wiki_editorial_decision_ledger
+            GROUP BY decision
+            ORDER BY decision
+            """,
+        ),
+        "recent": rows(
+            conn,
+            """
+            SELECT page_id, page_title, decision, source_count, reviewed_at,
+                   first_seen_at, updated_at, source_file
+            FROM wiki_editorial_decision_ledger
+            ORDER BY reviewed_at DESC, updated_at DESC
+            LIMIT 20
+            """,
+        ),
+    }
+
+
+def write_markdown(path: Path, summary: dict[str, Any]) -> None:
+    health = summary["source_health"]
+    cursors = summary["cursors"]
+    watch = summary["watch_sources"]
+    cards = summary["source_cards"]
+    wiki = summary["wiki"]
+    ledger = summary["decision_ledger"]
+    latest = summary["latest_workflow"]
+    assessment = summary["assessment"]
+
+    lines = [
+        "# Wiki Freshness Ops Snapshot",
+        "",
+        f"Generated: `{summary['generated_at']}`",
+        f"DB: `{summary['db']}`",
+        "",
+        "## Assessment",
+        "",
+    ]
+    for item in assessment["findings"]:
+        lines.append(f"- `{item['status']}` {item['label']}: {item['detail']}")
+    lines.extend([
+        "",
+        "## Source Coverage",
+        "",
+        f"- Watch sources: `{watch.get('total', 0)}` total, `{watch.get('active', 0)}` active, `{watch.get('paused', 0)}` paused",
+        f"- Source cards: `{cards.get('total', 0)}` total, `{cards.get('recent', 0)}` in the recent window",
+        f"- Wiki pages: `{wiki.get('pages', {}).get('total', 0)}` total, `{wiki.get('pages', {}).get('recent_updates', 0)}` recently updated",
+        f"- Decision ledger: `{ledger.get('rows', 0)}` rows across `{ledger.get('pages', 0)}` pages",
+        "",
+        "## Health",
+        "",
+        f"- Source-health rows: `{health.get('total', 0)}`",
+        f"- Attention rows: `{health.get('attention_rows', 0)}`",
+        f"- Stale healthy rows: `{health.get('stale_healthy_rows', 0)}`",
+        f"- Cursor rows: `{cursors.get('total', 0)}`",
+        f"- Stale cursor rows: `{cursors.get('stale_rows', 0)}`",
+        "",
+        "## Latest Workflow",
+        "",
+    ])
+    if latest:
+        lines.extend([
+            f"- Summary: `{latest.get('path')}`",
+            f"- Generated: `{latest.get('generated_at')}`",
+            f"- Candidate pool: `{latest.get('candidate_pool_total')}`",
+            f"- Candidate window: `{latest.get('candidate_count')}`",
+            f"- Manual review rows: `{latest.get('manual_review_queue_rows')}`",
+            f"- Pending decisions: `{latest.get('pending_decisions')}`",
+            f"- Blocked source rows: `{latest.get('blocked_source_rows_total')}`",
+            f"- Suppressed reviewed decisions: `{latest.get('suppressed_reviewed_decisions')}`",
+            f"- Editorial agenda: `{latest.get('editorial_agenda')}`",
+        ])
+    else:
+        lines.append("No workflow summary was found under the configured proof root.")
+    lines.extend(["", "## Top Attention Rows", ""])
+    attention = health.get("recent_attention") or []
+    if attention:
+        lines.append("| Status | Kind | Locator | Last Failure | Error |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for row in attention[:20]:
+            error = str(row.get("last_error") or "").replace("\n", " ")[:120]
+            lines.append(
+                f"| {row.get('status', '')} | {row.get('source_kind', '')} | "
+                f"`{row.get('locator', '')}` | {row.get('last_failure_at', '')} | {error} |"
+            )
+    else:
+        lines.append("No non-healthy source-health rows.")
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def assessment(summary: dict[str, Any]) -> dict[str, Any]:
+    findings: list[dict[str, str]] = []
+
+    def add(status: str, label: str, detail: str) -> None:
+        findings.append({"status": status, "label": label, "detail": detail})
+
+    health = summary["source_health"]
+    cursors = summary["cursors"]
+    cards = summary["source_cards"]
+    latest = summary["latest_workflow"]
+    ledger = summary["decision_ledger"]
+
+    if health.get("attention_rows", 0):
+        add(
+            "hold",
+            "source health",
+            f"{health['attention_rows']} source-health rows are not healthy.",
+        )
+    else:
+        add("pass", "source health", "No non-healthy source-health rows found.")
+
+    if health.get("stale_healthy_rows", 0):
+        add(
+            "hold",
+            "stale healthy rows",
+            f"{health['stale_healthy_rows']} healthy rows have old or missing success timestamps.",
+        )
+
+    if cursors.get("stale_rows", 0):
+        add("hold", "cursors", f"{cursors['stale_rows']} cursors are older than the stale threshold.")
+    else:
+        add("pass", "cursors", "No stale cursors by the configured threshold.")
+
+    if cards.get("recent", 0):
+        add("pass", "recent source cards", f"{cards['recent']} source cards are inside the recent window.")
+    else:
+        add("hold", "recent source cards", "No recent source cards were found in the configured window.")
+
+    if latest:
+        blocked = latest.get("blocked_source_rows_total") or 0
+        pending = latest.get("pending_decisions") or 0
+        if blocked:
+            add("hold", "workflow blocked sources", f"Latest workflow reports {blocked} blocked source rows.")
+        if pending:
+            add("hold", "editorial decisions", f"Latest workflow reports {pending} pending decisions.")
+        if not blocked and not pending:
+            add("pass", "latest workflow", "Latest workflow has no blocked rows or pending decisions.")
+    else:
+        add("hold", "latest workflow", "No wiki freshness workflow summary was found.")
+
+    if ledger.get("rows", 0):
+        add("pass", "decision ledger", f"{ledger['rows']} reviewed hold/reject decisions are durable.")
+    else:
+        add("hold", "decision ledger", "No durable reviewed-decision rows found.")
+
+    return {
+        "status": "hold" if any(item["status"] == "hold" for item in findings) else "pass",
+        "findings": findings,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Create a read-only Arcwell wiki freshness ops snapshot."
+    )
+    parser.add_argument("--db", type=Path, default=default_db_path())
+    parser.add_argument(
+        "--proof-dir",
+        type=Path,
+        default=Path(".arcwell-dev/proofs") / f"wiki-freshness-ops-snapshot-{now_utc().strftime('%Y%m%dT%H%M%SZ')}",
+    )
+    parser.add_argument("--proof-root", type=Path, default=Path(".arcwell-dev/proofs"))
+    parser.add_argument("--recent-hours", type=int, default=24)
+    parser.add_argument("--stale-hours", type=int, default=48)
+    parser.add_argument("--failure-limit", type=int, default=25)
+    args = parser.parse_args()
+
+    if not args.db.exists():
+        raise SystemExit(f"BLOCKED: Arcwell DB not found: {args.db}")
+    args.proof_dir.mkdir(parents=True, exist_ok=True)
+
+    generated_at = now_utc()
+    recent_cutoff = generated_at - timedelta(hours=args.recent_hours)
+    stale_cutoff = generated_at - timedelta(hours=args.stale_hours)
+
+    with sqlite3.connect(args.db) as conn:
+        conn.row_factory = sqlite3.Row
+        summary: dict[str, Any] = {
+            "ok": True,
+            "generated_at": iso(generated_at),
+            "db": str(args.db),
+            "proof_dir": str(args.proof_dir),
+            "recent_hours": args.recent_hours,
+            "stale_hours": args.stale_hours,
+            "recent_cutoff": iso(recent_cutoff),
+            "stale_cutoff": iso(stale_cutoff),
+            "watch_sources": watch_source_snapshot(conn),
+            "source_health": source_health_snapshot(conn, stale_cutoff, args.failure_limit),
+            "cursors": cursor_snapshot(conn, stale_cutoff, args.failure_limit),
+            "source_cards": source_card_snapshot(conn, recent_cutoff, args.failure_limit),
+            "wiki": wiki_snapshot(conn, recent_cutoff),
+            "decision_ledger": decision_ledger_snapshot(conn),
+            "latest_workflow": latest_workflow_summary(args.proof_root),
+        }
+    summary["assessment"] = assessment(summary)
+
+    artifacts = {
+        "summary_json": str(args.proof_dir / "wiki_freshness_ops_snapshot.json"),
+        "summary_md": str(args.proof_dir / "wiki_freshness_ops_snapshot.md"),
+        "watch_sources_csv": str(args.proof_dir / "watch_sources_by_kind_status.csv"),
+        "source_health_attention_csv": str(args.proof_dir / "source_health_attention.csv"),
+        "stale_cursors_csv": str(args.proof_dir / "stale_cursors.csv"),
+        "source_cards_by_provider_csv": str(args.proof_dir / "source_cards_by_provider.csv"),
+    }
+    summary["artifacts"] = artifacts
+    write_csv(
+        Path(artifacts["watch_sources_csv"]),
+        summary["watch_sources"].get("by_kind_status_cadence", []),
+    )
+    write_csv(
+        Path(artifacts["source_health_attention_csv"]),
+        summary["source_health"].get("recent_attention", []),
+    )
+    write_csv(Path(artifacts["stale_cursors_csv"]), summary["cursors"].get("oldest_stale", []))
+    write_csv(
+        Path(artifacts["source_cards_by_provider_csv"]),
+        summary["source_cards"].get("by_provider_source_type", []),
+    )
+    Path(artifacts["summary_json"]).write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    write_markdown(Path(artifacts["summary_md"]), summary)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "status": summary["assessment"]["status"],
+                "proof_dir": str(args.proof_dir),
+                "watch_sources": summary["watch_sources"].get("total", 0),
+                "source_health_attention_rows": summary["source_health"].get("attention_rows", 0),
+                "stale_cursors": summary["cursors"].get("stale_rows", 0),
+                "recent_source_cards": summary["source_cards"].get("recent", 0),
+                "decision_ledger_rows": summary["decision_ledger"].get("rows", 0),
+                "latest_workflow": summary["latest_workflow"].get("path"),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

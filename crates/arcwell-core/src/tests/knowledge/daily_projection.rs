@@ -419,7 +419,7 @@ fn severe_native_daily_briefing_worker_sends_human_readable_html_email_once() {
     let html = body_json.get("html").and_then(Value::as_str).unwrap();
     assert!(text.contains("AI Daily Briefing"));
     assert!(text.contains("Bottom Line"), "{text}");
-    assert!(text.contains("What Changed"), "{text}");
+    assert!(text.contains("Today's Stories"), "{text}");
     assert!(text.contains("Further Reading"), "{text}");
     assert!(
         text.contains("](https://example.com/daily-knowledge/html-email)"),
@@ -460,6 +460,11 @@ fn severe_native_daily_briefing_worker_sends_human_readable_html_email_once() {
         "metadata",
         "cluster",
         "devrel",
+        "source evidence",
+        "source references",
+        "unified knowledge pipeline",
+        "durable source rows",
+        "provider family buckets",
     ] {
         assert!(
             !text
@@ -485,6 +490,150 @@ fn severe_native_daily_briefing_worker_sends_human_readable_html_email_once() {
     );
     assert_eq!(store.list_digest_deliveries(None).unwrap().len(), 1);
     assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
+}
+
+#[test]
+fn severe_daily_briefing_projection_ledger_becomes_reader_story() {
+    // CLAIM: deterministic projection reports are not themselves newsletter
+    // prose. The daily briefing must turn them into a reader-facing story
+    // from the linked sources rather than leaking pipeline accounting.
+    // ORACLE: the exact June 30 failure language is absent, the title no
+    // longer says "Knowledge Report", and the linked GitHub sources are
+    // rendered as useful links with concrete takeaways.
+    // SEVERITY: Severe because this is the difference between a useful
+    // morning briefing and an internal receipt dump.
+    let schedule = IssueSchedule {
+        id: "isch-test".to_string(),
+        name: "AI daily briefing".to_string(),
+        status: "active".to_string(),
+        kind: "knowledge_daily_briefing".to_string(),
+        channel: "email".to_string(),
+        recipient_ref: "email:friend@example.com".to_string(),
+        time_zone: "utc".to_string(),
+        hour: 7,
+        minute: 0,
+        catch_up_hours: 72,
+        metadata: json!({}),
+        created_at: now(),
+        updated_at: now(),
+    };
+    let tick = IssueScheduleTick {
+        id: "ischt-test".to_string(),
+        schedule_id: schedule.id.clone(),
+        tick_key: "2026-06-30".to_string(),
+        due_at: "2026-06-30T07:00:00+00:00".to_string(),
+        status: "pending".to_string(),
+        job_id: None,
+        candidate_id: None,
+        delivery_id: None,
+        error: None,
+        created_at: now(),
+        updated_at: now(),
+    };
+    let cards = vec![
+        SourceCard {
+            id: "src-reka-vllm".to_string(),
+            title: "GitHub repo reka-ai/vllm-reka".to_string(),
+            url: "https://github.com/reka-ai/vllm-reka".to_string(),
+            source_type: "github_repo".to_string(),
+            provider: "github".to_string(),
+            summary: "vLLM plugin for Reka models".to_string(),
+            claims: vec![SourceClaim {
+                claim: "reka-ai/vllm-reka is a public GitHub repository.".to_string(),
+                kind: "fact".to_string(),
+                confidence: 0.95,
+            }],
+            retrieved_at: "2026-06-22T05:35:47Z".to_string(),
+            wiki_page_id: "source-card-reka-vllm".to_string(),
+            content_sha256: "sha".to_string(),
+            metadata: json!({
+                "language": "Python",
+                "raw": {
+                    "pushed_at": "2026-06-22T05:35:47Z",
+                    "stargazers_count": 9
+                }
+            }),
+            created_at: now(),
+            updated_at: now(),
+        },
+        SourceCard {
+            id: "src-reka-li".to_string(),
+            title: "GitHub repo reka-ai/llama_index".to_string(),
+            url: "https://github.com/reka-ai/llama_index".to_string(),
+            source_type: "github_repo".to_string(),
+            provider: "github".to_string(),
+            summary: "LlamaIndex is a data framework for your LLM applications".to_string(),
+            claims: vec![SourceClaim {
+                claim: "reka-ai/llama_index is a public GitHub repository.".to_string(),
+                kind: "fact".to_string(),
+                confidence: 0.95,
+            }],
+            retrieved_at: "2026-03-24T18:54:18Z".to_string(),
+            wiki_page_id: "source-card-reka-llama-index".to_string(),
+            content_sha256: "sha".to_string(),
+            metadata: json!({
+                "language": "Python",
+                "raw": {
+                    "pushed_at": "2026-03-24T18:54:18Z",
+                    "stargazers_count": 4
+                }
+            }),
+            created_at: now(),
+            updated_at: now(),
+        },
+    ];
+    let report = KnowledgeReport {
+        id: "krpt-reka".to_string(),
+        cluster_id: "kcl-reka".to_string(),
+        title: "Knowledge Report: Reka Ai: model release activity".to_string(),
+        body_markdown: "## What happened\nthe system projected 2 durable source rows into the unified knowledge pipeline for **Reka Ai: model release activity**. The evidence spans 1 provider family buckets ({\"github\": 2}) and is stored as source references: source evidence, source evidence.\n\nsource evidence: GitHub repo reka-ai/vllm-reka. vLLM plugin for Reka models\nsource evidence: GitHub repo reka-ai/llama_index. LlamaIndex is a data framework for your LLM applications\n\n## Next Investigation\n- Verify official primary sources before promoting release, benchmark, pricing, availability, or adoption claims.".to_string(),
+        status: "draft".to_string(),
+        source_card_ids: cards.iter().map(|card| card.id.clone()).collect(),
+        quality_findings: Vec::new(),
+        metadata: json!({ "reporter": "deterministic_source_card_projection_v1" }),
+        created_at: now(),
+        updated_at: now(),
+    };
+    let text = render_knowledge_daily_briefing(
+        &schedule,
+        &tick,
+        &[report],
+        &cards,
+        "2026-06-29T07:00:00+00:00",
+        "2026-06-30T07:00:00+00:00",
+        &BTreeMap::new(),
+    );
+
+    assert!(text.contains("Today's Stories"), "{text}");
+    assert!(text.contains("Reka AI: model release activity"), "{text}");
+    assert!(
+        text.contains("visible in GitHub repository activity"),
+        "{text}"
+    );
+    assert!(
+        text.contains("[reka-ai/vllm-reka](https://github.com/reka-ai/vllm-reka)"),
+        "{text}"
+    );
+    assert!(text.contains("Last pushed 2026-06-22"), "{text}");
+    for forbidden in [
+        "Knowledge Report",
+        "What Changed",
+        "the system projected",
+        "durable source rows",
+        "unified knowledge pipeline",
+        "provider family buckets",
+        "source evidence",
+        "source references",
+        "is a public GitHub repository",
+        "Verify official primary sources",
+    ] {
+        assert!(
+            !text
+                .to_ascii_lowercase()
+                .contains(&forbidden.to_ascii_lowercase()),
+            "reader briefing leaked forbidden term {forbidden:?}:\n{text}"
+        );
+    }
 }
 
 #[test]
@@ -1143,5 +1292,65 @@ fn severe_knowledge_projection_creates_deduped_entities_and_relations() {
             .knowledge_relations
             .iter()
             .any(|relation| relation.relation_type == "owns_repo")
+    );
+}
+
+#[test]
+fn severe_knowledge_projection_disambiguates_provider_named_github_owner() {
+    // CLAIM: Source-card projection can represent repos owned by the GitHub
+    // organization without colliding with the separate `provider:github`
+    // source-provider entity.
+    // ORACLE: the owner entity keeps the canonical `github:owner:github`
+    // key and an inspectable homepage, but its aliases do not reuse the bare
+    // provider alias `github`.
+    // SEVERITY: Severe because a single provider-named org should not
+    // dead-letter backlog clustering or corrupt provider/entity identity.
+    let store = test_store("knowledge-provider-named-github-owner");
+    let card = store
+        .add_source_card(SourceCardInput {
+            title: "GitHub MCP registry release".to_string(),
+            url: "https://github.com/github/mcp-registry/releases/tag/v1.0.0".to_string(),
+            source_type: "github_release".to_string(),
+            provider: "github".to_string(),
+            summary: "GitHub released an MCP registry project.".to_string(),
+            claims: vec![SourceClaim {
+                claim: "GitHub released an MCP registry project.".to_string(),
+                kind: "fact".to_string(),
+                confidence: 0.9,
+            }],
+            retrieved_at: Some("2026-06-30T01:00:00Z".to_string()),
+            metadata: json!({ "owner": "github", "repo": "mcp-registry", "tag": "v1.0.0" }),
+        })
+        .unwrap();
+
+    let report = store
+        .project_knowledge_from_source_card_query(
+            "MCP registry",
+            Some("GitHub MCP registry release"),
+            10,
+        )
+        .unwrap();
+
+    let provider = report
+        .entities
+        .iter()
+        .find(|entity| entity.canonical_key == "provider:github")
+        .expect("provider entity");
+    assert!(provider.aliases.contains(&"github".to_string()));
+    let owner = report
+        .entities
+        .iter()
+        .find(|entity| entity.canonical_key == "github:owner:github")
+        .expect("github owner entity");
+    assert_eq!(owner.name, "@github");
+    assert!(owner.aliases.contains(&"@github".to_string()));
+    assert!(!owner.aliases.contains(&"github".to_string()));
+    assert!(owner.source_card_ids.contains(&card.id));
+    assert!(
+        report
+            .relations
+            .iter()
+            .any(|relation| relation.relation_type == "owns_repo"
+                && relation.source_card_ids.contains(&card.id))
     );
 }

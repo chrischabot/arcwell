@@ -847,6 +847,47 @@ fn severe_knowledge_cluster_model_rejects_injected_or_ungrounded_output() {
 }
 
 #[test]
+fn severe_knowledge_cluster_model_validation_errors_are_non_retryable() {
+    // CLAIM: Deterministic safety validation failures from a model cluster
+    // proposal are not retried until they become dead-letter queue noise.
+    // ORACLE: known invalid-output errors are classified as non-retryable,
+    // while provider/policy failures still use the normal retry path.
+    // SEVERITY: Severe because prompt-injection and unsupported evidence
+    // failures should be visible safety rejections, not unattended retry
+    // storms or red operational mirages.
+    assert!(
+        crate::knowledge::knowledge_cluster_model_proposal_error_is_non_retryable(
+            "knowledge cluster proposal topic contains prompt-injection instruction text"
+        )
+    );
+    assert!(
+        crate::knowledge::knowledge_cluster_model_proposal_error_is_non_retryable(
+            "knowledge cluster proposal cited source card outside prompt evidence"
+        )
+    );
+    assert!(
+        crate::knowledge::knowledge_cluster_model_proposal_error_is_non_retryable(
+            "knowledge cluster proposal reused a source card across clusters"
+        )
+    );
+    assert!(
+        crate::knowledge::knowledge_cluster_model_proposal_error_is_non_retryable(
+            "knowledge cluster proposal returned more clusters than requested"
+        )
+    );
+    assert!(
+        !crate::knowledge::knowledge_cluster_model_proposal_error_is_non_retryable(
+            "policy deferred provider.network: no matching policy rule"
+        )
+    );
+    assert!(
+        !crate::knowledge::knowledge_cluster_model_proposal_error_is_non_retryable(
+            "openai knowledge cluster proposal request failed"
+        )
+    );
+}
+
+#[test]
 fn severe_knowledge_cluster_model_policy_and_cost_denials_precede_provider_writes() {
     // CLAIM: OpenAI-backed cluster proposals obey policy and cost gates
     // before credentials, provider calls, or cluster writes.

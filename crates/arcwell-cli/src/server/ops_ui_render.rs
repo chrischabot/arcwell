@@ -1117,10 +1117,15 @@ pub(crate) fn ops_health_score(snapshot: &OpsSnapshot) -> OpsHealthScore {
         .iter()
         .filter(|source| source.status != "healthy")
         .count() as i64;
-    let non_healthy_radar_source_quality = snapshot
+    let failing_radar_source_quality = snapshot
         .radar_source_quality
         .iter()
-        .filter(|quality| quality.status != "healthy")
+        .filter(|quality| matches!(quality.status.as_str(), "failed" | "partial"))
+        .count() as i64;
+    let low_signal_radar_source_quality = snapshot
+        .radar_source_quality
+        .iter()
+        .filter(|quality| quality.status == "low_signal")
         .count() as i64;
     let failed_radar_deliveries = snapshot
         .radar_deliveries
@@ -1164,9 +1169,14 @@ pub(crate) fn ops_health_score(snapshot: &OpsSnapshot) -> OpsHealthScore {
     if failed_sources > 0 {
         issues.push(format!("{failed_sources} non-healthy sources"));
     }
-    if non_healthy_radar_source_quality > 0 {
+    if failing_radar_source_quality > 0 {
         issues.push(format!(
-            "{non_healthy_radar_source_quality} non-healthy radar source-quality window(s)"
+            "{failing_radar_source_quality} failed or partial radar source-quality window(s)"
+        ));
+    }
+    if low_signal_radar_source_quality > 0 {
+        issues.push(format!(
+            "{low_signal_radar_source_quality} low-signal radar source-quality window(s)"
         ));
     }
     if bad_secrets > 0 {
@@ -1203,7 +1213,8 @@ pub(crate) fn ops_health_score(snapshot: &OpsSnapshot) -> OpsHealthScore {
         + (failed_jobs * 8)
         + (dead_edge * 8)
         + (failed_sources * 5)
-        + (non_healthy_radar_source_quality * 4)
+        + (failing_radar_source_quality * 4)
+        + (low_signal_radar_source_quality * 2)
         + (failed_radar_deliveries * 4)
         + (job_source_failures * 4)
         + (job_privacy_blocks * 5)

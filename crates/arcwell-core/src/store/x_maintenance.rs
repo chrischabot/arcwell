@@ -821,6 +821,17 @@ impl Store {
                       AND health.next_run_at > strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')
                       AND COALESCE(health.cursor_key, health.key, '') = COALESCE(failed.cursor_key, '')
                   )
+                  AND NOT (
+                    failed.stream = 'watch_monitor'
+                    AND failed.cursor_key LIKE 'x:watch:%'
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM watch_sources ws
+                      WHERE ws.source_kind = 'x_handle'
+                        AND ws.status = 'active'
+                        AND ws.locator = substr(failed.cursor_key, length('x:watch:') + 1)
+                    )
+                  )
                 "#,
             )?,
             source_health_by_status: self.grouped_counts(
@@ -893,9 +904,42 @@ impl Store {
             "#,
             params![next_watch_run_at, now()],
         )?;
+        let retired_legacy_x_handle_health = self.conn.execute(
+            r#"
+            DELETE FROM source_health
+            WHERE source_kind = 'x_handle'
+              AND (provider = 'x' OR key LIKE 'x:%')
+              AND NOT EXISTS (
+                SELECT 1
+                FROM watch_sources ws
+                WHERE ws.source_kind = 'x_handle'
+                  AND ws.locator = source_health.locator
+                  AND ws.status = 'active'
+              )
+            "#,
+            [],
+        )?;
+        let retired_orphan_x_monitor_health = self.conn.execute(
+            r#"
+            DELETE FROM source_health
+            WHERE source_kind = 'x_monitor'
+              AND (provider = 'x' OR key LIKE 'x:%')
+              AND key != 'x:monitor'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM watch_sources ws
+                WHERE ws.source_kind = 'x_handle'
+                  AND ws.locator = source_health.locator
+                  AND ws.status = 'active'
+              )
+            "#,
+            [],
+        )?;
         Ok(XHealthRepairReport {
             repaired_bookmark_health,
             repaired_watch_health,
+            retired_legacy_x_handle_health,
+            retired_orphan_x_monitor_health,
             rate_limited_scanned: deferred.scanned,
             rate_limited_deferred: deferred.deferred,
             defer_until: deferred.defer_until,

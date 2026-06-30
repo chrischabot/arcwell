@@ -64,6 +64,23 @@ pub(crate) fn service(store: Store, args: ServiceCommand) -> Result<()> {
             );
             fs::write(&plist_path, plist)
                 .with_context(|| format!("writing {}", plist_path.display()))?;
+            let enable = if no_load {
+                json!({ "attempted": false })
+            } else {
+                let enable = enable_service_label()?;
+                if !json_bool(&enable, "ok") {
+                    print_json(&json!({
+                        "ok": false,
+                        "label": SERVICE_LABEL,
+                        "plist": plist_path,
+                        "log_dir": log_dir,
+                        "enable": enable,
+                        "load": { "attempted": false }
+                    }))?;
+                    bail!("launchctl enable failed for {SERVICE_LABEL}");
+                }
+                enable
+            };
             let load = if no_load {
                 json!({ "attempted": false })
             } else {
@@ -79,6 +96,7 @@ pub(crate) fn service(store: Store, args: ServiceCommand) -> Result<()> {
                 "label": SERVICE_LABEL,
                 "plist": plist_path,
                 "log_dir": log_dir,
+                "enable": enable,
                 "load": load
             }))?;
             if !ok {
@@ -118,19 +136,40 @@ pub(crate) fn service(store: Store, args: ServiceCommand) -> Result<()> {
             Ok(())
         }
         ServiceSubcommand::Restart => {
+            let plist_path = service_plist_path()?;
             let restart = run_launchctl(&[
                 "kickstart",
                 "-k",
                 &format!("gui/{}/{}", current_uid()?, SERVICE_LABEL),
             ]);
-            let ok = json_bool(&restart, "ok");
+            let (enable, bootstrap) = if json_bool(&restart, "ok") {
+                (json!({ "attempted": false }), json!({ "attempted": false }))
+            } else if plist_path.exists() {
+                let enable = enable_service_label()?;
+                let bootstrap = if json_bool(&enable, "ok") {
+                    run_launchctl(&[
+                        "bootstrap",
+                        &format!("gui/{}", current_uid()?),
+                        &plist_path.to_string_lossy(),
+                    ])
+                } else {
+                    json!({ "attempted": false })
+                };
+                (enable, bootstrap)
+            } else {
+                (json!({ "attempted": false }), json!({ "attempted": false }))
+            };
+            let ok = json_bool(&restart, "ok") || json_bool(&bootstrap, "ok");
             print_json(&json!({
                 "ok": ok,
                 "label": SERVICE_LABEL,
-                "restart": restart
+                "plist": plist_path,
+                "restart": restart,
+                "enable": enable,
+                "bootstrap": bootstrap
             }))?;
             if !ok {
-                bail!("launchctl kickstart failed for {SERVICE_LABEL}");
+                bail!("launchctl restart/bootstrap failed for {SERVICE_LABEL}");
             }
             Ok(())
         }
@@ -246,6 +285,13 @@ pub(crate) fn current_uid() -> Result<String> {
         bail!("id -u failed");
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub(crate) fn enable_service_label() -> Result<Value> {
+    Ok(run_launchctl(&[
+        "enable",
+        &format!("gui/{}/{}", current_uid()?, SERVICE_LABEL),
+    ]))
 }
 
 pub(crate) fn run_launchctl(args: &[&str]) -> Value {

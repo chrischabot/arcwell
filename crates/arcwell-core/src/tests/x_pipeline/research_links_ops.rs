@@ -743,7 +743,7 @@ fn severe_x_report_surfaces_expanded_link_provenance() {
 
 #[test]
 fn severe_x_ops_and_doctor_surface_drift_without_secret_leak() {
-    // CLAIM: X drift and sync failure state is operator-visible through ops
+    // CLAIM: X drift and source-health state is operator-visible through ops
     // and strict doctor, not hidden behind a specialized stats command.
     // PRECONDITIONS: FTS is corrupted, a projection is failed, source health is
     // non-healthy, and a failed sync run contains secret-shaped provider text.
@@ -836,6 +836,14 @@ fn severe_x_ops_and_doctor_surface_drift_without_secret_leak() {
         "{:?}",
         ops.health.warnings
     );
+    assert!(
+        ops.health
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("X source health")),
+        "{:?}",
+        ops.health.warnings
+    );
     let ops_json = serde_json::to_string(&ops).unwrap();
     assert!(ops_json.contains("[REDACTED]"), "{ops_json}");
     assert!(!ops_json.contains(leaked_sync_secret), "{ops_json}");
@@ -863,7 +871,7 @@ fn severe_x_ops_and_doctor_surface_drift_without_secret_leak() {
         doctor
             .failures
             .iter()
-            .any(|failure| failure.contains("X sync failures")),
+            .any(|failure| failure.contains("X source health")),
         "{:?}",
         doctor.failures
     );

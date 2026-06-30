@@ -160,7 +160,44 @@ impl Store {
     pub fn enqueue_wiki_job(&self, kind: &str, input_json: Value) -> Result<WikiJob> {
         validate_job_kind(kind)?;
         self.guard_wiki_job_enqueue_policy(kind, &input_json)?;
+        if let Some(job) = self.find_active_duplicate_wiki_job(kind, &input_json)? {
+            return Ok(job);
+        }
         self.insert_wiki_job_with_status(kind, "pending", input_json)
+    }
+
+    pub(crate) fn find_active_duplicate_wiki_job(
+        &self,
+        kind: &str,
+        input_json: &Value,
+    ) -> Result<Option<WikiJob>> {
+        validate_job_kind(kind)?;
+        let input_json = serde_json::to_string(input_json)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, kind, status, input_json, result_json, error,
+                       attempts, max_attempts, leased_until, worker_id, next_run_at, dead_lettered_at,
+                       created_at, updated_at
+                FROM wiki_jobs
+                WHERE kind = ?1
+                  AND input_json = ?2
+                  AND status IN ('pending', 'deferred', 'running')
+                ORDER BY
+                    CASE status
+                        WHEN 'running' THEN 0
+                        WHEN 'pending' THEN 1
+                        WHEN 'deferred' THEN 2
+                        ELSE 10
+                    END ASC,
+                    created_at DESC
+                LIMIT 1
+                "#,
+                params![kind, input_json],
+                wiki_job_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     pub fn enqueue_rss_job(&self, url: &str) -> Result<WikiJob> {

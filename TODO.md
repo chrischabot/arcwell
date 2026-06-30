@@ -129,12 +129,15 @@ PR, implementation note, or final report:
       `arcwell service recurrence-audit` now expose retained heartbeat events
       and a contiguous-span gate. Severe tests prove forged old
       `worker_heartbeats.started_at` values and single migration backfills
-      cannot satisfy recurrence. Latest live packet
+      cannot satisfy recurrence. On 2026-06-30 the real LaunchAgent was found
+      installed but disabled/unloaded; `arcwell service restart` now falls back
+      from missing-service kickstart to `launchctl enable` plus bootstrap, and
+      proof `.arcwell-dev/proofs/service-restart-disabled-recovery-20260630T102958Z`
+      shows the disabled label recovered to running launchd state with fresh
+      worker heartbeats. The older live packet
       `.arcwell-dev/proofs/service-recurrence-proof-20260626T163731Z-57820/artifacts/proof-packet.json`
-      shows the real macOS LaunchAgent loaded and writing heartbeat events, but
       remains `incomplete` because the best retained span is 546 seconds against
-      the 48-hour gate. Global strict doctor health is recorded separately and
-      is currently unhealthy because of X/source-health/export debt.
+      the 48-hour gate.
 - [ ] Let the real macOS LaunchAgent accumulate at least 48 hours of retained
       heartbeat events, then rerun
       `scripts/service-recurrence-proof --min-span-hours 48 --max-gap-seconds 900`
@@ -197,23 +200,35 @@ PR, implementation note, or final report:
       real-home schedule `isch-093a064e3b5ecba50704d090` runs
       `knowledge_daily_briefing` at 7:00 local with 72-hour catch-up, 20 reports,
       120 source cards, email delivery policy, channel authorization, ops
-      visibility, and zero ticks before the first due slot. High-confidence
-      breaking candidates route through the Arcwell digest-alert schedule
-      `Breaking AI knowledge alerts`. The worker now
-      filters due sources before applying the batch cap, advances source health
-      using watch-source cadence, classifies entity-resolution model jobs under
-      `arcwell-knowledge/openai`, and byte-truncates knowledge-event titles and
-      summaries so long Unicode RSS/blog evidence cannot dead-letter backlog
-      clustering. Live real-home proof completed OpenAI entity-resolution jobs,
-      retried and completed the two formerly dead-lettered backlog jobs,
-      clustered 500 source cards into 38 durable clusters, and auto-enqueued
-      38 editorial follow-ups. Remaining before this checkbox can close:
+      visibility. The first missed 7am issue tick was catch-up delivered after
+      laptop downtime through delivery `bbc7dc97-e94b-4485-a364-517042456c70`
+      and tick `8c3ad3bd-9759-41b6-83a9-78154ba1d33a`, after fixing due-job
+      priority and briefing email body capping; the older June 29 oversized
+      tick remains a historical blocked row. High-confidence breaking
+      candidates route through the Arcwell digest-alert schedule `Breaking AI
+      knowledge alerts`. The worker now filters due sources before applying the
+      batch cap, advances source health using watch-source cadence, reuses an
+      existing active wiki job for exact duplicate enqueue input, classifies
+      entity-resolution model jobs under `arcwell-knowledge/openai`, and
+      byte-truncates knowledge-event titles and summaries so long Unicode
+      RSS/blog evidence cannot dead-letter backlog clustering. Live real-home
+      proof completed OpenAI entity-resolution jobs, retried and completed the
+      two formerly dead-lettered backlog jobs, clustered 500 source cards into
+      38 durable clusters, auto-enqueued 38 editorial follow-ups, superseded
+      2,437 older duplicate pending source jobs, and then completed a rebuilt
+      100-job worker pass with zero failures while duplicate source-job groups
+      stayed at zero. The real LaunchAgent initially lacked a stored GitHub
+      secret and used unauthenticated GitHub requests from launchd; `GITHUB_TOKEN`
+      is now persisted in Arcwell's redacted secret store for the resident
+      worker, stale GitHub rate-limit dead letters recovered to zero, and
+      source-health attention is down to 15 rows. Remaining before this checkbox
+      can close:
       replace the remaining Codex-side six-hour catch-up wrapper with native
       fixed-time scan scheduling or prove watch-source cadence is sufficient,
-      record the first real 7am daily issue tick and external email, record
-      multi-day sleep/shutdown/restart catch-up proof, broaden live X quota/tier
-      coverage, and prove recurring live external delivery over time without
-      manual drains.
+      record multi-day sleep/shutdown/restart catch-up proof, work down
+      remaining stale RSS feed failures, invalid GitHub-owner watch rows, and
+      stale cursors, broaden live X quota/tier coverage, and prove recurring
+      live external delivery over time without manual drains.
       First substrate slice now exists in `arcwell-core`: durable
       `knowledge_events`, `knowledge_event_sources`, `knowledge_clusters`,
       `knowledge_editorial_decisions`, and `knowledge_reports`, with source-card

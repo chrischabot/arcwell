@@ -34,6 +34,7 @@ pub(crate) enum ProviderProbeEvidence {
     OpenAiModels,
     BraveSearch,
     CloudflareTokenVerify,
+    CloudflareAccount,
 }
 
 pub(crate) struct ProviderProbeSecret {

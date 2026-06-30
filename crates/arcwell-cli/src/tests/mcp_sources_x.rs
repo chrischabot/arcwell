@@ -349,6 +349,63 @@ fn mcp_source_card_and_wiki_job_round_trip() {
 }
 
 #[test]
+fn mcp_wiki_decision_ledger_round_trips() {
+    let paths = test_paths("mcp-wiki-decision-ledger");
+    let store = Store::open(paths.clone()).unwrap();
+    let conn = rusqlite::Connection::open(&store.paths().db).unwrap();
+    conn.execute(
+        r#"
+        INSERT INTO wiki_editorial_decision_ledger
+            (page_id, page_title, decision, reviewed_source_card_ids,
+             source_set_hash, source_count, rationale, follow_up, reviewed_at,
+             first_seen_at, updated_at, source_file)
+        VALUES
+            (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        "#,
+        rusqlite::params![
+            "page-1",
+            "Ledger Page",
+            "hold",
+            "src-a;src-b",
+            "hash-src-a-src-b",
+            2_i64,
+            "Recent source cards support the current page.",
+            "Review again after the next upstream release.",
+            "2026-06-30T09:00:00Z",
+            "2026-06-30T08:00:00Z",
+            "2026-06-30T09:00:00Z",
+            "decision-ledger.csv",
+        ],
+    )
+    .unwrap();
+
+    let summary = call_mcp_tool(&paths, "wiki_decision_ledger_summary", json!({})).unwrap();
+    assert_eq!(summary["rows"].as_u64(), Some(1));
+    assert_eq!(summary["pages"].as_u64(), Some(1));
+    assert_eq!(summary["decision_counts"]["hold"].as_u64(), Some(1));
+
+    let ledger = call_mcp_tool(&paths, "wiki_decision_ledger_list", json!({ "limit": 1 })).unwrap();
+    let rows = ledger.as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["page_title"].as_str(), Some("Ledger Page"));
+    assert_eq!(
+        rows[0]["reviewed_source_card_ids"],
+        json!(["src-a", "src-b"])
+    );
+
+    let tool_names: BTreeSet<_> = mcp_tools()
+        .into_iter()
+        .filter_map(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .collect();
+    assert!(tool_names.contains("wiki_decision_ledger_summary"));
+    assert!(tool_names.contains("wiki_decision_ledger_list"));
+}
+
+#[test]
 fn severe_mcp_digest_candidate_review_gate_round_trips() {
     // CLAIM: digest candidate review and delivery preflight are usable from
     // the agent-facing MCP surface, not only from internal Rust APIs.

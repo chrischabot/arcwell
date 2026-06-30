@@ -1673,6 +1673,20 @@ pub(crate) fn mcp_tools() -> Vec<Value> {
         ),
         tool("wiki_jobs", "List wiki jobs.", []),
         tool(
+            "wiki_decision_ledger_summary",
+            "Summarize reviewed wiki editorial decisions from the durable DB ledger.",
+            [],
+        ),
+        tool(
+            "wiki_decision_ledger_list",
+            "List reviewed wiki editorial decisions from the durable DB ledger.",
+            [(
+                "limit",
+                "integer",
+                "Maximum rows to return. Defaults to 50.",
+            )],
+        ),
+        tool(
             "wiki_enqueue_rss",
             "Enqueue an RSS/Atom fetch job.",
             [("url", "string", "RSS/Atom URL.")],

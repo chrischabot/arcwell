@@ -499,6 +499,70 @@ fn worker_run_once_processes_pending_and_records_failures() {
 }
 
 #[test]
+fn severe_enqueue_wiki_job_reuses_active_duplicate_jobs() {
+    let store = test_store("wiki-job-dedupe");
+    let source = store.paths().home.join("dedupe.md");
+    let input = json!({ "path": source });
+
+    let first = store
+        .enqueue_wiki_job("ingest_file", input.clone())
+        .unwrap();
+    let pending_duplicate = store
+        .enqueue_wiki_job("ingest_file", input.clone())
+        .unwrap();
+    assert_eq!(
+        pending_duplicate.id, first.id,
+        "pending duplicate enqueue must reuse the active job"
+    );
+    assert_eq!(store.list_wiki_jobs().unwrap().len(), 1);
+
+    store
+        .conn
+        .execute(
+            r#"
+            UPDATE wiki_jobs
+            SET status = 'deferred',
+                next_run_at = ?2,
+                updated_at = ?2
+            WHERE id = ?1
+            "#,
+            params![first.id, "2099-01-01T00:00:00.000000000+00:00"],
+        )
+        .unwrap();
+    let deferred_duplicate = store
+        .enqueue_wiki_job("ingest_file", input.clone())
+        .unwrap();
+    assert_eq!(
+        deferred_duplicate.id, first.id,
+        "deferred duplicate enqueue must reuse the active job"
+    );
+    assert_eq!(store.list_wiki_jobs().unwrap().len(), 1);
+
+    store
+        .conn
+        .execute(
+            r#"
+            UPDATE wiki_jobs
+            SET status = 'failed',
+                next_run_at = NULL,
+                updated_at = ?2
+            WHERE id = ?1
+            "#,
+            params![first.id, "2099-01-01T00:00:01.000000000+00:00"],
+        )
+        .unwrap();
+    let retry = store.enqueue_wiki_job("ingest_file", input).unwrap();
+    assert_ne!(
+        retry.id, first.id,
+        "failed jobs must not suppress explicit retry enqueues"
+    );
+    let jobs = store.list_wiki_jobs().unwrap();
+    assert_eq!(jobs.len(), 2);
+    assert!(jobs.iter().any(|job| job.status == "failed"));
+    assert!(jobs.iter().any(|job| job.status == "pending"));
+}
+
+#[test]
 fn severe_worker_failure_retries_then_dead_letters() {
     let store = test_store("worker-dead-letter");
     let missing = store.paths().home.join("missing.md");

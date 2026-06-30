@@ -57,11 +57,12 @@ impl Store {
         }
         let x_stats = self.x_stats()?;
         warnings.extend(Self::x_health_warnings(&x_stats));
-        let non_healthy_radar_source_quality = self
-            .count_query("SELECT COUNT(*) FROM radar_source_quality WHERE status != 'healthy'")?;
-        if non_healthy_radar_source_quality > 0 {
+        let failing_radar_source_quality = self.count_query(
+            "SELECT COUNT(*) FROM radar_source_quality WHERE status IN ('failed', 'partial')",
+        )?;
+        if failing_radar_source_quality > 0 {
             warnings.push(format!(
-                "Radar source quality: {non_healthy_radar_source_quality} non-healthy source-quality window(s)"
+                "Radar source quality: {failing_radar_source_quality} failed or partial source-quality window(s)"
             ));
         }
         let non_successful_radar_deliveries = self.count_query(

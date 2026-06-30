@@ -1,6 +1,12 @@
 use super::*;
 
 impl Store {
+    pub(crate) fn configured_github_api_token(&self) -> Result<Option<String>> {
+        Ok(self
+            .get_usable_secret_value("GITHUB_TOKEN")?
+            .or_else(|| std::env::var("GITHUB_TOKEN").ok()))
+    }
+
     pub(crate) fn github_provider_credential_deferred_result(
         &self,
         source_key: &str,
@@ -167,7 +173,7 @@ impl Store {
                 estimated_network_fetch_cost(1),
                 json!({ "owner": owner, "repo": repo, "mode": mode, "limit": limit.clamp(1, 30) }),
             )?;
-            let token = std::env::var("GITHUB_TOKEN").ok();
+            let token = self.configured_github_api_token()?;
             let value = fetch_json(&endpoint, token.as_deref(), "github")?;
             let items = value
                 .as_array()
@@ -250,7 +256,7 @@ impl Store {
                 estimated_network_fetch_cost(1),
                 json!({ "owner": owner, "limit": limit.clamp(1, 30) }),
             )?;
-            let token = std::env::var("GITHUB_TOKEN").ok();
+            let token = self.configured_github_api_token()?;
             let value = fetch_json(&endpoint, token.as_deref(), "github")?;
             let repos = value
                 .as_array()

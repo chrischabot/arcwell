@@ -369,7 +369,7 @@ fn severe_source_card_backlog_clustering_preserves_ai_signal_mix_without_topic_c
         openai_projection
             .report
             .body_markdown
-            .contains("reaction/community rows")
+            .contains("reaction/community item(s)")
     );
 
     let karpathy_ids = report

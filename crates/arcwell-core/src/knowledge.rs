@@ -1050,6 +1050,13 @@ pub(crate) fn parse_knowledge_cluster_model_response(
     Ok(parsed)
 }
 
+pub(crate) fn knowledge_cluster_model_proposal_error_is_non_retryable(error: &str) -> bool {
+    error.contains("knowledge cluster proposal topic contains prompt-injection instruction text")
+        || error.contains("knowledge cluster proposal cited source card outside prompt evidence")
+        || error.contains("knowledge cluster proposal reused a source card across clusters")
+        || error.contains("knowledge cluster proposal returned more clusters than requested")
+}
+
 pub(crate) fn validate_knowledge_editorial_decision_input(
     input: &KnowledgeEditorialDecisionInput,
 ) -> Result<()> {
@@ -1123,6 +1130,23 @@ pub(crate) fn audit_knowledge_report(body: &str, source_card_ids: &[String]) -> 
         findings.push("report_body_too_short_for_human_readable_analysis".to_string());
     }
     let lower = trimmed.to_ascii_lowercase();
+    if [
+        "durable source-card rows into the unified knowledge pipeline",
+        "durable source rows into the unified knowledge pipeline",
+        "provider family buckets",
+        "stored as source-card ids",
+        "stored as source references",
+        "primary-source-style rows",
+        "github repositories detected",
+        "external domains detected",
+        "first bridge between the existing live/captured ingestion machinery",
+        "source-agnostic knowledge substrate",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+    {
+        findings.push("report_leaks_internal_projection_bookkeeping".to_string());
+    }
     if ![
         "uncertain",
         "uncertainty",
@@ -1761,11 +1785,12 @@ pub(crate) fn knowledge_github_owner_entity_input(
 ) -> Option<KnowledgeEntityInput> {
     let key = knowledge_github_owner_key(card)?;
     let owner = card.metadata.get("owner")?.as_str()?.trim();
+    let owner_name = knowledge_github_owner_display_name(owner, card.provider.as_str());
     Some(KnowledgeEntityInput {
         entity_type: "github_owner".to_string(),
-        name: owner.to_string(),
+        name: owner_name.clone(),
         canonical_key: key,
-        aliases: vec![owner.to_string()],
+        aliases: vec![owner_name],
         homepage_url: Some(format!("https://github.com/{owner}")),
         source_card_ids: vec![card.id.clone()],
         wiki_page_id: None,
@@ -1776,6 +1801,14 @@ pub(crate) fn knowledge_github_owner_entity_input(
             "source_card_url": card.url,
         }),
     })
+}
+
+pub(crate) fn knowledge_github_owner_display_name(owner: &str, provider: &str) -> String {
+    if owner.eq_ignore_ascii_case(provider) {
+        format!("@{}", owner.trim())
+    } else {
+        owner.trim().to_string()
+    }
 }
 
 pub(crate) fn knowledge_github_repo_key(card: &SourceCard) -> Option<String> {
@@ -1954,10 +1987,11 @@ pub(crate) fn render_knowledge_projection_report(
         .take(8)
         .map(|card| {
             format!(
-                "- `{}`: {}. {}",
+                "- `{}`: [{}]({}) - {}",
                 card.id,
-                card.title,
-                excerpt(&card.summary, 240)
+                escape_markdown_link_text(&knowledge_projection_source_label(card)),
+                card.url,
+                knowledge_projection_source_summary(card)
             )
         })
         .collect::<Vec<_>>()
@@ -1973,13 +2007,13 @@ pub(crate) fn render_knowledge_projection_report(
     };
     format!(
         r#"## What happened
-Arcwell projected {source_count} durable source-card rows into the unified knowledge pipeline for **{topic}**. The evidence spans {provider_count} provider family buckets ({provider_counts:?}) and is stored as source-card IDs: {source_ids}. This report is intentionally written as analysis rather than a raw link list, and each cited source remains untrusted evidence rather than instructions.
+{topic} has a small source-backed signal from {source_count} linked {source_word}. The current evidence mix is {primary_source_count} primary-style item(s), {reaction_source_count} reaction/community item(s), and {provider_count} source family/families ({provider_counts:?}). That is enough to preserve the thread for follow-up, but not enough by itself to call this a release, benchmark result, adoption trend, or competitive shift.
 
 ## Why it matters
-This is the first bridge between the existing live/captured ingestion machinery and the new source-agnostic knowledge substrate. A live radar run, browser-captured Reddit listing, GitHub fetch, RSS fetch, or existing source-card query can now become confirmed knowledge events, a durable cluster, an editorial decision, and a human-readable report without bypassing source-card provenance. The output is still conservative: it does not claim semantic synthesis, wiki expansion, external delivery, or scheduled recurrence unless later proof gates run those stages.
+The useful question is whether these sources point to a product surface, developer workflow, evaluation practice, or operational integration that is becoming more concrete. If later official docs, release notes, credible developer usage, or benchmark evidence confirm the same direction, this should become a stronger story. If not, it should stay a weak signal rather than becoming noisy alert copy.
 
 ## Signal mix
-The cluster contains {primary_source_count} primary-source-style rows and {reaction_source_count} reaction/community rows. Source roles present: {source_roles:?}. GitHub repositories detected: {github_repos:?}. External domains detected: {external_domains:?}. These fields are used to explain evidence shape and follow-up priorities; they are not treated as instructions from the source text.
+Roles present: {source_roles:?}. GitHub repositories: {github_repos:?}. External domains: {external_domains:?}. These details explain the shape of the evidence and should guide what to verify next.
 
 ## Evidence
 {highlights}
@@ -1990,15 +2024,75 @@ The cluster contains {primary_source_count} primary-source-style rows and {react
 - Compare the cluster against existing wiki pages, related entities, and prior launches before creating a duplicate page or sending stronger competitive-analysis claims.
 
 ## Confidence and uncertainty
-Confidence is bounded by `{proof_level}` and source family `{source_family}`. The main uncertainty is interpretive: these source cards prove that evidence exists and was coalesced, but they do not by themselves prove adoption, long-term importance, competitive positioning, or correctness of every external claim. Follow-up research should fetch deeper primary documentation, compare against existing wiki pages, and only then promote stronger claims or outbound digests.
+Confidence is bounded by `{proof_level}` and source family `{source_family}`. Linked source IDs: {source_ids}. The main uncertainty is interpretive: the evidence proves there is something to inspect, but it does not by itself prove adoption, long-term importance, competitive positioning, or correctness of every external claim. Follow-up research should fetch deeper primary documentation, compare against existing wiki pages, and only then promote stronger claims or outbound digests.
 
 ## Warnings
 {warning_text}
 "#,
         source_count = source_cards.len(),
+        source_word = if source_cards.len() == 1 {
+            "source"
+        } else {
+            "sources"
+        },
         topic = cluster.topic,
         provider_count = provider_counts.len(),
     )
+}
+
+pub(crate) fn knowledge_projection_source_label(card: &SourceCard) -> String {
+    let title = html_unescape_basic(card.title.trim());
+    if let Some(rest) = title.strip_prefix("GitHub repo ") {
+        rest.trim().to_string()
+    } else {
+        excerpt(&title, 100)
+    }
+}
+
+pub(crate) fn knowledge_projection_source_summary(card: &SourceCard) -> String {
+    let summary = card.summary.trim();
+    let text = if summary.is_empty()
+        || summary
+            .to_ascii_lowercase()
+            .ends_with("is a public github repository.")
+    {
+        source_card_metadata_string(&card.metadata, "description").unwrap_or_default()
+    } else {
+        summary.to_string()
+    };
+    let mut parts = Vec::new();
+    if !text.trim().is_empty() {
+        parts.push(excerpt(text.trim(), 220));
+    }
+    if let Some(language) = source_card_metadata_string(&card.metadata, "language")
+        && !language.eq_ignore_ascii_case("unknown")
+    {
+        parts.push(format!("Language: {language}."));
+    }
+    if let Some(pushed_at) = card
+        .metadata
+        .get("raw")
+        .and_then(|raw| raw.get("pushed_at"))
+        .and_then(Value::as_str)
+    {
+        parts.push(format!(
+            "Last pushed {}.",
+            pushed_at.split('T').next().unwrap_or(pushed_at)
+        ));
+    }
+    if let Some(stars) = card
+        .metadata
+        .get("raw")
+        .and_then(|raw| raw.get("stargazers_count"))
+        .and_then(Value::as_u64)
+    {
+        parts.push(format!("{stars} stars."));
+    }
+    if parts.is_empty() {
+        "Source available for inspection.".to_string()
+    } else {
+        parts.join(" ")
+    }
 }
 
 pub(crate) fn render_knowledge_cluster_wiki_page(

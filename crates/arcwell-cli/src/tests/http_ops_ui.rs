@@ -1323,10 +1323,12 @@ fn severe_ops_ui_surfaces_job_hunting_state_without_raw_html() {
 
 #[test]
 fn severe_ops_ui_surfaces_radar_source_quality_without_raw_html() {
-    // CLAIM: Radar source-quality windows are operator-visible in ops, affect
-    // health scoring, and preserve hostile source locator text as escaped data.
+    // CLAIM: Radar source-quality windows are operator-visible in ops without
+    // making low-signal-but-not-failed sources keep global health red, and
+    // hostile source locator text is preserved only as escaped data.
     // ORACLE: A real radar run creates a low-signal source-quality row; the
-    // snapshot and filtered HTML expose it, but raw script markup never renders.
+    // snapshot and filtered HTML expose it, health has no radar warning for
+    // mere low signal, and raw script markup never renders.
     // SEVERITY: Severe because source-quality rows are misleading if hidden
     // from ops, and locators are untrusted provider/user-controlled text.
     let paths = test_paths("ops-ui-radar-source-quality");
@@ -1381,8 +1383,7 @@ fn severe_ops_ui_surfaces_radar_source_quality_without_raw_html() {
             .health
             .warnings
             .iter()
-            .any(|warning| warning.contains("Radar source quality")
-                && warning.contains("non-healthy")),
+            .all(|warning| !warning.contains("Radar source quality")),
         "{:?}",
         snapshot.health.warnings
     );
@@ -1410,7 +1411,7 @@ fn severe_ops_ui_surfaces_radar_source_quality_without_raw_html() {
     assert!(html.contains("avg score"));
     assert!(html.contains("Radar Source Quality"));
     assert!(html.contains("low_signal"));
-    assert!(html.contains("non-healthy radar source-quality window"));
+    assert!(html.contains("1 low-signal radar source-quality window"));
     assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
     assert!(!html.contains("<script>alert(1)</script>"));
 }

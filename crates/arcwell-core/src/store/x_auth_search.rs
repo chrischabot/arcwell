@@ -570,7 +570,8 @@ impl Store {
             .map(|spec| spec.provider.clone())
             .collect::<Vec<_>>();
         let mut endpoints = Vec::new();
-        for spec in specs {
+        for mut spec in specs {
+            self.prepare_provider_credential_probe_spec(&mut spec)?;
             let source_key = format!("provider:{}:credential-probe", spec.provider);
             let endpoint_label = provider_probe_endpoint_label(&spec.url);
             let mut finish = |status: &str,
@@ -768,6 +769,22 @@ impl Store {
             }
         }
         Ok(None)
+    }
+
+    pub(crate) fn prepare_provider_credential_probe_spec(
+        &self,
+        spec: &mut ProviderCredentialProbeSpec,
+    ) -> Result<()> {
+        if spec.provider == "cloudflare"
+            && spec.url == "https://api.cloudflare.com/client/v4/user/tokens/verify"
+            && let Some(account_id) = self.get_usable_secret_value("CLOUDFLARE_ACCOUNT_ID")?
+        {
+            let account_id = account_id.trim();
+            validate_key(account_id)?;
+            spec.url = format!("https://api.cloudflare.com/client/v4/accounts/{account_id}");
+            spec.evidence = ProviderProbeEvidence::CloudflareAccount;
+        }
+        Ok(())
     }
 
     pub(crate) fn finish_x_oauth_probe_report(

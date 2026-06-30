@@ -242,6 +242,20 @@ impl Store {
             }
             Err(error) => {
                 let error = error.to_string();
+                if job.kind == "knowledge_cluster_model_propose"
+                    && crate::knowledge::knowledge_cluster_model_proposal_error_is_non_retryable(
+                        &error,
+                    )
+                {
+                    return self.complete_wiki_job(
+                        &job.id,
+                        json!({
+                            "status": "rejected_non_retryable",
+                            "reason": excerpt(&error, 1000),
+                            "boundary": "Knowledge cluster model output failed deterministic safety validation and was not retried."
+                        }),
+                    );
+                }
                 let failed = self.fail_wiki_job(&job.id, &error)?;
                 if job.kind == "knowledge_entity_resolution_model" {
                     let _ = self.record_knowledge_entity_resolution_job_failure_health(

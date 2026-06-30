@@ -1,0 +1,313 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/arcwell-wiki-freshness-ops-test.XXXXXX")"
+DB="$ROOT/arcwell.sqlite3"
+PROOF_DIR="$ROOT/proof"
+WORKFLOW_ROOT="$ROOT/workflows"
+mkdir -p "$PROOF_DIR" "$WORKFLOW_ROOT/wiki-freshness-workflow-fixture"
+
+python3 - "$DB" "$WORKFLOW_ROOT/wiki-freshness-workflow-fixture/workflow_summary.json" <<'PY'
+import json
+import sqlite3
+import sys
+
+db = sys.argv[1]
+workflow_summary = sys.argv[2]
+
+with sqlite3.connect(db) as conn:
+    conn.executescript(
+        """
+        CREATE TABLE watch_sources (
+          id TEXT PRIMARY KEY,
+          source_kind TEXT NOT NULL,
+          locator TEXT NOT NULL,
+          label TEXT NOT NULL,
+          cadence TEXT NOT NULL,
+          status TEXT NOT NULL,
+          metadata_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE source_health (
+          key TEXT PRIMARY KEY,
+          provider TEXT NOT NULL,
+          source_kind TEXT NOT NULL,
+          locator TEXT NOT NULL,
+          status TEXT NOT NULL,
+          last_success_at TEXT,
+          last_failure_at TEXT,
+          last_error TEXT,
+          last_item_id TEXT,
+          last_item_date TEXT,
+          cursor_key TEXT,
+          cursor_value TEXT,
+          next_run_at TEXT,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE cursors (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE source_cards (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          url TEXT NOT NULL,
+          source_type TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          claims_json TEXT NOT NULL,
+          retrieved_at TEXT NOT NULL,
+          wiki_page_id TEXT NOT NULL,
+          content_sha256 TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE wiki_pages (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          path TEXT NOT NULL,
+          content_sha256 TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'unknown',
+          status TEXT NOT NULL DEFAULT 'active'
+        );
+        CREATE TABLE wiki_jobs (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          status TEXT NOT NULL,
+          input_json TEXT NOT NULL,
+          result_json TEXT,
+          error TEXT,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          max_attempts INTEGER NOT NULL DEFAULT 3,
+          leased_until TEXT,
+          worker_id TEXT,
+          next_run_at TEXT,
+          dead_lettered_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE wiki_editorial_decision_ledger (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          page_id TEXT NOT NULL,
+          page_title TEXT NOT NULL DEFAULT '',
+          decision TEXT NOT NULL CHECK (decision IN ('hold', 'reject')),
+          reviewed_source_card_ids TEXT NOT NULL,
+          source_set_hash TEXT NOT NULL,
+          source_count INTEGER NOT NULL DEFAULT 0,
+          rationale TEXT NOT NULL DEFAULT '',
+          follow_up TEXT NOT NULL DEFAULT '',
+          reviewed_at TEXT NOT NULL,
+          first_seen_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          source_file TEXT NOT NULL DEFAULT '',
+          UNIQUE(page_id, source_set_hash)
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO watch_sources VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "watch-1",
+            "rss",
+            "https://example.com/feed.xml",
+            "Example Feed",
+            "warm",
+            "active",
+            "{}",
+            "2026-06-29T00:00:00Z",
+            "2026-06-30T00:00:00Z",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO watch_sources VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "watch-2",
+            "github_owner",
+            "example",
+            "Example",
+            "warm",
+            "paused",
+            "{}",
+            "2026-06-29T00:00:00Z",
+            "2026-06-30T00:00:00Z",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO source_health VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "rss:https://example.com/feed.xml",
+            "rss",
+            "rss",
+            "https://example.com/feed.xml",
+            "healthy",
+            "2026-06-30T08:00:00Z",
+            None,
+            None,
+            "item-1",
+            "2026-06-30T08:00:00Z",
+            "rss:https://example.com/feed.xml",
+            "item-1",
+            None,
+            "2026-06-30T08:00:00Z",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO source_health VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "github-owner:example",
+            "github",
+            "github_owner",
+            "example",
+            "rate_limited",
+            "2026-06-28T08:00:00Z",
+            "2026-06-30T08:00:00Z",
+            "fixture rate limit",
+            "repo-1",
+            "2026-06-30T08:00:00Z",
+            "github-owner:example",
+            "repo-1",
+            "2026-06-30T09:00:00Z",
+            "2026-06-30T08:00:00Z",
+        ),
+    )
+    conn.execute("INSERT INTO cursors VALUES (?, ?, ?)", ("rss:good", "item-1", "2026-06-30T08:00:00Z"))
+    conn.execute("INSERT INTO cursors VALUES (?, ?, ?)", ("github-owner:stale", "repo-1", "2026-06-27T08:00:00Z"))
+    conn.execute(
+        "INSERT INTO source_cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "src-1",
+            "Recent Card",
+            "https://example.com/recent",
+            "rss",
+            "rss",
+            "recent summary",
+            "[]",
+            "2026-06-30T08:00:00Z",
+            "",
+            "sha",
+            "2026-06-30T08:00:00Z",
+            "2026-06-30T08:00:00Z",
+            "{}",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO wiki_pages VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "page-1",
+            "Fixture Page",
+            "markdown/fixture.md",
+            "sha",
+            "2026-06-29T00:00:00Z",
+            "2026-06-30T08:00:00Z",
+            "fixture",
+            "active",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO wiki_jobs
+          (id, kind, status, input_json, result_json, error, attempts,
+           max_attempts, leased_until, worker_id, next_run_at, dead_lettered_at,
+           created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "job-1",
+            "rss",
+            "failed",
+            "{}",
+            None,
+            "fixture failure",
+            1,
+            3,
+            None,
+            None,
+            None,
+            None,
+            "2026-06-30T08:00:00Z",
+            "2026-06-30T08:00:00Z",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO wiki_editorial_decision_ledger
+          (page_id, page_title, decision, reviewed_source_card_ids,
+           source_set_hash, source_count, rationale, follow_up,
+           reviewed_at, first_seen_at, updated_at, source_file)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "page-1",
+            "Fixture Page",
+            "hold",
+            "src-1",
+            "hash-src-1",
+            1,
+            "fixture rationale",
+            "fixture follow up",
+            "2026-06-30T08:00:00Z",
+            "2026-06-30T08:00:00Z",
+            "2026-06-30T08:00:00Z",
+            "fixture.csv",
+        ),
+    )
+    conn.commit()
+
+with open(workflow_summary, "w", encoding="utf-8") as handle:
+    json.dump(
+        {
+            "generated_at": "2026-06-30T08:00:00Z",
+            "scan": {
+                "candidate_pool_total": 10,
+                "candidate_count": 3,
+                "manual_review_queue_rows": 3,
+                "blocked_source_rows_total": 2,
+                "blocked_source_classes": {"rate_limited": 1, "queued_due": 1},
+                "safe_batch_candidates": 0,
+            },
+            "packets": {"packet_count": 3, "suppressed_reviewed_decisions": 1},
+            "decisions": {
+                "remaining_pending": 3,
+                "update_existing_export_rows": 0,
+                "decision_ledger_rows": 1,
+            },
+            "agenda": {
+                "clean_update_candidates": 0,
+                "source_verification_candidates": 1,
+            },
+            "artifacts": {"editorial_agenda": "fixture-agenda.md"},
+        },
+        handle,
+    )
+PY
+
+scripts/wiki-freshness-ops-snapshot \
+  --db "$DB" \
+  --proof-dir "$PROOF_DIR" \
+  --proof-root "$WORKFLOW_ROOT" \
+  --recent-hours 24 \
+  --stale-hours 24 \
+  --failure-limit 10 >/tmp/wiki-freshness-ops-snapshot-test-output.json
+
+python3 - "$PROOF_DIR/wiki_freshness_ops_snapshot.json" <<'PY'
+import json
+import sys
+
+summary = json.load(open(sys.argv[1], encoding="utf-8"))
+assert summary["assessment"]["status"] == "hold", summary["assessment"]
+assert summary["watch_sources"]["total"] == 2, summary["watch_sources"]
+assert summary["source_health"]["attention_rows"] == 1, summary["source_health"]
+assert summary["cursors"]["stale_rows"] == 1, summary["cursors"]
+assert summary["source_cards"]["recent"] == 1, summary["source_cards"]
+assert summary["decision_ledger"]["rows"] == 1, summary["decision_ledger"]
+assert summary["latest_workflow"]["blocked_source_rows_total"] == 2, summary["latest_workflow"]
+assert summary["latest_workflow"]["pending_decisions"] == 3, summary["latest_workflow"]
+assert summary["artifacts"]["summary_md"].endswith("wiki_freshness_ops_snapshot.md")
+PY
+
+echo "wiki freshness ops snapshot test passed: $PROOF_DIR"
