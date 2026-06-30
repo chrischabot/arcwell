@@ -55,6 +55,7 @@ fn x_recent_search_uses_sqlite_secret_and_updates_cursor() {
         )
         .unwrap();
     assert_eq!(provider, "x");
+    assert!(report.rejected_errors.is_empty());
     let profile_user_id: String = store
         .conn
         .query_row(
@@ -174,6 +175,163 @@ fn severe_x_recent_search_refreshes_expired_bearer_before_provider_fetch() {
     let stats = store.x_stats().unwrap();
     assert_eq!(stats.sync_runs_by_status.get("completed").copied(), Some(1));
     assert_eq!(stats.latest_sync_runs[0].new_cursor.as_deref(), Some("220"));
+}
+
+#[test]
+fn severe_x_recent_search_accepts_numeric_leading_handles() {
+    // CLAIM: valid X handles that start with digits, such as 0x-style
+    // developer accounts, import through the live recent-search adapter.
+    // ORACLE: source card, canonical profile, item source, and cursor are
+    // written with no reject noise.
+    // SEVERITY: Severe because production watch monitoring hit live 0x*
+    // accounts and a generic malformed-item error hid the actual failure.
+    clear_x_bearer_env();
+    let store = test_store("x-recent-numeric-leading-handle");
+    store
+        .set_secret_value("X_BEARER_TOKEN", "test-token", "x")
+        .unwrap();
+    let base = mock_base_server(
+        r#"{
+              "data": [
+                {
+                  "id": "230",
+                  "author_id": "1963665677476413440",
+                  "text": "New developer tooling note from a numeric-leading handle.",
+                  "created_at": "2026-06-29T00:00:00Z",
+                  "public_metrics": {
+                    "retweet_count": 0,
+                    "reply_count": 1,
+                    "like_count": 2,
+                    "quote_count": 0
+                  }
+                }
+              ],
+              "includes": {
+                "users": [
+                  { "id": "1963665677476413440", "username": "0xbeepit", "name": "Beep" }
+                ]
+              },
+              "meta": { "newest_id": "230" }
+            }"#,
+        "application/json",
+    );
+
+    let report = store
+        .x_recent_search_with_base("from:0xbeepit -is:retweet", 10, &base)
+        .unwrap();
+
+    assert_eq!(report.seen, 1);
+    assert_eq!(report.imported, 1);
+    assert_eq!(report.rejected, 0);
+    assert!(report.rejected_errors.is_empty());
+    assert_eq!(report.source_card_projections, Some(1));
+    assert_eq!(
+        store
+            .get_cursor("x:recent-search:from:0xbeepit -is:retweet")
+            .unwrap()
+            .unwrap()
+            .value,
+        "230"
+    );
+    let item = store
+        .list_x_items(Some("numeric-leading handle"))
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(item.author, "0xbeepit");
+    assert_eq!(item.sources[0].source_kind, "recent_search");
+    let profile_user_id: String = store
+        .conn
+        .query_row(
+            "SELECT x_user_id FROM x_profiles WHERE handle = '0xbeepit'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(profile_user_id, "1963665677476413440");
+}
+
+#[test]
+fn severe_x_recent_search_source_write_policy_failure_is_visible_and_cursor_safe() {
+    // CLAIM: If X network access is allowed but source-card writes are not,
+    // the failure is reported as policy/source-write, not as opaque malformed
+    // provider data, and the recent-search cursor is not advanced.
+    // ORACLE: error text, cursor table, X item table, and sync-run status.
+    // SEVERITY: Severe because the production monitor previously looked like
+    // malformed X rows while the real blocker was expired/missing source.write
+    // policy for source_card_add.
+    clear_x_bearer_env();
+    let store = test_store("x-recent-source-write-policy-visible");
+    store
+        .set_secret_value("X_BEARER_TOKEN", "test-token", "x")
+        .unwrap();
+    write_policy(
+        &store,
+        r#"
+[[rules]]
+id = "allow-x-recent-search-network-only"
+effect = "allow"
+action = "provider.network"
+reason = "allow network only; source-card write intentionally omitted"
+package = "arcwell-x"
+provider = "x"
+source = "x_recent_search"
+priority = 20
+"#,
+    );
+    let base = mock_base_server(
+        r#"{
+              "data": [
+                {
+                  "id": "240",
+                  "author_id": "1963665677476413440",
+                  "text": "Policy visibility probe from X.",
+                  "created_at": "2026-06-29T00:00:00Z"
+                }
+              ],
+              "includes": {
+                "users": [
+                  { "id": "1963665677476413440", "username": "0xbeepit", "name": "Beep" }
+                ]
+              },
+              "meta": { "newest_id": "240" }
+            }"#,
+        "application/json",
+    );
+
+    let error = store
+        .x_recent_search_with_base("from:0xbeepit -is:retweet", 10, &base)
+        .expect_err("source.write denial must fail the import")
+        .to_string();
+
+    assert!(
+        error.contains("first rejection: policy deferred source.write"),
+        "{error}"
+    );
+    assert!(error.contains("cursor was not advanced"), "{error}");
+    assert!(
+        store
+            .get_cursor("x:recent-search:from:0xbeepit -is:retweet")
+            .unwrap()
+            .is_none(),
+        "cursor must not advance when durable evidence write fails"
+    );
+    assert!(
+        store
+            .list_x_items(Some("Policy visibility"))
+            .unwrap()
+            .is_empty()
+    );
+    let stats = store.x_stats().unwrap();
+    assert_eq!(stats.sync_runs_by_status.get("failed").copied(), Some(1));
+    assert_eq!(stats.latest_sync_runs[0].status, "failed");
+    assert!(
+        stats.latest_sync_runs[0]
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("source.write")
+    );
 }
 
 #[test]

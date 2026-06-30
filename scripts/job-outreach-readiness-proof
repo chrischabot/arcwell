@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in jq sqlite3; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the job outreach readiness proof." >&2
+    exit 2
+  fi
+done
+
+RUN_STAMP="${ARCWELL_JOB_OUTREACH_READINESS_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_OUTREACH_READINESS_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-outreach-readiness-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_JOB_OUTREACH_READINESS_HOME:-$PROOF_ROOT/home}"
+DB="$ARCWELL_HOME/arcwell.sqlite3"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[job-outreach-readiness-proof] %s\n' "$*"
+}
+
+fail() {
+  printf '[job-outreach-readiness-proof] BLOCKED: %s\n' "$*" >&2
+  exit 2
+}
+
+require_json_value() {
+  local value="$1"
+  local label="$2"
+  if [ -z "$value" ] || [ "$value" = "null" ]; then
+    fail "missing $label"
+  fi
+}
+
+assert_json() {
+  local file="$1"
+  local filter="$2"
+  local label="$3"
+  if ! jq -e "$filter" "$file" >/dev/null; then
+    fail "$label failed for $file"
+  fi
+}
+
+assert_sql_count() {
+  local sql="$1"
+  local expected="$2"
+  local label="$3"
+  local actual
+  actual="$(sqlite3 "$DB" "$sql")"
+  if [ "$actual" != "$expected" ]; then
+    fail "$label expected $expected, got $actual"
+  fi
+}
+
+log "proof root: $PROOF_ROOT"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+
+"$ARCWELL_BIN" job profile-add \
+  --label "Chris Chabot" \
+  --current-resume-source "proof-fixture:current-resume" \
+  --github-profile "https://github.com/chrischabot" \
+  --blog-url "https://chabot.dev" \
+  >"$ARTIFACT_DIR/profile.json"
+PROFILE_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/profile.json")"
+require_json_value "$PROFILE_ID" "profile id"
+
+"$ARCWELL_BIN" job evidence-add "$PROFILE_ID" \
+  --title "Open Cloud" \
+  --evidence-type "github" \
+  --visibility "public" \
+  --summary "Public project showing cloud and developer-tooling work." \
+  --proof-url "https://github.com/chrischabot/opencloud" \
+  --source-date "2026-06-28" \
+  --confidence "verified" \
+  --tag "developer-tools" \
+  --tag "agents" \
+  --safe-application-text "Built public developer tooling around cloud workflows." \
+  >"$ARTIFACT_DIR/evidence.json"
+EVIDENCE_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/evidence.json")"
+require_json_value "$EVIDENCE_ID" "evidence id"
+
+"$ARCWELL_BIN" job role-add \
+  --company "Example AI" \
+  --role-title "Staff Agent Platform Engineer" \
+  --canonical-url "https://example.com/careers/staff-agent-platform-engineer" \
+  --source-family "company" \
+  --source-url "https://example.com/careers/staff-agent-platform-engineer" \
+  --source-confidence "canonical_confirmed" \
+  --date-accessed "2026-06-29T08:00:00Z" \
+  --posting-freshness "same_day" \
+  --location "London or remote Europe" \
+  --work-mode "hybrid_or_remote" \
+  --company-stage-or-size "startup" \
+  --role-seniority "staff" \
+  --requirement "agent systems" \
+  --requirement "developer tooling" \
+  --implied-business-problem "The company needs reliable agent infrastructure for developers." \
+  --why-they-might-need-user "Public work maps to agent and developer-tooling problems." \
+  --evidence-card-id "$EVIDENCE_ID" \
+  --cluster "agent-platform" \
+  --current-status "live" \
+  >"$ARTIFACT_DIR/role.json"
+ROLE_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/role.json")"
+require_json_value "$ROLE_ID" "role id"
+
+"$ARCWELL_BIN" job score-add "$ROLE_ID" \
+  --profile-id "$PROFILE_ID" \
+  --role-fit 5 \
+  --domain-fit 5 \
+  --evidence-fit 5 \
+  --geo-work-fit 5 \
+  --stage-fit 4.5 \
+  --practical-odds 4.5 \
+  --interest-energy 5 \
+  --evidence-card-id "$EVIDENCE_ID" \
+  --explanation "Strong controlled fit fixture for outreach readiness proof." \
+  >"$ARTIFACT_DIR/score.json"
+
+"$ARCWELL_BIN" job outreach-readiness "$PROFILE_ID" --limit 10 \
+  >"$ARTIFACT_DIR/readiness-no-packet.json"
+assert_json "$ARTIFACT_DIR/readiness-no-packet.json" '.ready_count == 0 and .blocked_count == 1' "no-packet blocked count"
+assert_json "$ARTIFACT_DIR/readiness-no-packet.json" 'any(.entries[0].blockers[]; contains("no application packet"))' "no-packet blocker"
+assert_json "$ARTIFACT_DIR/readiness-no-packet.json" 'any(.entries[0].blockers[]; contains("no intro or outreach path"))' "no-path blocker"
+
+"$ARCWELL_BIN" job packet-create "$ROLE_ID" \
+  --profile-id "$PROFILE_ID" \
+  --evidence-card-id "$EVIDENCE_ID" \
+  --resume-emphasis "Lead with public developer tooling and agent systems." \
+  --tailored-bullet "Built public cloud developer tooling." \
+  --outreach-note "Example AI appears to need reliable agent tooling discipline." \
+  --proof-links-json '{"github":"https://github.com/chrischabot/opencloud"}' \
+  --likely-objection "No direct company-specific evidence yet." \
+  --interview-story "Public project technical story." \
+  --question-to-ask "Where do agent workflows fail today?" \
+  >"$ARTIFACT_DIR/packet-draft.json"
+PACKET_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/packet-draft.json")"
+require_json_value "$PACKET_ID" "packet id"
+
+"$ARCWELL_BIN" job contact-add \
+  --name "Public Hiring Manager" \
+  --role-title "Engineering Manager" \
+  --public-profile-url "https://example.com/team/public-hiring-manager" \
+  --source-url "https://example.com/team" \
+  --relationship-status "public_only" \
+  --relevance "hiring_manager" \
+  --note "Source evidence: public team page lists this person as engineering manager; no relationship path." \
+  >"$ARTIFACT_DIR/contact-public.json"
+PUBLIC_CONTACT_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/contact-public.json")"
+require_json_value "$PUBLIC_CONTACT_ID" "public contact id"
+
+"$ARCWELL_BIN" job intro-add "$ROLE_ID" \
+  --contact-id "$PUBLIC_CONTACT_ID" \
+  --path-type "unknown" \
+  --confidence "weak" \
+  --next-action "Find a real route before outreach." \
+  --status "identify" \
+  >"$ARTIFACT_DIR/intro-public.json"
+
+"$ARCWELL_BIN" job outreach-readiness "$PROFILE_ID" --limit 10 \
+  >"$ARTIFACT_DIR/readiness-draft-public.json"
+assert_json "$ARTIFACT_DIR/readiness-draft-public.json" '.ready_count == 0' "draft public ready count"
+assert_json "$ARTIFACT_DIR/readiness-draft-public.json" '.entries[0].packet_status == "draft"' "draft packet status"
+assert_json "$ARTIFACT_DIR/readiness-draft-public.json" '.entries[0].public_only_count == 1 and .entries[0].warm_intro_ready_count == 0' "public-only not warm"
+assert_json "$ARTIFACT_DIR/readiness-draft-public.json" 'any(.entries[0].blockers[]; contains("approved packet required"))' "draft packet blocker"
+
+"$ARCWELL_BIN" job packet-approve "$PACKET_ID" \
+  --reviewer-note "Reviewed by user for local outreach readiness." \
+  >"$ARTIFACT_DIR/packet-approved.json"
+
+"$ARCWELL_BIN" job outreach-readiness "$PROFILE_ID" --limit 10 \
+  >"$ARTIFACT_DIR/readiness-approved-public.json"
+assert_json "$ARTIFACT_DIR/readiness-approved-public.json" '.ready_count == 0' "approved public ready count"
+assert_json "$ARTIFACT_DIR/readiness-approved-public.json" '.entries[0].packet_status == "approved"' "approved packet status"
+assert_json "$ARTIFACT_DIR/readiness-approved-public.json" '.entries[0].privacy_check_id != null' "approved public privacy check"
+assert_json "$ARTIFACT_DIR/readiness-approved-public.json" 'any(.entries[0].blockers[]; contains("public-only paths remain identify"))' "public-only blocker"
+
+"$ARCWELL_BIN" job contact-add \
+  --name "Known Staff Engineer" \
+  --role-title "Staff Engineer" \
+  --public-profile-url "https://example.com/team/known-staff-engineer" \
+  --source-url "https://example.com/team" \
+  --relationship-status "known" \
+  --relevance "engineer" \
+  --note "User confirmed this contact can route a relevant intro." \
+  >"$ARTIFACT_DIR/contact-known.json"
+KNOWN_CONTACT_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/contact-known.json")"
+require_json_value "$KNOWN_CONTACT_ID" "known contact id"
+
+"$ARCWELL_BIN" job intro-add "$ROLE_ID" \
+  --contact-id "$KNOWN_CONTACT_ID" \
+  --path-type "mutual" \
+  --confidence "confirmed" \
+  --next-action "Ask for an intro using the approved packet." \
+  --status "ask" \
+  >"$ARTIFACT_DIR/intro-known.json"
+
+"$ARCWELL_BIN" job outreach-readiness "$PROFILE_ID" --limit 10 \
+  >"$ARTIFACT_DIR/readiness-ready.json"
+assert_json "$ARTIFACT_DIR/readiness-ready.json" '.ready_count == 1 and .blocked_count == 0' "ready count"
+assert_json "$ARTIFACT_DIR/readiness-ready.json" '.entries[0].decision == "ready"' "ready decision"
+assert_json "$ARTIFACT_DIR/readiness-ready.json" '.entries[0].warm_intro_ready_count == 1' "warm-ready count"
+assert_json "$ARTIFACT_DIR/readiness-ready.json" 'any(.non_claims[]; contains("does not send"))' "non-send non-claim"
+
+"$ARCWELL_BIN" job packet-create "$ROLE_ID" \
+  --profile-id "$PROFILE_ID" \
+  --evidence-card-id "$EVIDENCE_ID" \
+  --resume-emphasis "Revise toward a fresher agent tooling story." \
+  --tailored-bullet "Built public cloud developer tooling." \
+  --outreach-note "Example AI appears to need reliable agent tooling discipline, with a revised emphasis." \
+  --proof-links-json '{"github":"https://github.com/chrischabot/opencloud"}' \
+  --likely-objection "Revised note still needs review." \
+  --interview-story "Public project technical story." \
+  --question-to-ask "Where do agent workflows fail today?" \
+  >"$ARTIFACT_DIR/packet-revised-draft.json"
+REVISED_PACKET_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/packet-revised-draft.json")"
+require_json_value "$REVISED_PACKET_ID" "revised packet id"
+sqlite3 "$DB" "UPDATE job_application_packets SET generated_at = '2999-01-01T00:00:00Z' WHERE id = '$REVISED_PACKET_ID';"
+
+"$ARCWELL_BIN" job outreach-readiness "$PROFILE_ID" --limit 10 \
+  >"$ARTIFACT_DIR/readiness-newer-draft-blocked.json"
+assert_json "$ARTIFACT_DIR/readiness-newer-draft-blocked.json" '.ready_count == 0 and .blocked_count == 1' "newer-draft blocked count"
+assert_json "$ARTIFACT_DIR/readiness-newer-draft-blocked.json" '.entries[0].packet_status == "draft"' "newer draft packet status"
+assert_json "$ARTIFACT_DIR/readiness-newer-draft-blocked.json" 'any(.entries[0].blockers[]; contains("approved packet required"))' "newer draft blocker"
+
+"$ARCWELL_BIN" job packet-approve "$REVISED_PACKET_ID" \
+  --reviewer-note "Reviewed updated outreach note." \
+  >"$ARTIFACT_DIR/packet-revised-approved.json"
+
+"$ARCWELL_BIN" job outreach-readiness "$PROFILE_ID" --limit 10 \
+  >"$ARTIFACT_DIR/readiness-revised-ready.json"
+assert_json "$ARTIFACT_DIR/readiness-revised-ready.json" '.ready_count == 1 and .blocked_count == 0' "revised ready count"
+assert_json "$ARTIFACT_DIR/readiness-revised-ready.json" '.entries[0].decision == "ready"' "revised ready decision"
+
+"$ARCWELL_BIN" job privacy-rule-add \
+  --pattern "reliable agent tooling" \
+  --rule-type "blocked_term" \
+  --severity "block" \
+  --replacement-guidance "Rewrite outreach before use." \
+  >"$ARTIFACT_DIR/privacy-rule.json"
+
+"$ARCWELL_BIN" job outreach-readiness "$PROFILE_ID" --limit 10 \
+  >"$ARTIFACT_DIR/readiness-privacy-blocked.json"
+assert_json "$ARTIFACT_DIR/readiness-privacy-blocked.json" '.ready_count == 0 and .blocked_count == 1' "privacy-blocked count"
+assert_json "$ARTIFACT_DIR/readiness-privacy-blocked.json" 'any(.entries[0].blockers[]; contains("privacy decision is `block`"))' "privacy-blocked blocker"
+
+assert_sql_count "SELECT COUNT(*) FROM channel_messages;" "0" "channel message count"
+assert_sql_count "SELECT COUNT(*) FROM channel_delivery_attempts;" "0" "provider delivery attempt count"
+
+PRIVACY_CHECK_COUNT="$(sqlite3 "$DB" "SELECT COUNT(*) FROM job_privacy_checks WHERE artifact_type = 'job_outreach_readiness';")"
+CHANNEL_MESSAGE_COUNT="$(sqlite3 "$DB" "SELECT COUNT(*) FROM channel_messages;")"
+DELIVERY_ATTEMPT_COUNT="$(sqlite3 "$DB" "SELECT COUNT(*) FROM channel_delivery_attempts;")"
+
+jq -n \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg arcwell_home "$ARCWELL_HOME" \
+  --arg profile_id "$PROFILE_ID" \
+  --arg role_id "$ROLE_ID" \
+  --arg packet_id "$PACKET_ID" \
+  --arg revised_packet_id "$REVISED_PACKET_ID" \
+  --arg privacy_check_count "$PRIVACY_CHECK_COUNT" \
+  --arg channel_message_count "$CHANNEL_MESSAGE_COUNT" \
+  --arg delivery_attempt_count "$DELIVERY_ATTEMPT_COUNT" \
+  --slurpfile no_packet "$ARTIFACT_DIR/readiness-no-packet.json" \
+  --slurpfile draft_public "$ARTIFACT_DIR/readiness-draft-public.json" \
+  --slurpfile approved_public "$ARTIFACT_DIR/readiness-approved-public.json" \
+  --slurpfile ready "$ARTIFACT_DIR/readiness-ready.json" \
+  --slurpfile newer_draft_blocked "$ARTIFACT_DIR/readiness-newer-draft-blocked.json" \
+  --slurpfile revised_ready "$ARTIFACT_DIR/readiness-revised-ready.json" \
+  --slurpfile privacy_blocked "$ARTIFACT_DIR/readiness-privacy-blocked.json" \
+  '{
+    feature: "job_outreach_readiness",
+    status: "controlled_local_proof",
+    proof_root: $proof_root,
+    arcwell_home: $arcwell_home,
+    profile_id: $profile_id,
+    role_id: $role_id,
+    packet_id: $packet_id,
+    revised_packet_id: $revised_packet_id,
+    counts: {
+      outreach_privacy_checks: ($privacy_check_count | tonumber),
+      channel_messages: ($channel_message_count | tonumber),
+      channel_delivery_attempts: ($delivery_attempt_count | tonumber)
+    },
+    gates: {
+      no_packet: $no_packet[0].entries[0].decision,
+      draft_public_only: $draft_public[0].entries[0].decision,
+      approved_public_only: $approved_public[0].entries[0].decision,
+      ready_with_known_route: $ready[0].entries[0].decision,
+      newer_draft_blocks_stale_approval: $newer_draft_blocked[0].entries[0].decision,
+      revised_packet_approval_restores_readiness: $revised_ready[0].entries[0].decision,
+      privacy_rule_after_approval: $privacy_blocked[0].entries[0].decision
+    },
+    non_claims: [
+      "No outreach, email, Telegram, Google Docs, browser submission, application send, or provider delivery is attempted.",
+      "Public-only contact discovery is not a warm intro.",
+      "A ready row proves local packet/privacy/path gates only, not that a person agreed to introduce or reply.",
+      "This is disposable-home local proof, not operational-home application tracking or recurrence."
+    ]
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"
+log "PASS"

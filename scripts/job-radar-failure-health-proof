@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUN_STAMP="${ARCWELL_JOB_RADAR_FAILURE_HEALTH_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_RADAR_FAILURE_HEALTH_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-radar-failure-health-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+
+for required in cargo date jq shasum; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the job-radar failure-health proof." >&2
+    exit 2
+  fi
+done
+
+mkdir -p "$ARTIFACT_DIR"
+STDOUT="$ARTIFACT_DIR/cargo-test.stdout"
+STDERR="$ARTIFACT_DIR/cargo-test.stderr"
+STATUS="local_proof"
+DECISION="promote_local_slice"
+EXIT_CODE=0
+
+COMMAND=(cargo test -p arcwell-core severe_job_radar_refresh_policy_denial_records_watch_failure_without_source_writes -- --nocapture)
+printf '[job-radar-failure-health-proof] running %s\n' "${COMMAND[*]}"
+set +e
+"${COMMAND[@]}" >"$STDOUT" 2>"$STDERR"
+EXIT_CODE=$?
+set -e
+if [ "$EXIT_CODE" -ne 0 ]; then
+  STATUS="blocked_current_tree"
+  DECISION="block"
+fi
+
+jq -n \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg artifact_dir "$ARTIFACT_DIR" \
+  --arg status "$STATUS" \
+  --arg decision "$DECISION" \
+  --arg command "${COMMAND[*]}" \
+  --arg stdout "${STDOUT#$REPO_ROOT/}" \
+  --arg stderr "${STDERR#$REPO_ROOT/}" \
+  --arg stdout_sha256 "$(shasum -a 256 "$STDOUT" | awk '{print $1}')" \
+  --arg stderr_sha256 "$(shasum -a 256 "$STDERR" | awk '{print $1}')" \
+  --argjson exit_code "$EXIT_CODE" \
+  '{
+    feature: "job_hunting_job_radar_failure_health",
+    status: $status,
+    audit_decision: $decision,
+    created_at: $created_at,
+    proof_root: $proof_root,
+    artifact_dir: $artifact_dir,
+    user_visible_claim: "A queued live job_radar_refresh that is denied before provider-network access fails visibly, writes profile-level failed radar source health, and writes no role or job-source rows. This is Local Proof only.",
+    proof_level: "Local Proof",
+    tests: [
+      {
+        name: "provider-policy-denial-failure-health",
+        command: $command,
+        status: (if $status == "local_proof" then "pass" else "fail" end),
+        exit_code: $exit_code,
+        stdout: $stdout,
+        stderr: $stderr,
+        stdout_sha256: $stdout_sha256,
+        stderr_sha256: $stderr_sha256
+      }
+    ],
+    durable_state_under_test: [
+      "job_radar_refresh wiki job failure",
+      "profile-level source_health key job:radar:<profile_id>",
+      "absence of job_source_health writes",
+      "absence of role writes"
+    ],
+    non_claims: [
+      "No live provider recovery is proven by this proof.",
+      "No live recurrence is proven by this proof.",
+      "No one-day refresh gate is satisfied by this proof."
+    ],
+    adversarial_review_judgment: (
+      if $status == "local_proof"
+      then "Promote this slice only as rerunnable Local Proof for fail-visible provider-policy denial. Hold retry recovery, live recurrence, and one-day freshness as separate gates."
+      else "Block. The current tree did not pass the provider-policy denial failure-health test."
+      end
+    )
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+printf '[job-radar-failure-health-proof] proof packet: %s\n' "$ARTIFACT_DIR/proof-packet.json"
+printf '[job-radar-failure-health-proof] status: %s\n' "$STATUS"
+
+if [ "$STATUS" != "local_proof" ]; then
+  exit 2
+fi

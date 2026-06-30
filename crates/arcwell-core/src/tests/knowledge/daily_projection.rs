@@ -82,6 +82,86 @@ fn severe_issue_schedule_worker_enqueues_native_daily_briefing_once() {
 }
 
 #[test]
+fn severe_due_delivery_jobs_do_not_wait_behind_bulk_backlog() {
+    // CLAIM: user-facing scheduled delivery jobs are claimed before bulk
+    // source ingestion backlog, even when the bulk jobs are older.
+    // ORACLE: claim_next_pending_job selects the daily briefing job before
+    // the older github_owner job.
+    // SEVERITY: Severe because a catch-up tick that waits behind thousands
+    // of watch-source jobs still looks "scheduled" while not notifying the
+    // user.
+    let store = test_store("daily-briefing-priority");
+    let bulk = store
+        .insert_wiki_job_with_status("github_owner", "pending", json!({ "owner": "older-bulk" }))
+        .unwrap();
+    let briefing = store
+        .insert_wiki_job_with_status(
+            "knowledge_daily_briefing",
+            "pending",
+            json!({ "tick_id": "tick-priority" }),
+        )
+        .unwrap();
+
+    let claimed = store.claim_next_pending_job().unwrap().unwrap();
+    assert_eq!(claimed.id, briefing.id);
+    assert_eq!(claimed.kind, "knowledge_daily_briefing");
+    assert_eq!(
+        store.get_wiki_job(&bulk.id).unwrap().unwrap().status,
+        "pending"
+    );
+}
+
+#[test]
+fn severe_daily_briefing_delivery_text_stays_inside_channel_limit() {
+    // CLAIM: a rich daily briefing source card may be longer than the email
+    // channel should carry, but delivery rendering must stay inside the
+    // shared notes validator.
+    // ORACLE: oversized generated briefing text is truncated with an explicit
+    // omission note and passes validate_notes.
+    // SEVERITY: Severe because otherwise catch-up can generate and approve a
+    // briefing but still block before provider send.
+    let candidate = DigestCandidate {
+        id: "cand-daily-limit".to_string(),
+        topic: "Arcwell AI daily briefing: 2026-06-30".to_string(),
+        score: 0.9,
+        reason: "test".to_string(),
+        status: "approved".to_string(),
+        source_card_ids: vec!["src-daily-limit".to_string()],
+        review_status: "approved".to_string(),
+        reviewed_at: None,
+        reviewed_by: None,
+        review_note: None,
+        created_at: Utc::now().to_rfc3339(),
+        updated_at: Utc::now().to_rfc3339(),
+    };
+    let briefing_card = SourceCard {
+        id: "src-daily-limit".to_string(),
+        title: "Arcwell AI daily briefing 2026-06-30".to_string(),
+        url: "https://example.com/arcwell/knowledge-daily-briefing/test".to_string(),
+        source_type: "knowledge_daily_briefing".to_string(),
+        provider: "arcwell".to_string(),
+        summary: format!(
+            "# AI Daily Briefing - 2026-06-30\n\n## Bottom Line\n{}\n",
+            "Long source-backed context. ".repeat(1400)
+        ),
+        claims: vec![],
+        retrieved_at: Utc::now().to_rfc3339(),
+        wiki_page_id: "wiki-daily-limit".to_string(),
+        content_sha256: "sha".to_string(),
+        metadata: json!({ "source_kind": "knowledge_daily_briefing" }),
+        created_at: Utc::now().to_rfc3339(),
+        updated_at: Utc::now().to_rfc3339(),
+    };
+
+    let text = Store::knowledge_daily_briefing_delivery_text(&candidate, &briefing_card);
+    assert!(text.len() < 20_000, "{}", text.len());
+    validate_notes(&text).unwrap();
+    let html = render_email_html_from_markdown("Arcwell AI daily briefing", &text).unwrap();
+    validate_email_html(&html).unwrap();
+    assert!(text.contains("Additional source details were omitted"));
+}
+
+#[test]
 fn severe_daily_briefing_blocks_generated_only_evidence() {
     // CLAIM: generated summaries may be audit artifacts but cannot be the
     // sole evidence behind a scheduled daily briefing.
@@ -251,7 +331,7 @@ fn severe_native_daily_briefing_worker_sends_human_readable_html_email_once() {
         &store,
         &report.id,
         &format!(
-            "# OpenAI package and developer reaction\n\nThe last 24 hours did not produce one clean launch story, but OpenAI published a package and developer reaction connected it to agent workflows.\n\nRelationship to earlier wiki context: Prior notes framed AI devrel as documentation-led, but `{}` shows distribution, social reception, and MCP workflow evidence are becoming inseparable.\n\nFiled evidence:\n- `{}`: OpenAI package source.\n\nsource_cards:\n- `{}`\n",
+            "# OpenAI package and developer reaction\n\nThe last 24 hours did not produce one clean launch story, but OpenAI published a package and developer reaction connected it to agent workflows.\n\nRelationship to earlier wiki context: Prior notes framed AI devrel as documentation-led, but `{}` shows distribution, social reception, and MCP workflow evidence are becoming inseparable.\n\nUncertainty: again, this is not a new-launch claim. The evidence is a source-backed cluster created from local GitHub cards. The new wiki page is Knowledge: Getzep: release and launch activity.\n\nCoverage and uncertainty\nOperationally, the native scheduled daily briefing generated approved candidate 5b7c8093-ca7e-4a9d-8c6b-10cb2a1c8b10, but its delivery was blocked because the generated notes were too long for the digest delivery gate.\n\nFiled evidence:\n- `{}`: OpenAI package source.\n\nSources\nKnowledge: Getzep: release and launch activity\nSource-card pages for OpenAI GPT-5.6 Sol.\n\nsource_cards:\n- `{}`\n",
             card.id, card.id, card.id
         ),
     );
@@ -340,7 +420,7 @@ fn severe_native_daily_briefing_worker_sends_human_readable_html_email_once() {
     assert!(text.contains("AI Daily Briefing"));
     assert!(text.contains("Bottom Line"), "{text}");
     assert!(text.contains("What Changed"), "{text}");
-    assert!(text.contains("Key Sources"), "{text}");
+    assert!(text.contains("Further Reading"), "{text}");
     assert!(
         text.contains("](https://example.com/daily-knowledge/html-email)"),
         "{text}"
@@ -352,7 +432,7 @@ fn severe_native_daily_briefing_worker_sends_human_readable_html_email_once() {
         "{text}"
     );
     assert!(text.contains("Why It Matters"), "{text}");
-    assert!(text.contains("Story Development"), "{text}");
+    assert!(text.contains("What To Watch"), "{text}");
     assert!(
         text.contains("OpenAI package and developer reaction"),
         "{text}"
@@ -365,6 +445,29 @@ fn severe_native_daily_briefing_worker_sends_human_readable_html_email_once() {
             && !text.contains(&card.id),
         "{text}"
     );
+    for forbidden in [
+        "Arcwell",
+        "local corpus",
+        "local record",
+        "source-card",
+        "source card",
+        "source-backed",
+        "Knowledge:",
+        "wiki",
+        "digest candidate",
+        "approved candidate",
+        "digest delivery gate",
+        "metadata",
+        "cluster",
+        "devrel",
+    ] {
+        assert!(
+            !text
+                .to_ascii_lowercase()
+                .contains(&forbidden.to_ascii_lowercase()),
+            "reader email leaked forbidden term {forbidden:?}:\n{text}"
+        );
+    }
     assert!(html.contains("<h1"), "{html}");
     assert!(html.contains("<h2"), "{html}");
     assert!(html.contains("<a href="), "{html}");

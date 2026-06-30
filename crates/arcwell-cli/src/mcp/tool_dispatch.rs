@@ -209,6 +209,14 @@ pub(crate) fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> R
             let profile_id = required_string(&arguments, "profile_id")?;
             Ok(json!(store.compile_job_shortlist(&profile_id)?))
         }
+        "job_outreach_readiness" => {
+            let profile_id = required_string(&arguments, "profile_id")?;
+            let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+            Ok(json!(store.compile_job_outreach_readiness_report(
+                &profile_id,
+                limit
+            )?))
+        }
         "job_company_targets" => {
             let profile_id = required_string(&arguments, "profile_id")?;
             let market = arguments.get("market").and_then(Value::as_str);
@@ -255,6 +263,16 @@ pub(crate) fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> R
             Ok(json!(store.export_job_application_packet(
                 &packet_id,
                 &PathBuf::from(out_dir)
+            )?))
+        }
+        "job_packet_export_set" => {
+            let profile_id = required_string(&arguments, "profile_id")?;
+            let packet_ids = string_array_argument(&arguments, "packet_ids")?;
+            let out_dir = required_string(&arguments, "out_dir")?;
+            Ok(json!(store.export_job_application_packet_set(
+                &profile_id,
+                packet_ids,
+                &PathBuf::from(out_dir),
             )?))
         }
         "job_application_record" => Ok(json!(
@@ -360,10 +378,61 @@ pub(crate) fn call_mcp_tool(paths: &AppPaths, name: &str, arguments: Value) -> R
                 minimum_elapsed_hours,
             )?))
         }
+        "job_operational_audit" => {
+            let profile_id = required_string(&arguments, "profile_id")?;
+            let scope = required_string(&arguments, "scope")?;
+            let minimum_elapsed_hours = arguments.get("min_elapsed_hours").and_then(Value::as_i64);
+            Ok(json!(store.audit_job_operational_readiness(
+                &profile_id,
+                &scope,
+                minimum_elapsed_hours,
+            )?))
+        }
         "job_weekly_report" => {
             let profile_id = required_string(&arguments, "profile_id")?;
             let scope = required_string(&arguments, "scope")?;
             Ok(json!(store.compile_job_weekly_report(&profile_id, &scope)?))
+        }
+        "job_weekly_report_delivery_prepare" => Ok(json!(
+            store.prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+                report_id: required_string(&arguments, "report_id")?,
+                channel: required_string(&arguments, "channel")?,
+                subject: required_string(&arguments, "subject")?,
+                target: required_string(&arguments, "target")?,
+                idempotency_key: arguments
+                    .get("idempotency_key")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            })?
+        )),
+        "job_weekly_report_delivery_send" => Ok(json!(
+            store.send_job_weekly_report_delivery(JobWeeklyReportDeliverySendInput {
+                delivery_id: required_string(&arguments, "delivery_id")?,
+                telegram_bot_token: arguments
+                    .get("telegram_bot_token")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                email_account_id: arguments
+                    .get("email_account_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                email_api_token: arguments
+                    .get("email_api_token")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                email_from: arguments
+                    .get("email_from")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                api_base: arguments
+                    .get("api_base")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            })?
+        )),
+        "job_weekly_report_deliveries" => {
+            let report_id = arguments.get("report_id").and_then(Value::as_str);
+            Ok(json!(store.list_job_weekly_report_deliveries(report_id)?))
         }
         "arcwell_health" => Ok(json!(store.health()?)),
         "profile_list" => Ok(json!(store.list_profile()?)),

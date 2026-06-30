@@ -1035,10 +1035,42 @@ impl Store {
         text: &str,
         api_base: Option<&str>,
     ) -> Result<EmailSendReport> {
+        self.send_existing_cloudflare_email_message_with_context(
+            account_id,
+            api_token,
+            from,
+            message_id,
+            to,
+            subject,
+            text,
+            api_base,
+            "email_retry",
+            "Cloudflare Email retry",
+            json!({ "retry": true }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn send_existing_cloudflare_email_message_with_context(
+        &self,
+        account_id: &str,
+        api_token: &str,
+        from: &str,
+        message_id: &str,
+        to: &str,
+        subject: &str,
+        text: &str,
+        api_base: Option<&str>,
+        source: &str,
+        cost_label: &str,
+        metadata: Value,
+    ) -> Result<EmailSendReport> {
         validate_key(account_id)?;
         validate_notes(api_token)?;
         let from = normalize_email_address(from).context("invalid email from address")?;
         validate_id(message_id)?;
+        validate_key(source)?;
+        validate_notes(cost_label)?;
         let mut message = self
             .get_channel_message(message_id)?
             .with_context(|| format!("channel message not found: {message_id}"))?;
@@ -1063,15 +1095,15 @@ impl Store {
             action: "channel.send".to_string(),
             package: Some("arcwell-email".to_string()),
             provider: Some("cloudflare_email".to_string()),
-            source: Some("email_retry".to_string()),
+            source: Some(source.to_string()),
             channel: Some("email".to_string()),
             subject: Some(subject_key.clone()),
             target: Some(to.clone()),
             projected_usd: None,
             metadata: json!({
                 "message_id": message_id,
-                "from": from,
-                "retry": true,
+                "from": from.clone(),
+                "context": metadata,
             }),
             untrusted_excerpt: Some(format!("{subject}\n\n{text}")),
         })?;
@@ -1080,9 +1112,9 @@ impl Store {
             message_id,
             "cloudflare_email",
             "send",
-            Some("email_retry"),
+            Some(source),
             estimated_channel_send_cost(),
-            "Cloudflare Email retry",
+            cost_label,
         )?;
         let endpoint = format!(
             "{}/accounts/{}/email/sending/send",

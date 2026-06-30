@@ -9,15 +9,17 @@ use arcwell_core::{
     JobImportBatchInput, JobIntroPathInput, JobManualRefreshInput, JobPrivacyRuleInput,
     JobRoleCardInput, JobRoleSourceLinkInput, JobRoleStatusEventInput, JobSearchRunInput,
     JobSkepticFindingInput, JobSourceHealthInput, JobSourceInput, JobSourceRefreshInput,
+    JobWeeklyReportDeliveryInput, JobWeeklyReportDeliverySendInput,
     KnowledgeClusterProposalModelInput, KnowledgeClusterWriterModelInput, KnowledgeEntityInput,
     KnowledgeEntityResolutionModelInput, OpsSnapshot, PolicyRequest, ProcedureCandidateInput,
-    RadarDeliveryInput, RadarProfileInput, RadarRun, RenderedPageSnapshotInput,
-    ResearchActiveFactCheckInput, ResearchArtifactInput, ResearchConvergenceCloseLoopInput,
+    ProofArtifactInput, ProofCheckInput, ProofClaimInput, ProofPacketInput, RadarDeliveryInput,
+    RadarProfileInput, RadarRun, RenderedPageSnapshotInput, ResearchActiveFactCheckInput,
+    ResearchArtifactInput, ResearchConvergenceCloseLoopInput,
     ResearchConvergenceProviderSearchInput, ResearchConvergenceStartInput,
     ResearchConvergenceStepInput, ResearchDocumentInput, ResearchEditorialInvokeInput,
     ResearchEditorialRunInput, ResearchHostSearchInput, ResearchHostSearchResultInput,
     ResearchRoleRunStart, ResearchSourceInput, SourceCardInput, Store, WebSearchConfig,
-    XStatsReport, personal_memory_eval_corpus,
+    XStatsReport, XWatchManualRuleInput, personal_memory_eval_corpus,
 };
 use axum::{
     Json, Router,
@@ -66,6 +68,8 @@ mod channels_work_cli;
 pub(crate) use channels_work_cli::*;
 mod import_policy_cli;
 pub(crate) use import_policy_cli::*;
+mod proof_cli;
+pub(crate) use proof_cli::*;
 
 fn main() -> Result<()> {
     let args = std::env::args_os().collect::<Vec<_>>();

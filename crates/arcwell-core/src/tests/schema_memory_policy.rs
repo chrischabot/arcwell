@@ -512,6 +512,141 @@ fn severe_schema_migration_adds_knowledge_entities_relations_after_v14() {
 }
 
 #[test]
+fn severe_schema_migration_adds_job_weekly_report_deliveries_after_v19() {
+    // CLAIM: schema version 20 upgrades existing job-hunting homes with the
+    // weekly-report delivery-preparation ledger instead of only working for
+    // fresh databases.
+    // ORACLE: a hand-built schema_version=19 database with an existing weekly
+    // report records migration 20, preserves that report, and can prepare a
+    // delivery row against it after Store::open.
+    // SEVERITY: Severe because operational job-hunting homes must not lose
+    // report state or silently lack the outbound-preparation audit table.
+    let paths = test_paths("schema-fixture-job-weekly-delivery-v19");
+    paths.ensure().unwrap();
+    let conn = Connection::open(&paths.db).unwrap();
+    conn.execute_batch(
+        r#"
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta (key, value) VALUES ('schema_version', '19');
+            CREATE TABLE schema_migrations (
+              version INTEGER PRIMARY KEY,
+              name TEXT NOT NULL,
+              destructive INTEGER NOT NULL DEFAULT 0,
+              backup_id TEXT,
+              applied_at TEXT NOT NULL
+            );
+            CREATE TABLE job_candidate_profiles (
+              id TEXT PRIMARY KEY,
+              label TEXT NOT NULL UNIQUE,
+              current_resume_source TEXT,
+              linkedin_source TEXT,
+              github_profile TEXT,
+              blog_url TEXT,
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE job_weekly_reports (
+              id TEXT PRIMARY KEY,
+              profile_id TEXT NOT NULL,
+              scope TEXT NOT NULL,
+              generated_at TEXT NOT NULL,
+              proof_level TEXT NOT NULL,
+              body TEXT NOT NULL,
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              FOREIGN KEY(profile_id) REFERENCES job_candidate_profiles(id) ON DELETE CASCADE
+            );
+            INSERT INTO job_candidate_profiles
+              (id, label, current_resume_source, linkedin_source, github_profile,
+               blog_url, metadata_json, created_at, updated_at)
+            VALUES
+              ('profile-fixture', 'Chris Chabot', 'resume:current', NULL, NULL,
+               'https://chabot.dev', '{}', '2026-06-29T00:00:00Z',
+               '2026-06-29T00:00:00Z');
+            INSERT INTO job_weekly_reports
+              (id, profile_id, scope, generated_at, proof_level, body, metadata_json)
+            VALUES
+              ('weekly-fixture', 'profile-fixture', 'tier1',
+               '2026-06-29T00:05:00Z', 'controlled_local',
+               '# Job Weekly Report
+
+One preserved report body.', '{}');
+            "#,
+    )
+    .unwrap();
+    for version in 1..=19 {
+        conn.execute(
+            r#"
+            INSERT INTO schema_migrations
+              (version, name, destructive, backup_id, applied_at)
+            VALUES
+              (?1, ?2, 0, NULL, '2026-06-29T00:00:00Z')
+            "#,
+            params![version, format!("fixture_v{version}")],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let store = Store::open(paths).unwrap();
+    assert_eq!(store.stored_schema_version().unwrap(), SCHEMA_VERSION);
+
+    let preserved_report = store
+        .read_job_weekly_report("weekly-fixture")
+        .unwrap()
+        .expect("fixture weekly report must survive v20 migration");
+    assert_eq!(
+        preserved_report.body,
+        "# Job Weekly Report\n\nOne preserved report body."
+    );
+
+    let table_count: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'job_weekly_report_deliveries'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(table_count, 1);
+    let migration_name: String = store
+        .conn
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 20",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(migration_name, "job_weekly_report_delivery_preparation");
+
+    store
+        .authorize_channel_subject("email", "email:jobs@example.com", false, false, true)
+        .unwrap();
+    let prepared = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: preserved_report.id,
+            channel: "email".to_string(),
+            subject: "email:jobs@example.com".to_string(),
+            target: "jobs@example.com".to_string(),
+            idempotency_key: Some("schema-v20-delivery".to_string()),
+        })
+        .unwrap();
+    assert_eq!(prepared.delivery.status, "prepared");
+    assert!(prepared.delivery.privacy_check_id.is_some());
+    assert!(prepared.delivery.channel_message_id.is_some());
+
+    let delivery_count: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM job_weekly_report_deliveries WHERE report_id = 'weekly-fixture'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(delivery_count, 1);
+}
+
+#[test]
 fn severe_import_run_ledger_redacts_errors_and_surfaces_in_ops() {
     // CLAIM: import attempts leave durable aggregate audit records without
     // storing raw transcript content or secret-bearing error strings.

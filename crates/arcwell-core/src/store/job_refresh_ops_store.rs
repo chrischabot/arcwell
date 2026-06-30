@@ -440,6 +440,278 @@ impl Store {
         })
     }
 
+    pub fn audit_job_operational_readiness(
+        &self,
+        profile_id: &str,
+        scope: &str,
+        minimum_elapsed_hours: Option<i64>,
+    ) -> Result<JobOperationalAudit> {
+        validate_id(profile_id)?;
+        self.require_job_profile(profile_id)?;
+        let scope = sanitize_required_job_text(scope, "refresh scope", JOB_MAX_TEXT)?;
+        let minimum_elapsed_hours = minimum_elapsed_hours.unwrap_or(24).max(24);
+        let ops_summary = self.job_ops_summary()?;
+        let refresh_audit =
+            self.audit_job_refresh_history(profile_id, &scope, Some(minimum_elapsed_hours))?;
+        let outreach_readiness = self.compile_job_outreach_readiness_report(profile_id, 100)?;
+        let source_family_counts = self.count_job_group("job_sources", "source_family")?;
+        let evidence_visibility_counts =
+            self.count_job_evidence_visibility_for_profile(profile_id)?;
+        let evidence_card_count = evidence_visibility_counts.values().sum::<usize>();
+        let packet_status_counts =
+            self.count_job_application_packet_status_for_profile(profile_id)?;
+        let intro_status_counts = self.count_job_intro_path_status_for_profile(profile_id)?;
+        let role_status_counts = self.count_job_role_status_for_profile(profile_id)?;
+        let role_count = role_status_counts.values().sum::<usize>();
+        let score_tier_counts = self.count_job_fit_score_tiers_for_profile(profile_id)?;
+        let privacy_decision_counts =
+            self.count_job_privacy_decisions_for_profile_scope(profile_id, &scope)?;
+        let application_status_counts =
+            self.count_job_application_status_for_profile(profile_id)?;
+        let follow_up_count = self.count_job_follow_ups_for_profile(profile_id)?;
+        let weekly_report_count = self.count_job_weekly_reports_for_scope(profile_id, &scope)?;
+        let weekly_delivery_status_counts =
+            self.count_job_weekly_report_delivery_status_for_scope(profile_id, &scope)?;
+        let weekly_report_delivery_attempt_count =
+            self.count_job_weekly_report_delivery_attempts_for_scope(profile_id, &scope)?;
+        let job_radar_jobs = self
+            .list_wiki_jobs()?
+            .into_iter()
+            .filter(|job| {
+                job.kind == "job_radar_refresh"
+                    && job.input_json.get("profile_id").and_then(Value::as_str) == Some(profile_id)
+                    && job.input_json.get("scope").and_then(Value::as_str) == Some(scope.as_str())
+            })
+            .collect::<Vec<_>>();
+        let mut job_radar_job_status_counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut job_radar_completed_count = 0usize;
+        let mut job_radar_dead_lettered_count = 0usize;
+        let mut job_radar_attempt_count = 0i64;
+        for job in &job_radar_jobs {
+            *job_radar_job_status_counts
+                .entry(job.status.clone())
+                .or_insert(0) += 1;
+            if job.status == "completed" {
+                job_radar_completed_count += 1;
+            }
+            if job.status == "dead_lettered" {
+                job_radar_dead_lettered_count += 1;
+            }
+            job_radar_attempt_count += job.attempts;
+        }
+
+        let mut gates = Vec::new();
+        push_job_operational_gate(
+            &mut gates,
+            "evidence_ledger",
+            json!({
+                "evidence_card_count": evidence_card_count,
+                "visibility_counts": evidence_visibility_counts,
+            }),
+            gate_missing(
+                evidence_card_count > 0,
+                "No candidate evidence cards are recorded for the operational audit.",
+            ),
+        );
+        push_job_operational_gate(
+            &mut gates,
+            "source_map",
+            json!({
+                "source_count": ops_summary.source_count,
+                "source_family_counts": source_family_counts,
+            }),
+            gate_missing(
+                ops_summary.source_count > 0,
+                "No job sources are configured or imported.",
+            ),
+        );
+        push_job_operational_gate(
+            &mut gates,
+            "role_scoring",
+            json!({
+                "role_count": role_count,
+                "role_status_counts": role_status_counts,
+                "score_tier_counts": score_tier_counts,
+            }),
+            gate_missing(
+                role_count > 0
+                    && ["tier_1", "tier_2"]
+                        .iter()
+                        .any(|tier| score_tier_counts.get(*tier).copied().unwrap_or(0) > 0),
+                "No live role set with Tier 1 or Tier 2 scoring evidence is present.",
+            ),
+        );
+        let mut privacy_missing = Vec::new();
+        if privacy_decision_counts.get("block").copied().unwrap_or(0) > 0 {
+            privacy_missing.push(
+                "At least one job privacy check is blocked; public material needs review."
+                    .to_string(),
+            );
+        }
+        push_job_operational_gate(
+            &mut gates,
+            "privacy",
+            json!({
+                "privacy_decision_counts": privacy_decision_counts,
+            }),
+            privacy_missing,
+        );
+        push_job_operational_gate(
+            &mut gates,
+            "application_packets",
+            json!({
+                "packet_status_counts": packet_status_counts,
+            }),
+            gate_missing(
+                packet_status_counts.get("approved").copied().unwrap_or(0) > 0,
+                "No approved application packet is recorded.",
+            ),
+        );
+        push_job_operational_gate(
+            &mut gates,
+            "outreach_readiness",
+            json!({
+                "ready_count": outreach_readiness.ready_count,
+                "blocked_count": outreach_readiness.blocked_count,
+                "intro_status_counts": intro_status_counts,
+            }),
+            gate_missing(
+                outreach_readiness.ready_count > 0,
+                "No scored role has an approved packet, fresh privacy pass, and warm or user-confirmed outreach route.",
+            ),
+        );
+        push_job_operational_gate(
+            &mut gates,
+            "application_tracking",
+            json!({
+                "application_status_counts": application_status_counts,
+                "follow_up_count": follow_up_count,
+            }),
+            gate_missing(
+                !application_status_counts.is_empty(),
+                "No application status or outcome rows are recorded.",
+            ),
+        );
+        push_job_operational_gate(
+            &mut gates,
+            "weekly_refresh",
+            json!({
+                "refresh_decision": refresh_audit.decision,
+                "minimum_elapsed_hours": refresh_audit.minimum_elapsed_hours,
+                "elapsed_hours": refresh_audit.elapsed_hours,
+                "completed_run_count": refresh_audit.completed_run_count,
+                "transition_counts": refresh_audit.transition_counts,
+            }),
+            refresh_audit.missing_requirements.clone(),
+        );
+        push_job_operational_gate(
+            &mut gates,
+            "weekly_report",
+            json!({
+                "weekly_report_count": weekly_report_count,
+            }),
+            gate_missing(
+                weekly_report_count > 0,
+                "No weekly report exists for this profile and scope.",
+            ),
+        );
+        push_job_operational_gate(
+            &mut gates,
+            "delivery_preparation",
+            json!({
+                "weekly_delivery_status_counts": weekly_delivery_status_counts,
+            }),
+            gate_missing(
+                ["prepared", "sent"]
+                    .iter()
+                    .map(|status| {
+                        weekly_delivery_status_counts
+                            .get(*status)
+                            .copied()
+                            .unwrap_or(0)
+                    })
+                    .sum::<usize>()
+                    > 0,
+                "No prepared or sent weekly-report delivery row exists for this profile and scope.",
+            ),
+        );
+        push_job_operational_gate(
+            &mut gates,
+            "provider_delivery",
+            json!({
+                "weekly_report_delivery_attempt_count": weekly_report_delivery_attempt_count,
+            }),
+            gate_missing(
+                weekly_report_delivery_attempt_count > 0,
+                "No successful provider delivery attempt is linked to a weekly job report for this profile and scope.",
+            ),
+        );
+        push_job_operational_gate(
+            &mut gates,
+            "scheduled_radar",
+            json!({
+                "job_radar_job_status_counts": job_radar_job_status_counts,
+                "completed_count": job_radar_completed_count,
+                "dead_lettered_count": job_radar_dead_lettered_count,
+                "attempt_count": job_radar_attempt_count,
+            }),
+            gate_missing(
+                job_radar_completed_count >= 2 && job_radar_dead_lettered_count == 0,
+                "Operational radar requires repeated completed job_radar_refresh jobs with no unresolved dead letters.",
+            ),
+        );
+
+        let operational_blockers = gates
+            .iter()
+            .flat_map(|gate| {
+                gate.missing_requirements
+                    .iter()
+                    .map(|missing| format!("{}: {missing}", gate.name))
+            })
+            .collect::<Vec<_>>();
+        let decision = if operational_blockers.is_empty() {
+            "pass"
+        } else {
+            "block"
+        }
+        .to_string();
+
+        Ok(JobOperationalAudit {
+            profile_id: profile_id.to_string(),
+            scope,
+            generated_at: now(),
+            decision,
+            proof_level: "local_operational_audit".to_string(),
+            ops_summary,
+            refresh_audit,
+            outreach_readiness,
+            source_family_counts,
+            evidence_visibility_counts,
+            packet_status_counts,
+            intro_status_counts,
+            weekly_report_count,
+            weekly_delivery_status_counts,
+            weekly_report_delivery_attempt_count,
+            job_radar_job_status_counts,
+            job_radar_completed_count,
+            job_radar_dead_lettered_count,
+            job_radar_attempt_count,
+            gates,
+            operational_blockers,
+            warnings: vec![
+                "This audit reads existing durable state only; it does not fetch sources, send messages, submit applications, or advance cursors.".to_string(),
+                "A pass would mean the local operational proof packet shape is satisfied for this home, not exhaustive market coverage.".to_string(),
+            ],
+            non_claims: vec![
+                "This audit is not a live source refresh.".to_string(),
+                "This audit is not wall-clock recurrence proof by itself.".to_string(),
+                "This audit is not provider delivery proof unless successful delivery-attempt rows are linked to weekly job reports.".to_string(),
+                "This audit is not evidence of real user-network warm-intro agreement.".to_string(),
+                "This audit is not application submission proof.".to_string(),
+            ],
+        })
+    }
+
     pub fn run_job_source_refresh(
         &self,
         input: JobSourceRefreshInput,
@@ -875,6 +1147,12 @@ impl Store {
             "job_evidence_cards" => "SELECT COUNT(*) FROM job_evidence_cards",
             "job_sources" => "SELECT COUNT(*) FROM job_sources",
             "job_role_cards" => "SELECT COUNT(*) FROM job_role_cards",
+            "job_search_runs" => "SELECT COUNT(*) FROM job_search_runs",
+            "job_application_packets" => "SELECT COUNT(*) FROM job_application_packets",
+            "job_contacts" => "SELECT COUNT(*) FROM job_contacts",
+            "job_intro_paths" => "SELECT COUNT(*) FROM job_intro_paths",
+            "job_weekly_reports" => "SELECT COUNT(*) FROM job_weekly_reports",
+            "job_weekly_report_deliveries" => "SELECT COUNT(*) FROM job_weekly_report_deliveries",
             other => bail!("unsupported job ops count table: {other}"),
         };
         let count: i64 = self.conn.query_row(sql, [], |row| row.get(0))?;
@@ -890,7 +1168,19 @@ impl Store {
             ("job_role_cards", "current_status") => {
                 "SELECT current_status, COUNT(*) FROM job_role_cards GROUP BY current_status"
             }
+            ("job_sources", "source_family") => {
+                "SELECT source_family, COUNT(*) FROM job_sources GROUP BY source_family"
+            }
+            ("job_evidence_cards", "visibility") => {
+                "SELECT visibility, COUNT(*) FROM job_evidence_cards GROUP BY visibility"
+            }
             ("job_fit_scores", "tier") => "SELECT tier, COUNT(*) FROM job_fit_scores GROUP BY tier",
+            ("job_application_packets", "status") => {
+                "SELECT status, COUNT(*) FROM job_application_packets GROUP BY status"
+            }
+            ("job_intro_paths", "status") => {
+                "SELECT status, COUNT(*) FROM job_intro_paths GROUP BY status"
+            }
             ("job_source_health", "status") => {
                 "SELECT status, COUNT(*) FROM job_source_health GROUP BY status"
             }
@@ -907,6 +1197,239 @@ impl Store {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
         })?)?;
         Ok(pairs.into_iter().collect())
+    }
+
+    pub(crate) fn count_job_weekly_reports_for_scope(
+        &self,
+        profile_id: &str,
+        scope: &str,
+    ) -> Result<usize> {
+        validate_id(profile_id)?;
+        let count: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM job_weekly_reports
+            WHERE profile_id = ?1 AND scope = ?2
+            "#,
+            params![profile_id, scope],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    pub(crate) fn count_job_weekly_report_delivery_status_for_scope(
+        &self,
+        profile_id: &str,
+        scope: &str,
+    ) -> Result<BTreeMap<String, usize>> {
+        validate_id(profile_id)?;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT d.status, COUNT(*)
+            FROM job_weekly_report_deliveries d
+            JOIN job_weekly_reports r ON r.id = d.report_id
+            WHERE r.profile_id = ?1 AND r.scope = ?2
+            GROUP BY d.status
+            "#,
+        )?;
+        let pairs = rows(stmt.query_map(params![profile_id, scope], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?)?;
+        Ok(pairs.into_iter().collect())
+    }
+
+    pub(crate) fn count_job_weekly_report_delivery_attempts_for_scope(
+        &self,
+        profile_id: &str,
+        scope: &str,
+    ) -> Result<usize> {
+        validate_id(profile_id)?;
+        let count: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM job_weekly_report_deliveries d
+            JOIN job_weekly_reports r ON r.id = d.report_id
+            JOIN channel_delivery_attempts a ON a.message_id = d.channel_message_id
+            WHERE r.profile_id = ?1 AND r.scope = ?2
+              AND a.ok = 1
+            "#,
+            params![profile_id, scope],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    pub(crate) fn count_job_evidence_visibility_for_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<BTreeMap<String, usize>> {
+        validate_id(profile_id)?;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT visibility, COUNT(*)
+            FROM job_evidence_cards
+            WHERE profile_id = ?1
+            GROUP BY visibility
+            "#,
+        )?;
+        let pairs = rows(stmt.query_map(params![profile_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?)?;
+        Ok(pairs.into_iter().collect())
+    }
+
+    pub(crate) fn count_job_role_status_for_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<BTreeMap<String, usize>> {
+        validate_id(profile_id)?;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT r.current_status, COUNT(DISTINCT r.id)
+            FROM job_role_cards r
+            JOIN job_fit_scores s ON s.role_id = r.id
+            WHERE s.profile_id = ?1
+            GROUP BY r.current_status
+            "#,
+        )?;
+        let pairs = rows(stmt.query_map(params![profile_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?)?;
+        Ok(pairs.into_iter().collect())
+    }
+
+    pub(crate) fn count_job_fit_score_tiers_for_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<BTreeMap<String, usize>> {
+        validate_id(profile_id)?;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT tier, COUNT(*)
+            FROM job_fit_scores
+            WHERE profile_id = ?1
+            GROUP BY tier
+            "#,
+        )?;
+        let pairs = rows(stmt.query_map(params![profile_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?)?;
+        Ok(pairs.into_iter().collect())
+    }
+
+    pub(crate) fn count_job_application_packet_status_for_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<BTreeMap<String, usize>> {
+        validate_id(profile_id)?;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT status, COUNT(*)
+            FROM job_application_packets
+            WHERE profile_id = ?1
+            GROUP BY status
+            "#,
+        )?;
+        let pairs = rows(stmt.query_map(params![profile_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?)?;
+        Ok(pairs.into_iter().collect())
+    }
+
+    pub(crate) fn count_job_intro_path_status_for_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<BTreeMap<String, usize>> {
+        validate_id(profile_id)?;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT ip.status, COUNT(DISTINCT ip.id)
+            FROM job_intro_paths ip
+            WHERE ip.role_id IN (
+              SELECT role_id FROM job_fit_scores WHERE profile_id = ?1
+            )
+            GROUP BY ip.status
+            "#,
+        )?;
+        let pairs = rows(stmt.query_map(params![profile_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?)?;
+        Ok(pairs.into_iter().collect())
+    }
+
+    pub(crate) fn count_job_privacy_decisions_for_profile_scope(
+        &self,
+        profile_id: &str,
+        scope: &str,
+    ) -> Result<BTreeMap<String, usize>> {
+        validate_id(profile_id)?;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT decision, COUNT(*)
+            FROM job_privacy_checks
+            WHERE artifact_id IN (
+              SELECT id FROM job_application_packets WHERE profile_id = ?1
+              UNION
+              SELECT id FROM job_weekly_reports WHERE profile_id = ?1 AND scope = ?2
+            )
+            GROUP BY decision
+            "#,
+        )?;
+        let pairs = rows(stmt.query_map(params![profile_id, scope], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?)?;
+        Ok(pairs.into_iter().collect())
+    }
+
+    pub(crate) fn count_job_application_status_for_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<BTreeMap<String, usize>> {
+        validate_id(profile_id)?;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT status, COUNT(*)
+            FROM job_applications
+            WHERE role_id IN (
+              SELECT role_id FROM job_fit_scores WHERE profile_id = ?1
+              UNION
+              SELECT role_id FROM job_application_packets WHERE profile_id = ?1
+            )
+              OR packet_id IN (
+                SELECT id FROM job_application_packets WHERE profile_id = ?1
+              )
+            GROUP BY status
+            "#,
+        )?;
+        let pairs = rows(stmt.query_map(params![profile_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?)?;
+        Ok(pairs.into_iter().collect())
+    }
+
+    pub(crate) fn count_job_follow_ups_for_profile(&self, profile_id: &str) -> Result<usize> {
+        validate_id(profile_id)?;
+        let count: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM job_applications
+            WHERE (
+              role_id IN (
+                SELECT role_id FROM job_fit_scores WHERE profile_id = ?1
+                UNION
+                SELECT role_id FROM job_application_packets WHERE profile_id = ?1
+              )
+              OR packet_id IN (
+                SELECT id FROM job_application_packets WHERE profile_id = ?1
+              )
+            )
+              AND follow_up_at IS NOT NULL
+              AND status NOT IN ('rejected', 'offer', 'withdrawn')
+            "#,
+            params![profile_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
     }
 
     pub(crate) fn count_job_follow_ups(&self) -> Result<usize> {
@@ -996,4 +1519,31 @@ impl Store {
         self.read_job_role_card(role_id)?
             .with_context(|| format!("job role card not found: {role_id}"))
     }
+}
+
+fn gate_missing(condition: bool, missing: &str) -> Vec<String> {
+    if condition {
+        Vec::new()
+    } else {
+        vec![missing.to_string()]
+    }
+}
+
+fn push_job_operational_gate(
+    gates: &mut Vec<JobOperationalAuditGate>,
+    name: &str,
+    evidence: Value,
+    missing_requirements: Vec<String>,
+) {
+    gates.push(JobOperationalAuditGate {
+        name: name.to_string(),
+        decision: if missing_requirements.is_empty() {
+            "pass"
+        } else {
+            "block"
+        }
+        .to_string(),
+        evidence,
+        missing_requirements,
+    });
 }

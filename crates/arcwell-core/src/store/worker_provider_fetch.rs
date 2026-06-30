@@ -1,6 +1,34 @@
 use super::*;
 
 impl Store {
+    pub(crate) fn github_provider_credential_deferred_result(
+        &self,
+        source_key: &str,
+        source_kind: &str,
+        locator: &str,
+    ) -> Result<Option<Value>> {
+        let provider_health_key = "provider:github:credential-probe";
+        let Some(health) = self.get_source_health(provider_health_key)? else {
+            return Ok(None);
+        };
+        if health.status == "healthy" {
+            return Ok(None);
+        }
+        let deferred_until = now_plus_seconds(3600);
+        Ok(Some(json!({
+            "status": "deferred",
+            "deferred_until": deferred_until,
+            "reason": "github credential probe is not healthy; provider network skipped",
+            "provider": "github",
+            "provider_health_key": provider_health_key,
+            "provider_health_status": health.status,
+            "provider_health_error": health.last_error.map(|error| excerpt(&error, 500)),
+            "source_health_key": source_key,
+            "source_kind": source_kind,
+            "locator": locator,
+        })))
+    }
+
     pub(crate) fn execute_rss_fetch(&self, input: &Value) -> Result<Value> {
         let url_raw = input
             .get("url")
@@ -122,7 +150,15 @@ impl Store {
             ),
         };
         let cursor_key = format!("github:{owner}/{repo}:{mode}");
+        let locator = format!("{owner}/{repo}:{mode}");
         let result = (|| -> Result<Value> {
+            if let Some(deferred) = self.github_provider_credential_deferred_result(
+                &cursor_key,
+                "github_repo",
+                &locator,
+            )? {
+                return Ok(deferred);
+            }
             self.guard_provider_network_policy(
                 "arcwell-llm-wiki",
                 "github",
@@ -160,14 +196,14 @@ impl Store {
                 key: &cursor_key,
                 provider: "github",
                 source_kind: "github_repo",
-                locator: &format!("{owner}/{repo}:{mode}"),
+                locator: &locator,
                 last_item_id: last_item_id.as_deref(),
                 last_item_date: last_item_date.as_deref(),
                 cursor_key: Some(&cursor_key),
                 cursor_value: Some(&cursor_value),
                 next_run_at: Some(&now_plus_seconds(self.watch_source_next_run_seconds(
                     "github_repo",
-                    &format!("{owner}/{repo}:{mode}"),
+                    &locator,
                     3600,
                 ))),
             })?;
@@ -181,7 +217,7 @@ impl Store {
                 &cursor_key,
                 "github",
                 "github_repo",
-                &format!("{owner}/{repo}:{mode}"),
+                &locator,
                 &error.to_string(),
             );
         }
@@ -201,6 +237,11 @@ impl Store {
         );
         let cursor_key = format!("github-owner:{owner}");
         let result = (|| -> Result<Value> {
+            if let Some(deferred) =
+                self.github_provider_credential_deferred_result(&cursor_key, "github_owner", owner)?
+            {
+                return Ok(deferred);
+            }
             self.guard_provider_network_policy(
                 "arcwell-llm-wiki",
                 "github",

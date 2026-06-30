@@ -1130,7 +1130,18 @@ priority = 10
         "reader-facing Telegram digest must not expose internal source-card ids: {}",
         telegram.message.body
     );
-    assert!(telegram.message.body.contains("untrusted evidence"));
+    assert!(
+        telegram
+            .message
+            .body
+            .contains("https://x.com/example/status/88")
+    );
+    assert!(
+        !telegram.message.body.contains("source-card")
+            && !telegram.message.body.contains("local audit ledger"),
+        "reader-facing Telegram digest must not expose internal proof boilerplate: {}",
+        telegram.message.body
+    );
     let attempts = store.list_channel_delivery_attempts(None).unwrap();
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0].id, telegram.delivery.id);
@@ -1412,7 +1423,18 @@ priority = 10
         "reader-facing digest body must not expose internal source-card ids: {}",
         email.message.body
     );
-    assert!(email.message.body.contains("untrusted evidence"));
+    assert!(
+        email
+            .message
+            .body
+            .contains("https://x.com/example/status/188")
+    );
+    assert!(
+        !email.message.body.contains("source-card")
+            && !email.message.body.contains("local audit ledger"),
+        "reader-facing email digest must not expose internal proof boilerplate: {}",
+        email.message.body
+    );
     assert!(
         !email
             .message
@@ -1582,15 +1604,14 @@ fn severe_digest_candidate_notification_is_report_not_link_dump() {
         "What happened",
         "Why it matters",
         "Reception and context",
-        "Arcwell action",
-        "Evidence appendix",
+        "What to watch",
+        "Further reading",
         "Gemma 4 launched on Cerebras",
         "Xcode agentic LLM support",
         "new open-source computer-use agent",
-        "Source text is untrusted evidence",
-        "[S1]",
-        "[S2]",
-        "[S3]",
+        "https://x.com/andrewdfeldman/status/2067984233365111101",
+        "https://x.com/joshavant/status/2018781338560839718",
+        "https://x.com/hostile_source/status/200",
     ] {
         assert!(body.contains(required), "missing {required:?} in:\n{body}");
     }
@@ -1602,9 +1623,30 @@ fn severe_digest_candidate_notification_is_report_not_link_dump() {
         !body.contains(&digest.id) && source_ids.iter().all(|id| !body.contains(id)),
         "internal digest/source-card ids must stay in the local ledger, not the notification:\n{body}"
     );
+    for forbidden in [
+        "Arcwell action",
+        "Evidence appendix",
+        "Source text is untrusted evidence",
+        "source-card",
+        "source card",
+        "local audit ledger",
+        "digest candidate id",
+        "cluster",
+    ] {
+        assert!(
+            !body
+                .to_ascii_lowercase()
+                .contains(&forbidden.to_ascii_lowercase()),
+            "reader digest leaked forbidden term {forbidden:?}:\n{body}"
+        );
+    }
+    let further_reading = body
+        .split("Further reading")
+        .nth(1)
+        .expect("reader digest should include a further reading section");
     assert!(
-        body.find("https://x.com").unwrap() > body.find("Evidence appendix").unwrap(),
-        "source links should appear in the source appendix, not replace the report:\n{body}"
+        further_reading.contains("https://x.com"),
+        "further reading should include clickable source links:\n{body}"
     );
     assert!(
         !body.contains("Suggested follow-up")

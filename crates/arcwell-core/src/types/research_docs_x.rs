@@ -361,6 +361,7 @@ pub struct XImportReport {
     pub imported: usize,
     pub skipped_duplicates: usize,
     pub rejected: usize,
+    pub rejected_errors: Vec<String>,
     pub pages_fetched: Option<usize>,
     pub requested_limit: Option<usize>,
     pub exhausted: Option<bool>,
@@ -530,6 +531,120 @@ pub struct XDefinitiveWatchReport {
     pub final_handles: usize,
     pub rejected: usize,
     pub bookmark_since: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XWatchCurationRun {
+    pub id: String,
+    pub classifier_version: String,
+    pub mode: String,
+    pub status: String,
+    pub input_count: usize,
+    pub keep_count: usize,
+    pub review_keep_leaning_count: usize,
+    pub review_drop_leaning_count: usize,
+    pub needs_profile_enrichment_count: usize,
+    pub pause_candidate_count: usize,
+    pub paused_count: usize,
+    pub restored_count: usize,
+    pub error: Option<String>,
+    pub metadata: Value,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XWatchCurationDecision {
+    pub id: String,
+    pub run_id: String,
+    pub watch_source_id: String,
+    pub handle: String,
+    pub previous_status: String,
+    pub proposed_status: String,
+    pub recommendation: String,
+    pub category: String,
+    pub score: i64,
+    pub confidence: f64,
+    pub reason: String,
+    pub evidence: Value,
+    pub created_at: String,
+    pub applied_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XWatchCurationReport {
+    pub proof_level: String,
+    pub run: XWatchCurationRun,
+    pub counts: BTreeMap<String, usize>,
+    pub decisions: Vec<XWatchCurationDecision>,
+    pub non_claims: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XWatchCurationRestoreReport {
+    pub proof_level: String,
+    pub run_id: String,
+    pub restored_count: usize,
+    pub restored_watch_source_ids: Vec<String>,
+    pub non_claims: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XWatchManualRuleInput {
+    pub handle: String,
+    pub decision: String,
+    pub category: String,
+    pub reason: String,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XWatchManualRuleImportReport {
+    pub proof_level: String,
+    pub reviewed_by: String,
+    pub dry_run: bool,
+    pub seen: usize,
+    pub imported: usize,
+    pub updated: usize,
+    pub rejected: usize,
+    pub items: Vec<XWatchManualRuleImportItem>,
+    pub non_claims: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XWatchManualRuleImportItem {
+    pub handle: String,
+    pub decision: String,
+    pub category: String,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XProfileEnrichmentReport {
+    pub proof_level: String,
+    pub requested: usize,
+    pub fetched: usize,
+    pub updated: usize,
+    pub not_found: usize,
+    pub failed_batches: usize,
+    pub source_health_keys: Vec<String>,
+    pub sync_run_ids: Vec<String>,
+    pub items: Vec<XProfileEnrichmentItem>,
+    pub non_claims: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XProfileEnrichmentItem {
+    pub handle: String,
+    pub profile_id: Option<String>,
+    pub x_user_id: Option<String>,
+    pub status: String,
+    pub source_health_key: String,
+    pub display_name_present: bool,
+    pub description_present: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

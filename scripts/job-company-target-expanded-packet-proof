@@ -1,0 +1,424 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in jq sqlite3 shasum; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the expanded-role packet proof." >&2
+    exit 2
+  fi
+done
+
+DEFAULT_SOURCE_PROOF="$REPO_ROOT/.arcwell-dev/proofs/job-company-target-expanded-role-proof-20260629T050451Z-33630"
+SOURCE_PROOF="${ARCWELL_JOB_COMPANY_TARGET_EXPANDED_PACKET_SOURCE_PROOF:-$DEFAULT_SOURCE_PROOF}"
+SOURCE_HOME="$SOURCE_PROOF/home"
+
+if [ ! -f "$SOURCE_HOME/arcwell.sqlite3" ]; then
+  cat >&2 <<EOF
+BLOCKED: source proof home not found: $SOURCE_HOME
+Set ARCWELL_JOB_COMPANY_TARGET_EXPANDED_PACKET_SOURCE_PROOF to a bounded expanded-role proof.
+EOF
+  exit 2
+fi
+
+RUN_STAMP="${ARCWELL_JOB_COMPANY_TARGET_EXPANDED_PACKET_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_COMPANY_TARGET_EXPANDED_PACKET_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-company-target-expanded-packet-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_JOB_COMPANY_TARGET_EXPANDED_PACKET_HOME:-$PROOF_ROOT/home}"
+DB="$ARCWELL_HOME/arcwell.sqlite3"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[job-company-target-expanded-packet-proof] %s\n' "$*"
+}
+
+run_arcwell() {
+  "$ARCWELL_BIN" "$@"
+}
+
+sql_value() {
+  sqlite3 "$DB" "$1"
+}
+
+packet_copy_for_role() {
+  local company="$1"
+  local role_title="$2"
+  local field="$3"
+
+  case "$company|$role_title|$field" in
+    Anthropic*"Technical Specialist, Claude Code"*resume)
+      printf '%s\n' "Senior developer-facing AI and agent-systems work, with hands-on Rust/TypeScript tooling, MCP surfaces, proof-gated workflows, public technical writing, and enough implementation depth to work credibly with advanced Claude Code users."
+      ;;
+    Anthropic*"Technical Specialist, Claude Code"*bullet1)
+      printf '%s\n' "Built Arcwell around local-first assistant workflows, CLI/MCP interfaces, source evidence, privacy checks, and proof artifacts that map directly to serious coding-agent usage."
+      ;;
+    Anthropic*"Technical Specialist, Claude Code"*bullet2)
+      printf '%s\n' "Can translate complex agent behavior into practitioner-facing docs, examples, debugging paths, and product feedback without losing the engineering detail."
+      ;;
+    Anthropic*"Technical Specialist, Claude Code"*story)
+      printf '%s\n' "A useful interview story is the Arcwell job-intelligence pipeline: source ingestion, fit scoring, packet generation, privacy checks, proof boundaries, and honest status surfaces working as one developer-facing system."
+      ;;
+
+    Sierra*"Developer Relations Engineer"*resume)
+      printf '%s\n' "Developer relations for AI products backed by real agent-system implementation: orchestration, source ingestion, memory/search, technical writing, workflow design, and product judgment for developer audiences."
+      ;;
+    Sierra*"Developer Relations Engineer"*bullet1)
+      printf '%s\n' "Explain AI-agent systems from the inside out: what the tool does, where it fails, what the developer can trust, and how to turn a demo into a reliable workflow."
+      ;;
+    Sierra*"Developer Relations Engineer"*bullet2)
+      printf '%s\n' "Combine senior DevRel experience with hands-on work in local-first agents, CLI/MCP surfaces, research pipelines, and practitioner-focused blog posts."
+      ;;
+    Sierra*"Developer Relations Engineer"*story)
+      printf '%s\n' "A strong interview story is Interviewer: a voice workflow that turns a timed conversation into structured output, with the interesting design work in orchestration, transcript handling, and follow-on drafting."
+      ;;
+
+    Tailscale*"Developer Relations Engineer"*resume)
+      printf '%s\n' "Infrastructure-aware developer relations: platform engineering taste, security and networking literacy, local-first tools, public technical writing, open-cloud experiments, search systems, and credible hands-on demos."
+      ;;
+    Tailscale*"Developer Relations Engineer"*bullet1)
+      printf '%s\n' "Write and build for developers who care about operational reality: local state, trust boundaries, debuggability, workflows, and clear claims about what is proven."
+      ;;
+    Tailscale*"Developer Relations Engineer"*bullet2)
+      printf '%s\n' "Use public projects such as Arcwell, open-cloud, and code-search to show implementation depth behind developer education and community work."
+      ;;
+    Tailscale*"Developer Relations Engineer"*story)
+      printf '%s\n' "A useful interview story is the technical blog rebuild: replacing generic positioning with code-grounded posts about architecture, constraints, and practical lessons for other engineers."
+      ;;
+
+    Langfuse*"Developer Relations Engineer"*resume)
+      printf '%s\n' "AI observability-adjacent developer work: agent workflows, evaluation-minded proof gates, source-backed research, technical writing, community/event credibility, and hands-on Rust/TypeScript implementation."
+      ;;
+    Langfuse*"Developer Relations Engineer"*bullet1)
+      printf '%s\n' "Bring an evaluation and evidence mindset to agent tooling: separate local proof, live-source proof, privacy checks, exported artifacts, and actual delivery outcomes."
+      ;;
+    Langfuse*"Developer Relations Engineer"*bullet2)
+      printf '%s\n' "Can turn developer-facing AI topics into talks, docs, examples, and posts that start from real workflows rather than product slogans."
+      ;;
+    Langfuse*"Developer Relations Engineer"*story)
+      printf '%s\n' "A strong interview story is Arcwell's research and reporting work: ingesting multiple sources, clustering related material, and producing source-backed summaries with explicit limitations."
+      ;;
+
+    *resume)
+      printf '%s\n' "Senior developer-facing platform work across AI agents, developer tools, Rust/TypeScript systems, public technical writing, and practical DevRel/DevEx leadership."
+      ;;
+    *bullet1)
+      printf '%s\n' "Turn ambiguous developer-platform problems into concrete workflows with source data, durable records, privacy checks, and proof boundaries."
+      ;;
+    *bullet2)
+      printf '%s\n' "Use public projects, practitioner writing, and implementation-level examples to support a senior technical application."
+      ;;
+    *story)
+      printf '%s\n' "A useful interview story is turning a broad job-intelligence idea into roles, evidence, scores, packets, privacy gates, and auditable proof artifacts."
+      ;;
+  esac
+}
+
+outreach_note_for_role() {
+  local company="$1"
+  local role_title="$2"
+
+  case "$company" in
+    Anthropic)
+      printf '%s\n' "I am interested in Anthropic because this ${role_title} role sits exactly where advanced coding-agent users need help: product understanding, implementation judgment, debugging workflows, and clear technical communication. My recent work with Arcwell gives me concrete experience with local-first agent tooling, MCP surfaces, privacy checks, and proof-gated workflows."
+      ;;
+    Sierra)
+      printf '%s\n' "I am interested in Sierra because this ${role_title} role combines AI product work, developer education, and practical agent-system judgment. My recent work spans orchestration, source-backed workflows, public technical writing, and hands-on tooling for developers working with agents."
+      ;;
+    Tailscale)
+      printf '%s\n' "I am interested in Tailscale because this ${role_title} role needs developer-facing credibility around infrastructure, trust, workflow design, and technical explanation. My background combines DevRel/DevEx leadership with hands-on work in local-first tools, open-cloud experiments, code search, and agent systems."
+      ;;
+    Langfuse)
+      printf '%s\n' "I am interested in Langfuse because this ${role_title} role combines AI developer tooling, observability-minded thinking, technical content, events, and community. My recent agent/research work is built around evidence, evaluation boundaries, and practical developer workflows."
+      ;;
+    *)
+      printf '%s\n' "I am interested in ${company} because this ${role_title} role matches my mix of developer-facing platform work, hands-on systems engineering, and technical communication for experienced developers."
+      ;;
+  esac
+}
+
+question_for_role() {
+  local company="$1"
+  local role_title="$2"
+
+  case "$company" in
+    Anthropic)
+      printf '%s\n' "For ${role_title}, where do advanced Claude Code users most need help today: debugging agent behavior, designing workflows, understanding model boundaries, or giving product feedback that engineering can act on?"
+      ;;
+    Sierra)
+      printf '%s\n' "For ${role_title}, what developer audience matters most over the next six months, and what would make them trust Sierra's agent platform in production?"
+      ;;
+    Tailscale)
+      printf '%s\n' "For ${role_title}, which developer workflows are hardest to explain clearly today: onboarding, security model, team adoption, or advanced infrastructure patterns?"
+      ;;
+    Langfuse)
+      printf '%s\n' "For ${role_title}, where does Langfuse most need better developer education: evaluations, observability workflows, agent traces, open-source adoption, or community events?"
+      ;;
+    *)
+      printf '%s\n' "For ${role_title}, what would make the first six months meaningfully successful for the team and for developers using the product?"
+      ;;
+  esac
+}
+
+log "proof root: $PROOF_ROOT"
+log "source proof: $SOURCE_PROOF"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+
+cp -R "$SOURCE_HOME/." "$ARCWELL_HOME/"
+printf '%s\n' "$SOURCE_PROOF" >"$ARTIFACT_DIR/source-proof.txt"
+printf '%s\n' "$SOURCE_HOME" >"$ARTIFACT_DIR/source-home.txt"
+
+run_arcwell job profiles >"$ARTIFACT_DIR/profiles.json"
+PROFILE_ID="$(jq -r '.[0].id // empty' "$ARTIFACT_DIR/profiles.json")"
+if [ -z "$PROFILE_ID" ]; then
+  echo "BLOCKED: source proof home has no job candidate profile" >&2
+  exit 2
+fi
+
+PACKET_COUNT_BEFORE="$(sql_value "SELECT COUNT(*) FROM job_application_packets;")"
+APPLICATION_COUNT_BEFORE="$(sql_value "SELECT COUNT(*) FROM job_applications;")"
+PRIVACY_COUNT_BEFORE="$(sql_value "SELECT COUNT(*) FROM job_privacy_checks;")"
+
+sqlite3 -json "$DB" "
+  SELECT
+    s.role_id,
+    r.company,
+    r.role_title,
+    r.canonical_url,
+    s.weighted_score,
+    s.tier,
+    s.evidence_card_ids_json
+  FROM job_fit_scores s
+  JOIN job_role_cards r ON r.id = s.role_id
+  WHERE s.profile_id = '$PROFILE_ID'
+    AND s.scorer = 'company_target_expanded_role_confirmation_v1'
+    AND s.tier = 'tier_1'
+    AND r.source_confidence = 'canonical_confirmed'
+    AND r.current_status = 'live'
+  ORDER BY s.weighted_score DESC, r.company, r.role_title;
+" >"$ARTIFACT_DIR/tier1-expanded-confirmed-roles.json"
+
+TIER1_COUNT="$(jq 'length' "$ARTIFACT_DIR/tier1-expanded-confirmed-roles.json")"
+if [ "$TIER1_COUNT" != "4" ]; then
+  echo "BLOCKED: expected exactly 4 expanded confirmed Tier 1 roles from source proof, found $TIER1_COUNT" >&2
+  exit 2
+fi
+
+: >"$ARTIFACT_DIR/created-packets.jsonl"
+: >"$ARTIFACT_DIR/created-packet-ids.txt"
+: >"$ARTIFACT_DIR/created-packet-privacy.jsonl"
+: >"$ARTIFACT_DIR/created-packet-report.jsonl"
+
+while IFS= read -r role_json; do
+  [ -n "$role_json" ] || continue
+  role_id="$(printf '%s\n' "$role_json" | jq -r '.role_id')"
+  company="$(printf '%s\n' "$role_json" | jq -r '.company')"
+  role_title="$(printf '%s\n' "$role_json" | jq -r '.role_title')"
+  evidence_count="$(printf '%s\n' "$role_json" | jq '.evidence_card_ids_json | fromjson | length')"
+  if [ "$evidence_count" -lt 2 ]; then
+    echo "BLOCKED: role $role_id has fewer than two scored evidence cards" >&2
+    exit 2
+  fi
+
+  evidence_args=()
+  while IFS= read -r evidence_id; do
+    [ -n "$evidence_id" ] || continue
+    evidence_args+=(--evidence-card-id "$evidence_id")
+  done < <(printf '%s\n' "$role_json" | jq -r '.evidence_card_ids_json | fromjson[]')
+
+  proof_links_json="$(jq -cn --arg blog "https://chabot.dev/" --arg arcwell "https://github.com/chrischabot/arcwell" --arg open_cloud "https://github.com/chrischabot/open-cloud" --arg code_search "https://github.com/chrischabot/code-search" '{blog:$blog, arcwell:$arcwell, open_cloud:$open_cloud, code_search:$code_search}')"
+  reviewer_note="Controlled expanded-role draft packet proof only; not user-reviewed, approved, exported, sent, or submitted."
+  resume_emphasis="$(packet_copy_for_role "$company" "$role_title" resume)"
+  bullet_one="$(packet_copy_for_role "$company" "$role_title" bullet1)"
+  bullet_two="$(packet_copy_for_role "$company" "$role_title" bullet2)"
+  story="$(packet_copy_for_role "$company" "$role_title" story)"
+  outreach_note="$(outreach_note_for_role "$company" "$role_title")"
+  question="$(question_for_role "$company" "$role_title")"
+
+  log "creating draft packet for $company / $role_title"
+  packet_json="$(run_arcwell job packet-create "$role_id" \
+    --profile-id "$PROFILE_ID" \
+    "${evidence_args[@]}" \
+    --resume-emphasis "$resume_emphasis" \
+    --tailored-bullet "$bullet_one" \
+    --tailored-bullet "$bullet_two" \
+    --outreach-note "$outreach_note" \
+    --proof-links-json "$proof_links_json" \
+    --likely-objection "The role-specific stack, compensation, location, and working-time details still need manual review before applying." \
+    --likely-objection "This packet is a draft and does not mean the user approved, exported, sent, or submitted an application." \
+    --interview-story "$story" \
+    --question-to-ask "$question" \
+    --reviewer-note "$reviewer_note")"
+  printf '%s\n' "$packet_json" >>"$ARTIFACT_DIR/created-packets.jsonl"
+  packet_id="$(printf '%s\n' "$packet_json" | jq -r '.id')"
+  printf '%s\n' "$packet_id" >>"$ARTIFACT_DIR/created-packet-ids.txt"
+
+  run_arcwell job packet "$packet_id" >>"$ARTIFACT_DIR/created-packet-report.jsonl"
+  sqlite3 -json "$DB" "
+    SELECT
+      p.id AS packet_id,
+      p.status,
+      pc.decision,
+      r.company,
+      r.role_title,
+      p.privacy_check_id,
+      p.proof_links_json
+    FROM job_application_packets p
+    JOIN job_privacy_checks pc ON pc.id = p.privacy_check_id
+    JOIN job_role_cards r ON r.id = p.role_id
+    WHERE p.id = '$packet_id';
+  " | jq -c '.[]' >>"$ARTIFACT_DIR/created-packet-privacy.jsonl"
+done < <(jq -c '.[]' "$ARTIFACT_DIR/tier1-expanded-confirmed-roles.json")
+
+CREATED_PACKET_COUNT="$(wc -l <"$ARTIFACT_DIR/created-packet-ids.txt" | tr -d '[:space:]')"
+PACKET_COUNT_AFTER="$(sql_value "SELECT COUNT(*) FROM job_application_packets;")"
+APPLICATION_COUNT_AFTER="$(sql_value "SELECT COUNT(*) FROM job_applications;")"
+PRIVACY_COUNT_AFTER="$(sql_value "SELECT COUNT(*) FROM job_privacy_checks;")"
+PACKET_DELTA="$((PACKET_COUNT_AFTER - PACKET_COUNT_BEFORE))"
+PRIVACY_DELTA="$((PRIVACY_COUNT_AFTER - PRIVACY_COUNT_BEFORE))"
+APPLICATION_DELTA="$((APPLICATION_COUNT_AFTER - APPLICATION_COUNT_BEFORE))"
+
+if [ "$CREATED_PACKET_COUNT" != "4" ] || [ "$PACKET_DELTA" != "4" ]; then
+  echo "BLOCKED: expected four new packets, got created=$CREATED_PACKET_COUNT delta=$PACKET_DELTA" >&2
+  exit 2
+fi
+
+if [ "$PRIVACY_DELTA" != "4" ]; then
+  echo "BLOCKED: expected four new packet privacy checks, got delta=$PRIVACY_DELTA" >&2
+  exit 2
+fi
+
+if [ "$APPLICATION_DELTA" != "0" ]; then
+  echo "BLOCKED: expected no new application rows, got before/after $APPLICATION_COUNT_BEFORE/$APPLICATION_COUNT_AFTER" >&2
+  exit 2
+fi
+
+if ! jq -s -e 'all(.[]; .status == "draft" and .decision == "pass")' "$ARTIFACT_DIR/created-packet-privacy.jsonl" >/dev/null; then
+  echo "BLOCKED: one or more created packets was not draft/pass" >&2
+  exit 2
+fi
+
+if jq -s -e 'any(.[]; ((.proof_links_json // "") | test("(/Users/|file:|local_path|ferrite|integral)"; "i")))' "$ARTIFACT_DIR/created-packet-privacy.jsonl" >/dev/null; then
+  echo "BLOCKED: created packet proof links include a local path or private marker" >&2
+  exit 2
+fi
+
+if jq -s -e 'any(.[]; (([.resume_emphasis, (.tailored_bullets[]?), .outreach_note, (.likely_objections[]?), (.interview_stories[]?), (.questions_to_ask[]?), (.reviewer_note // "")] | join(" ")) | test("(/Users/|file:|ferrite|integral)"; "i")))' "$ARTIFACT_DIR/created-packet-report.jsonl" >/dev/null; then
+  echo "BLOCKED: created packet text includes a local path or private marker" >&2
+  exit 2
+fi
+
+sqlite3 -json "$DB" "
+  SELECT p.status, COUNT(*) AS count
+  FROM job_application_packets p
+  GROUP BY p.status
+  ORDER BY p.status;
+" >"$ARTIFACT_DIR/packet-status-counts.json"
+
+jq -n \
+  --arg feature "expanded company-target confirmed-role draft packet creation" \
+  --arg status "Controlled Local Proof over production-data input" \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg source_proof "$SOURCE_PROOF" \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg home "$ARCWELL_HOME" \
+  --arg profile_id "$PROFILE_ID" \
+  --argjson packet_count_before "$PACKET_COUNT_BEFORE" \
+  --argjson packet_count_after "$PACKET_COUNT_AFTER" \
+  --argjson packet_delta "$PACKET_DELTA" \
+  --argjson privacy_count_before "$PRIVACY_COUNT_BEFORE" \
+  --argjson privacy_count_after "$PRIVACY_COUNT_AFTER" \
+  --argjson privacy_delta "$PRIVACY_DELTA" \
+  --argjson applications_before "$APPLICATION_COUNT_BEFORE" \
+  --argjson applications_after "$APPLICATION_COUNT_AFTER" \
+  --argjson application_delta "$APPLICATION_DELTA" \
+  --arg created_packets_sha256 "$(shasum -a 256 "$ARTIFACT_DIR/created-packets.jsonl" | awk '{print $1}')" \
+  --arg created_packet_report_sha256 "$(shasum -a 256 "$ARTIFACT_DIR/created-packet-report.jsonl" | awk '{print $1}')" \
+  --slurpfile roles "$ARTIFACT_DIR/tier1-expanded-confirmed-roles.json" \
+  --slurpfile packets "$ARTIFACT_DIR/created-packets.jsonl" \
+  --slurpfile privacy "$ARTIFACT_DIR/created-packet-privacy.jsonl" \
+  --slurpfile status_counts "$ARTIFACT_DIR/packet-status-counts.json" \
+  '{
+    feature: $feature,
+    status: $status,
+    created_at: $created_at,
+    skill_gates: ["arc:anti-mirage", "arc:job-hunting"],
+    user_visible_claim: "Starting from the bounded expanded direct-role proof, Arcwell can create privacy-checked draft application packets for the four confirmed Tier 1 roles using the scored evidence ledger, while leaving approval, export, sending, submission, and application status untouched.",
+    non_claims: [
+      "This does not prove current freshness beyond the source role-proof input.",
+      "This is not user review or approval.",
+      "This is not local Markdown export.",
+      "This is not Google Docs draft creation.",
+      "This is not email, ATS, browser, or provider delivery.",
+      "This is not evidence that any application was submitted, sent, or marked applied.",
+      "This does not prove warm-intro paths or hiring outcomes."
+    ],
+    inputs: {
+      source_proof: $source_proof,
+      copied_home: $home,
+      profile_id: $profile_id,
+      role_set: "four live canonical-confirmed Tier 1 roles from the expanded direct-role proof",
+      roles: $roles[0]
+    },
+    outputs: {
+      proof_root: $proof_root,
+      copied_home: $home,
+      packet_count_before: $packet_count_before,
+      packet_count_after: $packet_count_after,
+      packet_delta: $packet_delta,
+      privacy_count_before: $privacy_count_before,
+      privacy_count_after: $privacy_count_after,
+      privacy_delta: $privacy_delta,
+      applications_before: $applications_before,
+      applications_after: $applications_after,
+      application_delta: $application_delta,
+      created_packets_sha256: $created_packets_sha256,
+      created_packet_report_sha256: $created_packet_report_sha256,
+      packet_status_counts: $status_counts[0]
+    },
+    created_packets: $packets,
+    privacy_checks: $privacy,
+    durable_state_written: [
+      "four copied-home draft job_application_packets rows",
+      "four copied-home packet privacy checks with pass decisions"
+    ],
+    durable_state_not_written: [
+      "no approved packet statuses for the created packets",
+      "no packet exports",
+      "no new job_applications rows",
+      "no sent/delivered/submitted provider rows",
+      "no writes to the source proof home",
+      "no writes to the user operational home"
+    ],
+    commands_run: [
+      "scripts/job-company-target-expanded-packet-proof"
+    ],
+    adversarial_review_judgment: "Promote only as controlled Local Proof over production-data role input for draft packet creation and packet-time privacy checks. Hold approval, export, delivery, sent, applied, outcome, recurring freshness, and exhaustive-market claims.",
+    remaining_risks: [
+      {
+        risk: "The source roles came from a bounded live proof and may become stale.",
+        next_action: "Refresh the company/ATS source again before using any packet for a real application."
+      },
+      {
+        risk: "The packets are drafted from role cards and evidence cards, not from a human review of every current job description detail.",
+        next_action: "Perform user review and role-specific tailoring before approval/export."
+      },
+      {
+        risk: "The proof creates drafts only.",
+        next_action: "Use a separate controlled proof for approval plus export, and a separate explicitly authorized proof for any delivery path."
+      }
+    ]
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"
+log "expanded-role draft packet proof passed"

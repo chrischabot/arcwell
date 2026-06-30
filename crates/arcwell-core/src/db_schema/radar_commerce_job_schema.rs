@@ -797,6 +797,29 @@ pub(crate) fn ensure_job_hunting_schema_on(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_job_weekly_reports_profile_generated
           ON job_weekly_reports(profile_id, generated_at);
+
+        CREATE TABLE IF NOT EXISTS job_weekly_report_deliveries (
+          id TEXT PRIMARY KEY,
+          report_id TEXT NOT NULL,
+          channel TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          target TEXT NOT NULL,
+          status TEXT NOT NULL,
+          privacy_check_id TEXT,
+          channel_message_id TEXT,
+          idempotency_key TEXT NOT NULL,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(report_id) REFERENCES job_weekly_reports(id) ON DELETE CASCADE,
+          FOREIGN KEY(privacy_check_id) REFERENCES job_privacy_checks(id) ON DELETE SET NULL,
+          FOREIGN KEY(channel_message_id) REFERENCES channel_messages(id) ON DELETE SET NULL,
+          UNIQUE(report_id, channel, subject, target, idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_weekly_report_deliveries_report
+          ON job_weekly_report_deliveries(report_id, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_job_weekly_report_deliveries_status
+          ON job_weekly_report_deliveries(status, updated_at);
         "#,
     )?;
     Ok(())

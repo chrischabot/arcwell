@@ -1,0 +1,466 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+PROOF_ROOT="${ARCWELL_X_WATCH_CURATION_PAUSE_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/x-watch-curation-copied-home-pause-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+RAW_DIR="$PROOF_ROOT/raw"
+COPY_HOME="$PROOF_ROOT/home"
+REAL_HOME="${ARCWELL_X_WATCH_CURATION_REAL_HOME:-${ARCWELL_HOME:-$HOME/.arcwell}}"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+REVIEWED_BY="${ARCWELL_X_WATCH_CURATION_REVIEWED_BY:-codex-x-watch-curation-copied-home-proof}"
+RULES_PATH="${ARCWELL_X_WATCH_CURATION_REVIEWED_RULES:-}"
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/x-watch-curation-copied-home-pause-proof --rules reviewed-rules.json [--reviewed-by name]
+
+Runs reviewed X watch manual-rule import, pause-only curation, and restore
+against a copied Arcwell home. The real home is inspected before/after but never
+mutated by this script.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rules)
+      RULES_PATH="${2:?missing value for --rules}"
+      shift 2
+      ;;
+    --reviewed-by)
+      REVIEWED_BY="${2:?missing value for --reviewed-by}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'unknown argument: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+log() {
+  printf '[x-watch-curation-copied-home-pause-proof] %s\n' "$*"
+}
+
+fail() {
+  printf '[x-watch-curation-copied-home-pause-proof] BLOCKED: %s\n' "$*" >&2
+  exit 1
+}
+
+[[ -n "$RULES_PATH" ]] || fail "missing --rules reviewed manual-rule JSON path"
+[[ -f "$RULES_PATH" ]] || fail "reviewed rules file does not exist: $RULES_PATH"
+[[ -d "$REAL_HOME" ]] || fail "real Arcwell home does not exist: $REAL_HOME"
+[[ -f "$REAL_HOME/arcwell.sqlite3" ]] || fail "real Arcwell SQLite DB does not exist: $REAL_HOME/arcwell.sqlite3"
+
+mkdir -p "$ARTIFACT_DIR" "$RAW_DIR" "$COPY_HOME"
+
+log "proof root: $PROOF_ROOT"
+log "real home: $REAL_HOME"
+log "copy home: $COPY_HOME"
+log "reviewed rules: $RULES_PATH"
+
+cp "$RULES_PATH" "$ARTIFACT_DIR/reviewed-rules.json"
+
+log "building arcwell CLI"
+cargo build -p arcwell >"$ARTIFACT_DIR/cargo-build.log" 2>&1
+
+log "running targeted curation tests"
+cargo test -p arcwell-core x_watch_curation -- --nocapture \
+  >"$ARTIFACT_DIR/x-watch-curation-tests.log" 2>&1
+cargo test -p arcwell-core x_watch_manual_rule -- --nocapture \
+  >"$ARTIFACT_DIR/x-watch-manual-rule-tests.log" 2>&1
+cargo test -p arcwell-core proof -- --nocapture \
+  >"$ARTIFACT_DIR/proof-tests.log" 2>&1
+
+log "checking formatting"
+cargo fmt -- --check >"$ARTIFACT_DIR/cargo-fmt-check.log" 2>&1
+
+log "capturing real-home baseline"
+python3 - "$REAL_HOME/arcwell.sqlite3" >"$RAW_DIR/real-before.json" <<'PY'
+import hashlib, json, sqlite3, sys
+db = sys.argv[1]
+conn = sqlite3.connect(db)
+def counts():
+    return dict(conn.execute(
+        "SELECT status, COUNT(*) FROM watch_sources WHERE source_kind='x_handle' GROUP BY status ORDER BY status"
+    ).fetchall())
+rows = conn.execute(
+    "SELECT id, status, label, cadence, metadata_json FROM watch_sources WHERE source_kind='x_handle' ORDER BY id"
+).fetchall()
+payload = json.dumps(rows, sort_keys=True, separators=(",", ":"))
+print(json.dumps({
+    "status_counts": counts(),
+    "total_x_handle_sources": len(rows),
+    "row_checksum": hashlib.sha256(payload.encode()).hexdigest(),
+    "manual_rule_count": conn.execute("SELECT COUNT(*) FROM x_watch_manual_rules").fetchone()[0],
+    "curation_run_count": conn.execute("SELECT COUNT(*) FROM x_watch_curation_runs").fetchone()[0],
+    "restore_snapshot_count": conn.execute("SELECT COUNT(*) FROM x_watch_restore_snapshots").fetchone()[0],
+}, indent=2, sort_keys=True))
+PY
+
+log "copying SQLite database with SQLite backup API"
+python3 - "$REAL_HOME/arcwell.sqlite3" "$COPY_HOME/arcwell.sqlite3" <<'PY'
+import pathlib, sqlite3, sys
+src_path = pathlib.Path(sys.argv[1])
+dst_path = pathlib.Path(sys.argv[2])
+dst_path.parent.mkdir(parents=True, exist_ok=True)
+src = sqlite3.connect(src_path)
+dst = sqlite3.connect(dst_path)
+src.backup(dst)
+dst.close()
+src.close()
+PY
+
+capture_copy_state() {
+  local output="$1"
+  python3 - "$COPY_HOME/arcwell.sqlite3" >"$output" <<'PY'
+import hashlib, json, sqlite3, sys
+db = sys.argv[1]
+conn = sqlite3.connect(db)
+rows = conn.execute(
+    "SELECT id, locator, status, label, cadence, metadata_json FROM watch_sources WHERE source_kind='x_handle' ORDER BY id"
+).fetchall()
+payload = json.dumps(rows, sort_keys=True, separators=(",", ":"))
+print(json.dumps({
+    "status_counts": dict(conn.execute(
+        "SELECT status, COUNT(*) FROM watch_sources WHERE source_kind='x_handle' GROUP BY status ORDER BY status"
+    ).fetchall()),
+    "total_x_handle_sources": len(rows),
+    "row_checksum": hashlib.sha256(payload.encode()).hexdigest(),
+    "manual_rule_count": conn.execute("SELECT COUNT(*) FROM x_watch_manual_rules").fetchone()[0],
+    "curation_run_count": conn.execute("SELECT COUNT(*) FROM x_watch_curation_runs").fetchone()[0],
+    "restore_snapshot_count": conn.execute("SELECT COUNT(*) FROM x_watch_restore_snapshots").fetchone()[0],
+}, indent=2, sort_keys=True))
+PY
+}
+
+capture_copy_state "$RAW_DIR/copy-before.json"
+
+log "dry-running reviewed manual-rule import in copied home"
+"$ARCWELL_BIN" --home "$COPY_HOME" x import-watch-manual-rules \
+  --path "$ARTIFACT_DIR/reviewed-rules.json" \
+  --reviewed-by "$REVIEWED_BY" \
+  --dry-run >"$RAW_DIR/import-dry-run.json"
+
+log "applying reviewed manual rules in copied home"
+"$ARCWELL_BIN" --home "$COPY_HOME" x import-watch-manual-rules \
+  --path "$ARTIFACT_DIR/reviewed-rules.json" \
+  --reviewed-by "$REVIEWED_BY" \
+  --apply >"$RAW_DIR/import-apply.json"
+
+log "dry-running curation after reviewed rules in copied home"
+"$ARCWELL_BIN" --home "$COPY_HOME" x curate-watch-sources --dry-run \
+  >"$RAW_DIR/curation-dry-run.json"
+
+log "applying pause-only curation in copied home"
+"$ARCWELL_BIN" --home "$COPY_HOME" x curate-watch-sources --apply --mode pause-only \
+  >"$RAW_DIR/pause-apply.json"
+
+capture_copy_state "$RAW_DIR/copy-after-pause.json"
+
+RUN_ID="$(python3 - "$RAW_DIR/pause-apply.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))["run"]["id"])
+PY
+)"
+
+log "restoring copied-home curation run $RUN_ID"
+"$ARCWELL_BIN" --home "$COPY_HOME" x restore-watch-curation "$RUN_ID" \
+  >"$RAW_DIR/restore.json"
+
+capture_copy_state "$RAW_DIR/copy-after-restore.json"
+
+log "capturing real-home after state to prove no mutation"
+python3 - "$REAL_HOME/arcwell.sqlite3" >"$RAW_DIR/real-after.json" <<'PY'
+import hashlib, json, sqlite3, sys
+db = sys.argv[1]
+conn = sqlite3.connect(db)
+rows = conn.execute(
+    "SELECT id, status, label, cadence, metadata_json FROM watch_sources WHERE source_kind='x_handle' ORDER BY id"
+).fetchall()
+payload = json.dumps(rows, sort_keys=True, separators=(",", ":"))
+print(json.dumps({
+    "status_counts": dict(conn.execute(
+        "SELECT status, COUNT(*) FROM watch_sources WHERE source_kind='x_handle' GROUP BY status ORDER BY status"
+    ).fetchall()),
+    "total_x_handle_sources": len(rows),
+    "row_checksum": hashlib.sha256(payload.encode()).hexdigest(),
+    "manual_rule_count": conn.execute("SELECT COUNT(*) FROM x_watch_manual_rules").fetchone()[0],
+    "curation_run_count": conn.execute("SELECT COUNT(*) FROM x_watch_curation_runs").fetchone()[0],
+    "restore_snapshot_count": conn.execute("SELECT COUNT(*) FROM x_watch_restore_snapshots").fetchone()[0],
+}, indent=2, sort_keys=True))
+PY
+
+log "validating copied-home pause/restore invariants"
+python3 - "$ARTIFACT_DIR" "$RAW_DIR" "$PROOF_ROOT" "$REVIEWED_BY" <<'PY'
+import hashlib, json, pathlib, sys
+artifacts = pathlib.Path(sys.argv[1])
+raw = pathlib.Path(sys.argv[2])
+proof_root = pathlib.Path(sys.argv[3])
+reviewed_by = sys.argv[4]
+
+def load(name):
+    return json.loads((raw / name).read_text())
+
+rules = json.loads((artifacts / "reviewed-rules.json").read_text())
+real_before = load("real-before.json")
+real_after = load("real-after.json")
+copy_before = load("copy-before.json")
+copy_after_pause = load("copy-after-pause.json")
+copy_after_restore = load("copy-after-restore.json")
+import_dry = load("import-dry-run.json")
+import_apply = load("import-apply.json")
+curation_dry = load("curation-dry-run.json")
+pause_apply = load("pause-apply.json")
+restore = load("restore.json")
+
+def assert_true(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+exclude_handles = sorted(
+    rule["handle"].lstrip("@").lower()
+    for rule in rules
+    if rule["decision"] == "manual_always_exclude"
+)
+keep_handles = sorted(
+    rule["handle"].lstrip("@").lower()
+    for rule in rules
+    if rule["decision"] == "manual_always_keep"
+)
+assert_true(exclude_handles, "reviewed rules must contain at least one manual_always_exclude")
+assert_true(import_dry["dry_run"] is True, "import dry run did not report dry_run true")
+assert_true(import_dry["rejected"] == 0, f"dry-run import rejected rows: {import_dry}")
+assert_true(import_dry["imported"] == 0 and import_dry["updated"] == 0, "dry-run import wrote rows")
+assert_true(import_apply["dry_run"] is False, "apply import did not report dry_run false")
+assert_true(import_apply["rejected"] == 0, f"apply import rejected rows: {import_apply}")
+assert_true(
+    import_apply["imported"] + import_apply["updated"] == import_apply["seen"],
+    f"apply import did not write every reviewed row: {import_apply}",
+)
+assert_true(real_before == real_after, "real home changed during copied-home proof")
+
+manual_exclude_decisions = {
+    decision["handle"].lower(): decision
+    for decision in curation_dry["decisions"]
+    if decision["recommendation"] == "paused_excluded"
+}
+for handle in exclude_handles:
+    decision = manual_exclude_decisions.get(handle)
+    assert_true(decision is not None, f"exclude handle missing curation decision: {handle}")
+    assert_true(decision["proposed_status"] == "paused", f"exclude handle not proposed paused: {decision}")
+    evidence = json.dumps(decision.get("evidence", {}))
+    assert_true("manual_rule" in evidence, f"exclude decision lacks manual rule evidence: {decision}")
+
+applied = [
+    decision for decision in pause_apply["decisions"]
+    if decision.get("applied_at")
+]
+assert_true(len(applied) == len(exclude_handles), f"applied decision count mismatch: {len(applied)} vs {exclude_handles}")
+assert_true(
+    pause_apply["run"]["paused_count"] == len(exclude_handles),
+    f"paused count mismatch: {pause_apply['run']}",
+)
+for decision in applied:
+    assert_true(decision["handle"].lower() in exclude_handles, f"non-reviewed handle paused: {decision}")
+    assert_true(decision["recommendation"] == "paused_excluded", f"paused decision was not exclude: {decision}")
+
+assert_true(
+    copy_before["total_x_handle_sources"] == copy_after_pause["total_x_handle_sources"] == copy_after_restore["total_x_handle_sources"],
+    "pause/restore changed total watch-source count",
+)
+assert_true(
+    copy_after_pause["status_counts"].get("active", 0) == copy_before["status_counts"].get("active", 0) - len(exclude_handles),
+    "active count did not decrease by reviewed exclude count",
+)
+assert_true(
+    copy_after_pause["status_counts"].get("paused", 0) == copy_before["status_counts"].get("paused", 0) + len(exclude_handles),
+    "paused count did not increase by reviewed exclude count",
+)
+assert_true(
+    restore["restored_count"] == pause_apply["run"]["paused_count"],
+    f"restore count mismatch: {restore}",
+)
+assert_true(
+    copy_after_restore["row_checksum"] == copy_before["row_checksum"],
+    "copied-home restore did not return watch-source rows to baseline checksum",
+)
+assert_true(
+    copy_after_restore["status_counts"] == copy_before["status_counts"],
+    "copied-home restore did not return status counts to baseline",
+)
+for handle in keep_handles:
+    keep_decision = next(
+        (decision for decision in pause_apply["decisions"] if decision["handle"].lower() == handle),
+        None,
+    )
+    assert_true(keep_decision is not None, f"keep handle missing curation decision: {handle}")
+    assert_true(not keep_decision.get("applied_at"), f"manual keep handle was paused: {keep_decision}")
+    assert_true(keep_decision["proposed_status"] == "active", f"manual keep handle not active: {keep_decision}")
+
+summary = {
+    "proof_name": "x-watch-curation-copied-home-pause-proof",
+    "proof_level": "copied_production_home_pause_restore_local_proof",
+    "reviewed_by": reviewed_by,
+    "reviewed_rule_count": len(rules),
+    "manual_keep_count": len(keep_handles),
+    "manual_exclude_count": len(exclude_handles),
+    "real_home_unchanged": real_before == real_after,
+    "copy_home": {
+        "total_x_handle_sources": copy_before["total_x_handle_sources"],
+        "status_before": copy_before["status_counts"],
+        "status_after_pause": copy_after_pause["status_counts"],
+        "status_after_restore": copy_after_restore["status_counts"],
+        "row_checksum_before": copy_before["row_checksum"],
+        "row_checksum_after_restore": copy_after_restore["row_checksum"],
+    },
+    "manual_rule_import": {
+        "dry_run_seen": import_dry["seen"],
+        "dry_run_rejected": import_dry["rejected"],
+        "apply_seen": import_apply["seen"],
+        "apply_imported": import_apply["imported"],
+        "apply_updated": import_apply["updated"],
+        "apply_rejected": import_apply["rejected"],
+    },
+    "curation": {
+        "dry_run_id": curation_dry["run"]["id"],
+        "pause_apply_run_id": pause_apply["run"]["id"],
+        "paused_count": pause_apply["run"]["paused_count"],
+        "restored_count": restore["restored_count"],
+        "counts": pause_apply["counts"],
+    },
+    "non_claims": [
+        "This is not real-home apply proof.",
+        "This is not proof that the production X watch list is materially smaller.",
+        "This is not worker-pressure reduction proof.",
+        "This is not scheduled or operational curation proof.",
+        "This is not CSV import proof."
+    ]
+}
+(artifacts / "pause-restore-summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+(artifacts / "pause-restore-validation.json").write_text(json.dumps({
+    "status": "passed",
+    "checks": [
+        "real home unchanged before/after copied-home proof",
+        "manual-rule dry-run wrote no rows",
+        "manual-rule apply wrote every reviewed row",
+        "pause-only apply paused only manual_always_exclude handles",
+        "manual_always_keep handles remained active",
+        "total x_handle watch-source count did not change",
+        "restore returned copied-home watch-source row checksum and status counts to baseline"
+    ],
+    "run_id": pause_apply["run"]["id"],
+    "rule_counts": {
+        "keep": len(keep_handles),
+        "exclude": len(exclude_handles)
+    }
+}, indent=2, sort_keys=True) + "\n")
+
+packet = {
+    "proof_name": "x-watch-curation-copied-home-pause-proof",
+    "proof_level": "copied_production_home_pause_restore_local_proof",
+    "proof_root": str(proof_root),
+    "feature": "M1 copied-home reversible X watch-source curation",
+    "claim": "Against a copied production Arcwell home, Arcwell can import reviewed JSON manual rules, pause only explicitly reviewed exclude handles, and restore copied X watch-source rows exactly while the real home remains unchanged.",
+    "non_claims": summary["non_claims"],
+    "artifacts": {},
+    "artifact_sha256": {},
+    "adversarial_review_judgment": "promote for copied-home pause/restore proof only; hold real-home curation until reviewed candidate set, real-home pause proof, worker pressure reduction, ops UI, and MCP/slash parity are proven.",
+    "remaining_risks": [
+        {
+            "risk": "Only a tiny reviewed JSON fixture was applied in the copied home.",
+            "next_action": "Build a reviewed real candidate list before real-home pause-only apply."
+        },
+        {
+            "risk": "No worker pressure reduction was measured after curation.",
+            "next_action": "Run X monitor before/after after a real reviewed pause set exists."
+        }
+    ]
+}
+for path in sorted(artifacts.iterdir()):
+    if path.is_file() and path.name != "proof-packet.json":
+        packet["artifacts"][path.stem.replace("-", "_")] = str(path)
+        packet["artifact_sha256"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+(artifacts / "proof-packet.json").write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n")
+packet["artifact_sha256"]["proof-packet.json"] = hashlib.sha256((artifacts / "proof-packet.json").read_bytes()).hexdigest()
+(artifacts / "proof-packet.json").write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n")
+PY
+
+log "verifying clean proof packet"
+"$ARCWELL_BIN" proof verify-packet "$ARTIFACT_DIR/proof-packet.json" \
+  >"$ARTIFACT_DIR/proof-packet-self-verification.json"
+python3 - "$ARTIFACT_DIR/proof-packet-self-verification.json" <<'PY'
+import json, sys
+report = json.load(open(sys.argv[1]))
+if not report.get("ok"):
+    raise SystemExit(json.dumps(report, indent=2))
+PY
+
+log "recording durable proof packet"
+python3 - "$PROOF_ROOT" "$ARTIFACT_DIR" >"$ARTIFACT_DIR/proof-ledger-record.json" <<'PY'
+import hashlib, json, pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+artifacts = pathlib.Path(sys.argv[2])
+summary = json.loads((artifacts / "pause-restore-summary.json").read_text())
+validation = json.loads((artifacts / "pause-restore-validation.json").read_text())
+artifact_rows = []
+for path in sorted(artifacts.iterdir()):
+    if path.is_file() and path.name != "proof-ledger-record.json":
+        artifact_rows.append({
+            "artifact_kind": "local_file",
+            "label": path.name,
+            "path": str(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "metadata": {"proof_root": str(root), "local_path_only": True}
+        })
+claims = [{
+    "claim_key": "x-watch-curation-copied-home-pause-restore",
+    "claim": "Against a copied production Arcwell home, reviewed X watch manual rules can be imported, pause-only curation pauses only explicit reviewed excludes, and restore returns copied X watch-source rows exactly while the real home remains unchanged.",
+    "status": "proven",
+    "proof_level": "copied_production_home_pause_restore_local_proof",
+    "evidence": [{
+        "proof_root": str(root),
+        "summary": str(artifacts / "pause-restore-summary.json"),
+        "validation": str(artifacts / "pause-restore-validation.json"),
+        "self_verification": str(artifacts / "proof-packet-self-verification.json")
+    }],
+    "refutation": [],
+    "gates": validation["checks"]
+}]
+checks = [
+    {"check_kind": "build", "command": "cargo build -p arcwell", "status": "passed", "exit_code": 0, "output_excerpt": "build completed", "metadata": {"artifact": str(artifacts / "cargo-build.log")}},
+    {"check_kind": "severe_test", "command": "cargo test -p arcwell-core x_watch_curation -- --nocapture", "status": "passed", "exit_code": 0, "output_excerpt": "x_watch_curation tests passed", "metadata": {"artifact": str(artifacts / "x-watch-curation-tests.log")}},
+    {"check_kind": "severe_test", "command": "cargo test -p arcwell-core x_watch_manual_rule -- --nocapture", "status": "passed", "exit_code": 0, "output_excerpt": "x_watch_manual_rule tests passed", "metadata": {"artifact": str(artifacts / "x-watch-manual-rule-tests.log")}},
+    {"check_kind": "severe_test", "command": "cargo test -p arcwell-core proof -- --nocapture", "status": "passed", "exit_code": 0, "output_excerpt": "proof tests passed", "metadata": {"artifact": str(artifacts / "proof-tests.log")}},
+    {"check_kind": "format", "command": "cargo fmt -- --check", "status": "passed", "exit_code": 0, "output_excerpt": "format check passed", "metadata": {"artifact": str(artifacts / "cargo-fmt-check.log")}},
+    {"check_kind": "state_invariant", "command": "copied-home pause/restore validation", "status": "passed", "exit_code": 0, "output_excerpt": "real home unchanged; copied home restored to baseline checksum", "metadata": {"artifact": str(artifacts / "pause-restore-validation.json")}},
+    {"check_kind": "verification", "command": "arcwell proof verify-packet proof-packet.json", "status": "passed", "exit_code": 0, "output_excerpt": "clean copied-home proof packet verified ok", "metadata": {"artifact": str(artifacts / "proof-packet-self-verification.json")}}
+]
+cmd = [
+    "target/debug/arcwell", "proof", "record",
+    "--scope", "autonomous-knowledge-system",
+    "--title", "X watch curation copied-home pause/restore proof",
+    "--proof-level", "copied_production_home_pause_restore_local_proof",
+    "--status", "passed",
+    "--summary", "Copied-home proof that reviewed X watch manual rules can pause only explicit excludes and restore watch-source rows exactly without mutating the real home.",
+    "--artifact-root", str(root),
+    "--claims-json", json.dumps(claims),
+    "--artifacts-json", json.dumps(artifact_rows),
+    "--checks-json", json.dumps(checks),
+    "--metadata-json", json.dumps({"capability": "x-watch-curation-copied-home-pause-proof", "non_claims": summary["non_claims"]})
+]
+result = subprocess.run(cmd, cwd="/Users/chabotc/Projects/arcwell", text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+if result.returncode != 0:
+    raise SystemExit(result.stderr)
+print(result.stdout)
+PY
+
+log "proof root: $PROOF_ROOT"

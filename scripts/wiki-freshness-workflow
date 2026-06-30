@@ -1,0 +1,541 @@
+#!/usr/bin/env python3
+"""Run the Arcwell wiki freshness review workflow end to end."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+
+
+def default_db_path() -> Path:
+    return Path(os.environ.get("ARCWELL_HOME", Path.home() / ".arcwell")) / "arcwell.sqlite3"
+
+
+def now_stamp() -> str:
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def script_dir() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def run_step(name: str, command: list[str]) -> dict:
+    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+    result = {
+        "name": name,
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "ok": completed.returncode == 0,
+    }
+    if completed.returncode != 0:
+        raise RuntimeError(json.dumps(result, indent=2))
+    return result
+
+
+def load_json(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def split_semicolon(value: str) -> list[str]:
+    return [part.strip() for part in (value or "").split(";") if part.strip()]
+
+
+def load_packet_index(path: Path) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    if not path.exists():
+        return rows
+    with path.open(newline="", encoding="utf-8") as handle:
+        for raw in csv.DictReader(handle):
+            try:
+                score = float(raw.get("score") or 0)
+            except ValueError:
+                score = 0.0
+            rows.append({
+                "rank": raw.get("rank") or "",
+                "queue": raw.get("queue") or "",
+                "page_id": raw.get("page_id") or "",
+                "page_title": raw.get("page_title") or "",
+                "score": score,
+                "recommendation": raw.get("recommendation") or "",
+                "packet_path": raw.get("packet_path") or "",
+                "source_card_count": int(raw.get("source_card_count") or 0),
+                "duplicate_sibling_count": int(raw.get("duplicate_sibling_count") or 0),
+                "page_row_found": raw.get("page_row_found") or "",
+                "review_flags": split_semicolon(raw.get("review_flags") or ""),
+            })
+    return rows
+
+
+def sort_candidates(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    return sorted(rows, key=lambda row: (-float(row.get("score") or 0), str(row.get("page_title") or "")))
+
+
+def public_row(row: dict[str, object]) -> dict[str, object]:
+    return {
+        "rank": row.get("rank"),
+        "queue": row.get("queue"),
+        "page_id": row.get("page_id"),
+        "page_title": row.get("page_title"),
+        "score": row.get("score"),
+        "recommendation": row.get("recommendation"),
+        "packet_path": row.get("packet_path"),
+        "source_card_count": row.get("source_card_count"),
+        "review_flags": row.get("review_flags"),
+    }
+
+
+def compact_step(step: dict) -> dict:
+    stdout = step.get("stdout") or ""
+    stderr = step.get("stderr") or ""
+    return {
+        "name": step.get("name"),
+        "command": step.get("command"),
+        "returncode": step.get("returncode"),
+        "stdout_excerpt": stdout[-4000:],
+        "stderr_excerpt": stderr[-4000:],
+        "ok": step.get("ok"),
+    }
+
+
+def write_agenda(path: Path, packet_index: list[dict[str, object]], summary: dict) -> dict:
+    clean_updates = sort_candidates([
+        row for row in packet_index
+        if row.get("queue") == "general_claim_review" and not row.get("review_flags")
+    ])
+    low_score_safe_gate = sort_candidates([
+        row for row in packet_index
+        if row.get("queue") == "low_score_safe_gate_review" and not row.get("review_flags")
+    ])
+    identity_checks = sort_candidates([
+        row for row in packet_index if row.get("queue") == "ambiguous_single_topic"
+    ])
+    consolidation = sort_candidates([
+        row for row in packet_index if row.get("queue") == "duplicate_title_consolidation"
+    ])
+    generated = sort_candidates([
+        row for row in packet_index if row.get("queue") == "generated_knowledge_promotion"
+    ])
+    source_verification = sort_candidates([
+        row for row in packet_index if row.get("queue") == "signal_heavy_primary_verification"
+    ])
+    agenda = {
+        "generated_at": summary["generated_at"],
+        "candidate_pool_total": summary.get("scan", {}).get("candidate_pool_total", 0),
+        "candidate_count": summary.get("scan", {}).get("candidate_count", 0),
+        "ranked_candidate_window_limit": summary.get("scan", {}).get("ranked_candidate_window_limit", 0),
+        "ranked_candidate_window_overflow": summary.get("scan", {}).get("ranked_candidate_window_overflow", 0),
+        "ranked_candidate_window_saturated": summary.get("scan", {}).get("ranked_candidate_window_saturated", False),
+        "clean_update_candidates": len(clean_updates),
+        "low_score_safe_gate_candidates": len(low_score_safe_gate),
+        "identity_check_candidates": len(identity_checks),
+        "duplicate_consolidation_candidates": len(consolidation),
+        "generated_promotion_candidates": len(generated),
+        "source_verification_candidates": len(source_verification),
+        "top_clean_updates": [public_row(row) for row in clean_updates[:20]],
+        "top_low_score_safe_gate": [public_row(row) for row in low_score_safe_gate[:10]],
+        "top_identity_checks": [public_row(row) for row in identity_checks[:10]],
+        "top_consolidations": [public_row(row) for row in consolidation[:10]],
+        "top_generated_promotions": [public_row(row) for row in generated[:10]],
+        "top_source_verification": [public_row(row) for row in source_verification[:10]],
+        "blocked_source_classes": summary.get("scan", {}).get("blocked_source_classes", {}),
+        "dead_letter_groups": summary.get("scan", {}).get("dead_letter_groups", 0),
+        "next_gate": "Review packets, fill editorial_decisions_template.csv, validate decisions, then dry-run accepted updates.",
+    }
+    (path.parent / "editorial_agenda.json").write_text(
+        json.dumps(agenda, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    def table_rows(rows: list[dict[str, object]]) -> list[str]:
+        lines = ["| Rank | Page | Score | Flags | Packet |", "| ---: | --- | ---: | --- | --- |"]
+        for row in rows:
+            flags = "; ".join(str(flag) for flag in row.get("review_flags") or []) or "-"
+            lines.append(
+                f"| {row.get('rank') or ''} | {row.get('page_title') or ''} | "
+                f"{float(row.get('score') or 0):.2f} | {flags} | `{row.get('packet_path') or ''}` |"
+            )
+        return lines
+
+    lines = [
+        "# Editorial Agenda",
+        "",
+        f"Generated: `{summary['generated_at']}`",
+        "",
+        "This agenda orders review work; it does not approve any wiki write.",
+        "",
+        "## Current State",
+        "",
+        f"- Candidate pool: `{summary.get('scan', {}).get('candidate_pool_total', 0)}`",
+        f"- Candidates: `{summary.get('scan', {}).get('candidate_count', 0)}`",
+        f"- Ranked window limit: `{summary.get('scan', {}).get('ranked_candidate_window_limit', 0)}`",
+        f"- Ranked window overflow: `{summary.get('scan', {}).get('ranked_candidate_window_overflow', 0)}`",
+        f"- Safe-batch candidates: `{summary.get('scan', {}).get('safe_batch_candidates', 0)}`",
+        f"- Manual-review rows: `{summary.get('scan', {}).get('manual_review_queue_rows', 0)}`",
+        f"- Reviewed decisions suppressed: `{summary.get('packets', {}).get('suppressed_reviewed_decisions', 0)}`",
+        f"- Pending decisions: `{summary.get('decisions', {}).get('remaining_pending', 0)}`",
+        f"- Blocked source rows: `{summary.get('scan', {}).get('blocked_source_rows_total', 0)}`",
+        "",
+        "## Recommended Order",
+        "",
+        "1. Review clean general-claim candidates with no review flags.",
+        "2. Review low-score safe-gate candidates if the clean queue is empty.",
+        "3. Keep identity, duplicate-title, generated-knowledge, and signal-heavy queues separate.",
+        "4. Do not claim source freshness is complete while blocked source rows remain.",
+        "",
+        "## Clean Update Candidates",
+        "",
+    ]
+    lines.extend(table_rows(clean_updates[:20]) if clean_updates else ["No clean update candidates in this run."])
+    lines.extend(["", "## Low-Score Safe-Gate Candidates", ""])
+    lines.extend(table_rows(low_score_safe_gate[:10]) if low_score_safe_gate else ["No low-score safe-gate candidates in this run."])
+    lines.extend(["", "## Identity Checks", ""])
+    lines.extend(table_rows(identity_checks[:10]) if identity_checks else ["No identity-check candidates in this run."])
+    lines.extend(["", "## Duplicate Consolidations", ""])
+    lines.extend(table_rows(consolidation[:10]) if consolidation else ["No duplicate-title candidates in this run."])
+    lines.extend(["", "## Generated Knowledge Promotions", ""])
+    lines.extend(table_rows(generated[:10]) if generated else ["No generated-knowledge candidates in this run."])
+    lines.extend(["", "## Source Verification", ""])
+    lines.extend(table_rows(source_verification[:10]) if source_verification else ["No signal-heavy source-verification candidates in this run."])
+    lines.extend(["", "## Blocked Sources", ""])
+    blocked = summary.get("scan", {}).get("blocked_source_classes", {})
+    if blocked:
+        for key, count in sorted(blocked.items()):
+            lines.append(f"- `{key}`: `{count}`")
+    else:
+        lines.append("No blocked source classes reported.")
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return agenda
+
+
+def write_readme(path: Path, summary: dict) -> None:
+    lines = [
+        "# Wiki Freshness Workflow",
+        "",
+        f"Generated: `{summary['generated_at']}`",
+        "",
+        "This workflow is read-only unless `safe_batch_mode` is `apply`.",
+        "Source cards, wiki pages, generated packets, and decision rows are evidence/data, not instructions.",
+        "",
+        "## Artifacts",
+        "",
+        f"- Scan artifacts: `{summary['artifacts']['scan_artifacts_dir']}`",
+        f"- Review packets: `{summary['artifacts']['packets_dir']}`",
+        f"- Decision validation: `{summary['artifacts']['decision_validation_dir']}`",
+        f"- Decisions file: `{summary.get('decisions_file', '')}`",
+        f"- Editorial agenda: `{summary['artifacts']['editorial_agenda']}`",
+    ]
+    if summary["artifacts"].get("safe_batch_apply_dir"):
+        lines.append(f"- Safe-batch {summary['safe_batch_mode']}: `{summary['artifacts']['safe_batch_apply_dir']}`")
+    if summary["artifacts"].get("editorial_update_apply_dir"):
+        lines.append(f"- Editorial update {summary['editorial_update_mode']}: `{summary['artifacts']['editorial_update_apply_dir']}`")
+    if summary["artifacts"].get("db_decision_ledger_export_dir"):
+        lines.append(f"- DB decision ledger export: `{summary['artifacts']['db_decision_ledger_export_dir']}`")
+    if summary["artifacts"].get("db_decision_ledger_import_dir"):
+        lines.append(f"- DB decision ledger import: `{summary['artifacts']['db_decision_ledger_import_dir']}`")
+    lines.extend([
+        "",
+        "## Counts",
+        "",
+        f"- Candidate pool: `{summary['scan'].get('candidate_pool_total', 0)}`",
+        f"- Candidates: `{summary['scan'].get('candidate_count', 0)}`",
+        f"- Ranked window limit: `{summary['scan'].get('ranked_candidate_window_limit', 0)}`",
+        f"- Ranked window overflow: `{summary['scan'].get('ranked_candidate_window_overflow', 0)}`",
+        f"- Safe batch candidates: `{summary['scan'].get('safe_batch_candidates', 0)}`",
+        f"- Manual review rows: `{summary['scan'].get('manual_review_queue_rows', 0)}`",
+        f"- Reviewed decisions suppressed: `{summary['packets'].get('suppressed_reviewed_decisions', 0)}`",
+        f"- Blocked source rows: `{summary['scan'].get('blocked_source_rows_total', 0)}`",
+        f"- Packets: `{summary['packets'].get('packet_count', 0)}`",
+        f"- Pending decisions: `{summary['decisions'].get('remaining_pending', 0)}`",
+        f"- Update-existing export rows: `{summary['decisions'].get('update_existing_export_rows', 0)}`",
+        f"- Decision ledger rows: `{summary['decisions'].get('decision_ledger_rows', 0)}`",
+        f"- DB decision ledger export rows: `{summary['db_decision_ledger_export'].get('rows', 0)}`",
+        f"- DB decision ledger import inserted: `{summary['db_decision_ledger_import'].get('inserted', 0)}`",
+        f"- DB decision ledger import conflicts: `{summary['db_decision_ledger_import'].get('conflicts', 0)}`",
+        f"- Editorial update dry-run rows: `{summary['editorial_update'].get('dry_run', 0)}`",
+        f"- Editorial update applied rows: `{summary['editorial_update'].get('applied', 0)}`",
+        f"- Editorial update already-cited skips: `{summary['editorial_update'].get('skipped_already_cited', 0)}`",
+        "",
+        "## Next Gate",
+        "",
+        "Fill the generated `editorial_decisions_template.csv`, validate it with "
+        "`scripts/wiki-validate-editorial-decisions`, and only then use an explicit "
+        "dry-run/apply command for accepted updates.",
+        "",
+    ])
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Run scan -> packets -> decision validation for Arcwell wiki freshness."
+    )
+    parser.add_argument("--db", type=Path, default=default_db_path())
+    parser.add_argument(
+        "--proof-dir",
+        type=Path,
+        default=Path(".arcwell-dev/proofs") / f"wiki-freshness-workflow-{now_stamp()}",
+    )
+    parser.add_argument("--since-days", type=int, default=14)
+    parser.add_argument("--max-cards", type=int, default=4000)
+    parser.add_argument("--max-candidates", type=int, default=250)
+    parser.add_argument("--min-score", type=float, default=100.0)
+    parser.add_argument("--max-source-cards", type=int, default=5)
+    parser.add_argument("--decisions", type=Path)
+    parser.add_argument("--decision-ledger", type=Path, action="append", default=[])
+    parser.add_argument(
+        "--use-db-decision-ledger",
+        action="store_true",
+        help="Export durable DB hold/reject decisions and use them for reviewed-decision suppression.",
+    )
+    parser.add_argument(
+        "--persist-reviewed-decisions",
+        action="store_true",
+        help="Import validator-produced hold/reject decisions into the durable DB ledger after validation.",
+    )
+    parser.add_argument("--suppress-reviewed-decisions", action="store_true")
+    safe = parser.add_mutually_exclusive_group()
+    safe.add_argument("--safe-batch-dry-run", action="store_true")
+    safe.add_argument("--safe-batch-apply", action="store_true")
+    editorial = parser.add_mutually_exclusive_group()
+    editorial.add_argument("--editorial-update-dry-run", action="store_true")
+    editorial.add_argument("--editorial-update-apply", action="store_true")
+    args = parser.parse_args()
+    if (args.editorial_update_dry_run or args.editorial_update_apply) and not args.decisions:
+        parser.error("--editorial-update-dry-run/--editorial-update-apply require --decisions")
+
+    args.proof_dir.mkdir(parents=True, exist_ok=True)
+    scripts = script_dir()
+    steps: list[dict] = []
+    generated_at = now_iso()
+
+    scan_dir = args.proof_dir / "scan"
+    scan_artifacts = scan_dir / "artifacts"
+    steps.append(run_step("freshness_scan", [
+        str(scripts / "wiki-freshness-scan"),
+        "--db", str(args.db),
+        "--proof-dir", str(scan_dir),
+        "--since-days", str(args.since_days),
+        "--max-cards", str(args.max_cards),
+        "--max-candidates", str(args.max_candidates),
+    ]))
+
+    packets_dir = args.proof_dir / "editorial-review-packets"
+    decision_ledgers: list[Path] = list(args.decision_ledger)
+    db_decision_ledger_export_summary = {}
+    if args.use_db_decision_ledger:
+        db_ledger_dir = args.proof_dir / "db-decision-ledger-export"
+        db_ledger_path = db_ledger_dir / "db_decision_ledger.csv"
+        steps.append(run_step("db_decision_ledger_export", [
+            str(scripts / "wiki-decision-ledger-db"),
+            "--db", str(args.db),
+            "export",
+            "--output", str(db_ledger_path),
+            "--proof-dir", str(db_ledger_dir),
+        ]))
+        db_decision_ledger_export_summary = load_json(
+            db_ledger_dir / "db_decision_ledger_export_summary.json"
+        )
+        if db_decision_ledger_export_summary.get("rows", 0):
+            decision_ledgers.append(db_ledger_path)
+    effective_decision_ledger = None
+    merge_summary = {}
+    if len(decision_ledgers) == 1:
+        effective_decision_ledger = decision_ledgers[0]
+    elif len(decision_ledgers) > 1:
+        merge_dir = args.proof_dir / "decision-ledger-merge"
+        effective_decision_ledger = merge_dir / "merged_decision_ledger.csv"
+        steps.append(run_step("decision_ledger_merge", [
+            str(scripts / "wiki-merge-decision-ledgers"),
+            "--output", str(effective_decision_ledger),
+            "--summary", str(merge_dir / "merge_summary.json"),
+            "--conflicts", str(merge_dir / "merge_conflicts.csv"),
+            *[str(path) for path in decision_ledgers],
+        ]))
+        merge_summary = load_json(merge_dir / "merge_summary.json")
+    packet_command = [
+        str(scripts / "wiki-build-editorial-review-packets"),
+        "--db", str(args.db),
+        "--queues", str(scan_artifacts / "manual_review_queues.csv"),
+        "--proof-dir", str(packets_dir),
+    ]
+    if effective_decision_ledger:
+        packet_command.extend(["--decision-ledger", str(effective_decision_ledger)])
+    if args.suppress_reviewed_decisions:
+        packet_command.append("--suppress-reviewed-decisions")
+    steps.append(run_step("editorial_review_packets", packet_command))
+
+    validation_dir = args.proof_dir / "editorial-decision-validation"
+    decisions_path = args.decisions or (packets_dir / "editorial_decisions_template.csv")
+    steps.append(run_step("editorial_decision_validation", [
+        str(scripts / "wiki-validate-editorial-decisions"),
+        "--decisions", str(decisions_path),
+        "--queues", str(scan_artifacts / "manual_review_queues.csv"),
+        "--index", str(packets_dir / "editorial_review_index.csv"),
+        "--proof-dir", str(validation_dir),
+    ]))
+    db_decision_ledger_import_summary = {}
+    if args.persist_reviewed_decisions:
+        db_import_dir = args.proof_dir / "db-decision-ledger-import"
+        steps.append(run_step("db_decision_ledger_import", [
+            str(scripts / "wiki-decision-ledger-db"),
+            "--db", str(args.db),
+            "import",
+            "--ledger", str(validation_dir / "editorial_decision_ledger.csv"),
+            "--proof-dir", str(db_import_dir),
+        ]))
+        db_decision_ledger_import_summary = load_json(
+            db_import_dir / "db_decision_ledger_import_summary.json"
+        )
+
+    safe_batch_mode = "none"
+    safe_batch_dir = None
+    if args.safe_batch_dry_run or args.safe_batch_apply:
+        safe_batch_mode = "apply" if args.safe_batch_apply else "dry_run"
+        safe_batch_dir = args.proof_dir / f"safe-batch-{safe_batch_mode.replace('_', '-')}"
+        command = [
+            str(scripts / "wiki-apply-safe-freshness-batch"),
+            "--candidates", str(scan_artifacts / "safe_batch_candidates.csv"),
+            "--db", str(args.db),
+            "--proof-dir", str(safe_batch_dir),
+            "--min-score", str(args.min_score),
+            "--max-source-cards", str(args.max_source_cards),
+            "--apply" if args.safe_batch_apply else "--dry-run",
+        ]
+        steps.append(run_step(f"safe_batch_{safe_batch_mode}", command))
+
+    editorial_update_mode = "none"
+    editorial_update_dir = None
+    if args.editorial_update_dry_run or args.editorial_update_apply:
+        editorial_update_mode = "apply" if args.editorial_update_apply else "dry_run"
+        editorial_update_dir = args.proof_dir / f"editorial-update-{editorial_update_mode.replace('_', '-')}"
+        command = [
+            str(scripts / "wiki-apply-safe-freshness-batch"),
+            "--candidates", str(validation_dir / "editorial_update_existing_export.csv"),
+            "--db", str(args.db),
+            "--proof-dir", str(editorial_update_dir),
+            "--min-score", str(args.min_score),
+            "--max-source-cards", str(args.max_source_cards),
+            "--allow-editorial-decision-updates",
+            "--apply" if args.editorial_update_apply else "--dry-run",
+        ]
+        steps.append(run_step(f"editorial_update_{editorial_update_mode}", command))
+
+    scan_summary = load_json(scan_artifacts / "wiki_freshness_summary.json")
+    packet_summary = load_json(packets_dir / "editorial_review_summary.json")
+    decision_summary = load_json(validation_dir / "editorial_decision_validation_summary.json")
+    safe_summary = load_json(safe_batch_dir / "wiki_safe_batch_apply_summary.json") if safe_batch_dir else {}
+    editorial_update_summary = (
+        load_json(editorial_update_dir / "wiki_safe_batch_apply_summary.json")
+        if editorial_update_dir
+        else {}
+    )
+    summary = {
+        "ok": True,
+        "generated_at": generated_at,
+        "db": str(args.db),
+        "proof_dir": str(args.proof_dir),
+        "since_days": args.since_days,
+        "max_cards": args.max_cards,
+        "max_candidates": args.max_candidates,
+        "safe_batch_mode": safe_batch_mode,
+        "editorial_update_mode": editorial_update_mode,
+        "decisions_file": str(decisions_path),
+        "decision_ledgers": [str(path) for path in args.decision_ledger],
+        "use_db_decision_ledger": args.use_db_decision_ledger,
+        "persist_reviewed_decisions": args.persist_reviewed_decisions,
+        "effective_decision_ledgers": [str(path) for path in decision_ledgers],
+        "effective_decision_ledger": str(effective_decision_ledger) if effective_decision_ledger else "",
+        "decision_ledger_merge": merge_summary,
+        "db_decision_ledger_export": db_decision_ledger_export_summary,
+        "db_decision_ledger_import": db_decision_ledger_import_summary,
+        "suppress_reviewed_decisions": args.suppress_reviewed_decisions,
+        "artifacts": {
+            "scan_artifacts_dir": str(scan_artifacts),
+            "packets_dir": str(packets_dir),
+            "decision_validation_dir": str(validation_dir),
+            "db_decision_ledger_export_dir": (
+                str(args.proof_dir / "db-decision-ledger-export")
+                if args.use_db_decision_ledger else ""
+            ),
+            "db_decision_ledger_import_dir": (
+                str(args.proof_dir / "db-decision-ledger-import")
+                if args.persist_reviewed_decisions else ""
+            ),
+            "safe_batch_apply_dir": str(safe_batch_dir) if safe_batch_dir else "",
+            "editorial_update_apply_dir": str(editorial_update_dir) if editorial_update_dir else "",
+            "editorial_agenda": str(args.proof_dir / "editorial_agenda.md"),
+        },
+        "scan": scan_summary,
+        "packets": packet_summary,
+        "decisions": decision_summary,
+        "safe_batch": safe_summary,
+        "editorial_update": editorial_update_summary,
+        "steps": [compact_step(step) for step in steps],
+    }
+    agenda = write_agenda(
+        args.proof_dir / "editorial_agenda.md",
+        load_packet_index(packets_dir / "editorial_review_index.csv"),
+        summary,
+    )
+    summary["agenda"] = {
+        "editorial_agenda": str(args.proof_dir / "editorial_agenda.md"),
+        "editorial_agenda_json": str(args.proof_dir / "editorial_agenda.json"),
+        "clean_update_candidates": agenda["clean_update_candidates"],
+        "low_score_safe_gate_candidates": agenda["low_score_safe_gate_candidates"],
+        "identity_check_candidates": agenda["identity_check_candidates"],
+        "duplicate_consolidation_candidates": agenda["duplicate_consolidation_candidates"],
+        "generated_promotion_candidates": agenda["generated_promotion_candidates"],
+        "source_verification_candidates": agenda["source_verification_candidates"],
+    }
+    (args.proof_dir / "workflow_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    write_readme(args.proof_dir / "README.md", summary)
+    print(json.dumps({
+        "ok": True,
+        "proof_dir": str(args.proof_dir),
+        "safe_batch_mode": safe_batch_mode,
+        "editorial_update_mode": editorial_update_mode,
+        "candidate_pool_total": scan_summary.get("candidate_pool_total", 0),
+        "candidate_count": scan_summary.get("candidate_count", 0),
+        "ranked_candidate_window_limit": scan_summary.get("ranked_candidate_window_limit", 0),
+        "ranked_candidate_window_overflow": scan_summary.get("ranked_candidate_window_overflow", 0),
+        "suppressed_reviewed_decisions": packet_summary.get("suppressed_reviewed_decisions", 0),
+        "safe_batch_candidates": scan_summary.get("safe_batch_candidates", 0),
+        "manual_review_queue_rows": scan_summary.get("manual_review_queue_rows", 0),
+        "packet_count": packet_summary.get("packet_count", 0),
+        "pending_decisions": decision_summary.get("remaining_pending", 0),
+        "update_existing_export_rows": decision_summary.get("update_existing_export_rows", 0),
+        "decision_ledger_rows": decision_summary.get("decision_ledger_rows", 0),
+        "db_decision_ledger_export_rows": db_decision_ledger_export_summary.get("rows", 0),
+        "db_decision_ledger_import_inserted": db_decision_ledger_import_summary.get("inserted", 0),
+        "db_decision_ledger_import_conflicts": db_decision_ledger_import_summary.get("conflicts", 0),
+        "editorial_update_applied": editorial_update_summary.get("applied", 0),
+        "editorial_update_dry_run": editorial_update_summary.get("dry_run", 0),
+        "editorial_update_skipped_already_cited": editorial_update_summary.get("skipped_already_cited", 0),
+        "blocked_source_rows_total": scan_summary.get("blocked_source_rows_total", 0),
+        "blocked_source_classes": scan_summary.get("blocked_source_classes", {}),
+        "editorial_agenda": str(args.proof_dir / "editorial_agenda.md"),
+    }, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1402,14 +1402,20 @@ fn severe_mcp_job_hunting_round_trips_local_proof_workflow() {
         "job_packet_create",
         "job_packet_approve",
         "job_packet_export",
+        "job_packet_export_set",
+        "job_outreach_readiness",
         "job_application_record",
         "job_source_refresh",
         "job_radar_schedule",
         "job_radar_enqueue",
         "job_refresh_manual",
         "job_refresh_audit",
+        "job_operational_audit",
         "job_company_targets",
         "job_weekly_report",
+        "job_weekly_report_delivery_prepare",
+        "job_weekly_report_delivery_send",
+        "job_weekly_report_deliveries",
     ] {
         assert!(
             tools
@@ -1461,6 +1467,85 @@ fn severe_mcp_job_hunting_round_trips_local_proof_workflow() {
     assert!(
         radar_schedule_tool
             .pointer("/inputSchema/properties/source_snapshots")
+            .is_some()
+    );
+    let report_delivery_tool = tools
+        .iter()
+        .find(|tool| {
+            tool.get("name").and_then(Value::as_str) == Some("job_weekly_report_delivery_prepare")
+        })
+        .unwrap();
+    assert!(
+        report_delivery_tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("does not call provider APIs or send")
+    );
+    assert!(
+        report_delivery_tool
+            .pointer("/inputSchema/properties/idempotency_key")
+            .is_some()
+    );
+    let report_delivery_send_tool = tools
+        .iter()
+        .find(|tool| {
+            tool.get("name").and_then(Value::as_str) == Some("job_weekly_report_delivery_send")
+        })
+        .unwrap();
+    assert!(
+        report_delivery_send_tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("records a provider delivery attempt")
+    );
+    assert!(
+        report_delivery_send_tool
+            .pointer("/inputSchema/properties/api_base")
+            .is_some()
+    );
+    let outreach_tool = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("job_outreach_readiness"))
+        .unwrap();
+    assert!(
+        outreach_tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("does not send")
+    );
+    assert!(
+        outreach_tool
+            .pointer("/inputSchema/properties/limit")
+            .is_some()
+    );
+    let operational_audit_tool = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("job_operational_audit"))
+        .unwrap();
+    assert!(
+        operational_audit_tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("does not fetch, send, or submit")
+    );
+    assert!(
+        operational_audit_tool
+            .pointer("/inputSchema/properties/min_elapsed_hours")
+            .is_some()
+    );
+    let packet_export_set_tool = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("job_packet_export_set"))
+        .unwrap();
+    assert!(
+        packet_export_set_tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("does not create Google Docs, send, submit, or record applications")
+    );
+    assert!(
+        packet_export_set_tool
+            .pointer("/inputSchema/properties/packet_ids")
             .is_some()
     );
 
@@ -1800,6 +1885,68 @@ fn severe_mcp_job_hunting_round_trips_local_proof_workflow() {
     let packet_id = packet["id"].as_str().unwrap();
     assert_eq!(packet["status"], json!("draft"));
 
+    let draft_readiness = call_mcp_tool(
+        &paths,
+        "job_outreach_readiness",
+        json!({
+            "profile_id": profile_id,
+            "limit": 5
+        }),
+    )
+    .unwrap();
+    assert_eq!(draft_readiness["ready_count"], json!(0));
+    assert_eq!(
+        draft_readiness["entries"][0]["packet_status"],
+        json!("draft")
+    );
+    assert!(
+        draft_readiness["entries"][0]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|blocker| blocker
+                .as_str()
+                .unwrap()
+                .contains("approved packet required"))
+    );
+
+    let public_contact_import = call_mcp_tool(
+        &paths,
+        "job_import_batch",
+        json!({
+            "batch": {
+                "contacts": [{
+                    "name": "Public Hiring Manager",
+                    "role_title": "Engineering Manager",
+                    "public_profile_url": "https://example.com/team/public-hiring-manager",
+                    "source_url": "https://example.com/team",
+                    "relationship_status": "public_only",
+                    "relevance": "hiring_manager",
+                    "note": "Source evidence: public team page lists this person as engineering manager; no relationship path."
+                }]
+            }
+        }),
+    )
+    .unwrap();
+    let public_contact_id = public_contact_import["contact_ids"][0].as_str().unwrap();
+    call_mcp_tool(
+        &paths,
+        "job_import_batch",
+        json!({
+            "batch": {
+                "intro_paths": [{
+                    "role_id": role_id,
+                    "contact_id": public_contact_id,
+                    "path_type": "unknown",
+                    "confidence": "weak",
+                    "next_action": "Find a real route before outreach.",
+                    "status": "identify"
+                }]
+            }
+        }),
+    )
+    .unwrap();
+
     let approved_packet = call_mcp_tool(
         &paths,
         "job_packet_approve",
@@ -1810,6 +1957,94 @@ fn severe_mcp_job_hunting_round_trips_local_proof_workflow() {
     )
     .unwrap();
     assert_eq!(approved_packet["status"], json!("approved"));
+
+    let public_only_readiness = call_mcp_tool(
+        &paths,
+        "job_outreach_readiness",
+        json!({
+            "profile_id": profile_id,
+            "limit": 5
+        }),
+    )
+    .unwrap();
+    assert_eq!(public_only_readiness["ready_count"], json!(0));
+    assert_eq!(
+        public_only_readiness["entries"][0]["public_only_count"],
+        json!(1)
+    );
+    assert_eq!(
+        public_only_readiness["entries"][0]["warm_intro_ready_count"],
+        json!(0)
+    );
+    assert!(
+        public_only_readiness["entries"][0]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|blocker| blocker
+                .as_str()
+                .unwrap()
+                .contains("public-only paths remain identify"))
+    );
+
+    let known_contact_import = call_mcp_tool(
+        &paths,
+        "job_import_batch",
+        json!({
+            "batch": {
+                "contacts": [{
+                    "name": "Known Staff Engineer",
+                    "role_title": "Staff Engineer",
+                    "public_profile_url": "https://example.com/team/known-staff-engineer",
+                    "source_url": "https://example.com/team",
+                    "relationship_status": "known",
+                    "relevance": "engineer",
+                    "note": "User confirmed this contact can route a relevant intro."
+                }]
+            }
+        }),
+    )
+    .unwrap();
+    let known_contact_id = known_contact_import["contact_ids"][0].as_str().unwrap();
+    call_mcp_tool(
+        &paths,
+        "job_import_batch",
+        json!({
+            "batch": {
+                "intro_paths": [{
+                    "role_id": role_id,
+                    "contact_id": known_contact_id,
+                    "path_type": "mutual",
+                    "confidence": "confirmed",
+                    "next_action": "Ask for an intro using the approved packet.",
+                    "status": "ask"
+                }]
+            }
+        }),
+    )
+    .unwrap();
+    let ready_outreach = call_mcp_tool(
+        &paths,
+        "job_outreach_readiness",
+        json!({
+            "profile_id": profile_id,
+            "limit": 5
+        }),
+    )
+    .unwrap();
+    assert_eq!(ready_outreach["ready_count"], json!(1));
+    assert_eq!(ready_outreach["entries"][0]["decision"], json!("ready"));
+    assert_eq!(
+        ready_outreach["entries"][0]["warm_intro_ready_count"],
+        json!(1)
+    );
+    assert!(
+        ready_outreach["non_claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|non_claim| non_claim.as_str().unwrap().contains("does not send"))
+    );
 
     let export_dir = paths.home.join("packet-exports");
     let exported_packet = call_mcp_tool(
@@ -1829,6 +2064,30 @@ fn severe_mcp_job_hunting_round_trips_local_proof_workflow() {
     let exported_body = fs::read_to_string(&exported_path).unwrap();
     assert!(exported_body.contains("Delivery status: not_sent"));
     assert!(exported_body.contains("not proof that an application was sent"));
+
+    let export_set_dir = paths.home.join("packet-export-sets");
+    let exported_set = call_mcp_tool(
+        &paths,
+        "job_packet_export_set",
+        json!({
+            "profile_id": profile_id,
+            "packet_ids": [packet_id],
+            "out_dir": export_set_dir.to_string_lossy()
+        }),
+    )
+    .unwrap();
+    assert_eq!(exported_set["proof_level"], json!("local_proof"));
+    assert_eq!(exported_set["delivery_status"], json!("not_sent"));
+    assert_eq!(exported_set["application_status_changed"], json!(false));
+    assert_eq!(exported_set["exported_count"], json!(1));
+    assert!(PathBuf::from(exported_set["manifest_path"].as_str().unwrap()).exists());
+    assert!(
+        exported_set["non_claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|non_claim| non_claim.as_str().unwrap().contains("not Google Docs"))
+    );
 
     let application = call_mcp_tool(
         &paths,
@@ -1904,4 +2163,189 @@ fn severe_mcp_job_hunting_round_trips_local_proof_workflow() {
         "{report}"
     );
     assert_eq!(report["metadata"]["application_count"], json!(1));
+    let report_id = report["id"].as_str().unwrap();
+
+    let unauthorized_delivery = call_mcp_tool(
+        &paths,
+        "job_weekly_report_delivery_prepare",
+        json!({
+            "report_id": report_id,
+            "channel": "email",
+            "subject": "job-proof@example.com",
+            "target": "job-proof@example.com",
+            "idempotency_key": "mcp-job-weekly-delivery-unauthorized"
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        unauthorized_delivery["delivery"]["status"],
+        json!("blocked")
+    );
+    assert_eq!(unauthorized_delivery["channel_message"], Value::Null);
+
+    call_mcp_tool(
+        &paths,
+        "channel_authorize",
+        json!({
+            "channel": "email",
+            "subject": "email:job-proof@example.com",
+            "can_send": true
+        }),
+    )
+    .unwrap();
+    let prepared_delivery = call_mcp_tool(
+        &paths,
+        "job_weekly_report_delivery_prepare",
+        json!({
+            "report_id": report_id,
+            "channel": "email",
+            "subject": "job-proof@example.com",
+            "target": "job-proof@example.com",
+            "idempotency_key": "mcp-job-weekly-delivery-prepared"
+        }),
+    )
+    .unwrap();
+    assert_eq!(prepared_delivery["delivery"]["status"], json!("prepared"));
+    assert_eq!(
+        prepared_delivery["privacy_check"]["decision"],
+        json!("pass")
+    );
+    assert_eq!(
+        prepared_delivery["channel_message"]["status"],
+        json!("prepared")
+    );
+    let prepared_message_id = prepared_delivery["delivery"]["channel_message_id"]
+        .as_str()
+        .unwrap();
+
+    let replay_delivery = call_mcp_tool(
+        &paths,
+        "job_weekly_report_delivery_prepare",
+        json!({
+            "report_id": report_id,
+            "channel": "email",
+            "subject": "email:job-proof@example.com",
+            "target": "email:job-proof@example.com",
+            "idempotency_key": "mcp-job-weekly-delivery-prepared"
+        }),
+    )
+    .unwrap();
+    assert_eq!(replay_delivery["idempotent_replay"], json!(true));
+    assert_eq!(
+        replay_delivery["delivery"]["channel_message_id"],
+        json!(prepared_message_id)
+    );
+    let deliveries = call_mcp_tool(
+        &paths,
+        "job_weekly_report_deliveries",
+        json!({ "report_id": report_id }),
+    )
+    .unwrap();
+    assert_eq!(deliveries.as_array().unwrap().len(), 2);
+    let operational_audit = call_mcp_tool(
+        &paths,
+        "job_operational_audit",
+        json!({
+            "profile_id": profile_id,
+            "scope": "London agent platform roles",
+            "min_elapsed_hours": 0
+        }),
+    )
+    .unwrap();
+    assert_eq!(operational_audit["decision"], json!("block"));
+    assert_eq!(
+        operational_audit["refresh_audit"]["minimum_elapsed_hours"],
+        json!(24)
+    );
+    assert!(
+        operational_audit["operational_blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|blocker| blocker
+                .as_str()
+                .unwrap()
+                .contains("provider delivery attempt"))
+    );
+    assert!(
+        operational_audit["non_claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|non_claim| non_claim
+                .as_str()
+                .unwrap()
+                .contains("not wall-clock recurrence proof"))
+    );
+    let delivery_attempts = call_mcp_tool(&paths, "channel_delivery_list", json!({})).unwrap();
+    assert!(delivery_attempts.as_array().unwrap().is_empty());
+
+    fs::write(
+        paths.home.join("arcwell-policy.toml"),
+        r#"
+[[rules]]
+id = "allow-mcp-job-weekly-report-email-send"
+effect = "allow"
+action = "channel.send"
+package = "arcwell-email"
+provider = "cloudflare_email"
+source = "job_weekly_report_delivery"
+channel = "email"
+subject = "email:job-proof@example.com"
+target = "job-proof@example.com"
+reason = "allow controlled MCP weekly job report email send"
+priority = 10
+"#,
+    )
+    .unwrap();
+    let api = mock_base_server(
+        r#"{"success":true,"result":{"id":"mcp_job_weekly_email_ok"}}"#,
+        "application/json",
+    );
+    let sent_delivery = call_mcp_tool(
+        &paths,
+        "job_weekly_report_delivery_send",
+        json!({
+            "delivery_id": prepared_delivery["delivery"]["id"],
+            "email_account_id": "acct123",
+            "email_api_token": "TOKEN",
+            "email_from": "agent@example.com",
+            "api_base": api
+        }),
+    )
+    .unwrap();
+    assert_eq!(sent_delivery["delivery"]["status"], json!("sent"));
+    assert_eq!(sent_delivery["channel_delivery_attempt"]["ok"], json!(true));
+    assert_eq!(sent_delivery["idempotent_replay"], json!(false));
+    let delivery_attempts = call_mcp_tool(&paths, "channel_delivery_list", json!({})).unwrap();
+    assert_eq!(delivery_attempts.as_array().unwrap().len(), 1);
+
+    let post_send_audit = call_mcp_tool(
+        &paths,
+        "job_operational_audit",
+        json!({
+            "profile_id": profile_id,
+            "scope": "London agent platform roles",
+            "min_elapsed_hours": 0
+        }),
+    )
+    .unwrap();
+    assert_eq!(post_send_audit["decision"], json!("block"));
+    let provider_gate = post_send_audit["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|gate| gate["name"] == json!("provider_delivery"))
+        .unwrap();
+    assert_eq!(provider_gate["decision"], json!("pass"));
+    assert!(
+        !post_send_audit["operational_blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|blocker| blocker
+                .as_str()
+                .unwrap()
+                .contains("provider delivery attempt"))
+    );
 }

@@ -1,0 +1,557 @@
+#!/usr/bin/env python3
+"""Build review packets for Arcwell wiki freshness manual-review queues."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import re
+import sqlite3
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from textwrap import shorten
+from urllib.parse import urlparse
+
+
+def default_db_path() -> Path:
+    return Path(os.environ.get("ARCWELL_HOME", Path.home() / ".arcwell")) / "arcwell.sqlite3"
+
+
+def now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def slug(value: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9]+", "-", value or "").strip("-").lower()
+    return text[:90] or "candidate"
+
+
+def compact(value: str, width: int = 160) -> str:
+    return shorten(re.sub(r"\s+", " ", value or "").strip(), width=width, placeholder="...")
+
+
+def split_semicolon(value: str) -> list[str]:
+    return [part.strip() for part in (value or "").split(";") if part.strip()]
+
+
+def markdown_link(title: str, url: str) -> str:
+    title = (title or url or "source").replace("[", "\\[").replace("]", "\\]")
+    if not url:
+        return title
+    return f"[{title}]({url.replace(')', '%29')})"
+
+
+@dataclass
+class QueueRow:
+    rank: int
+    queue: str
+    queue_priority: int
+    next_action: str
+    stop_condition: str
+    action: str
+    score: float
+    review_gate: str
+    gate_reason: str
+    page_id: str
+    page_title: str
+    page_path: str
+    newest_evidence_at: str
+    source_card_count: int
+    primary_count: int
+    secondary_count: int
+    signal_count: int
+    exactish_count: int
+    source_match_count: int
+    duplicate_title_count: int
+    source_card_ids: list[str]
+    source_titles: str
+    source_urls: str
+    reason: str
+    provenance: str
+
+
+@dataclass
+class LedgerDecision:
+    page_id: str
+    page_title: str
+    decision: str
+    reviewed_source_card_ids: set[str]
+    rationale: str
+    follow_up: str
+    reviewed_at: str
+
+
+def int_field(row: dict[str, str], name: str) -> int:
+    try:
+        return int(row.get(name) or 0)
+    except ValueError:
+        return 0
+
+
+def float_field(row: dict[str, str], name: str) -> float:
+    try:
+        return float(row.get(name) or 0)
+    except ValueError:
+        return 0.0
+
+
+def load_queue_rows(path: Path, queue: str, limit: int) -> list[QueueRow]:
+    rows: list[QueueRow] = []
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for raw in reader:
+            if queue and raw.get("queue") != queue:
+                continue
+            rows.append(
+                QueueRow(
+                    rank=int_field(raw, "rank"),
+                    queue=raw.get("queue") or "",
+                    queue_priority=int_field(raw, "queue_priority"),
+                    next_action=raw.get("next_action") or "",
+                    stop_condition=raw.get("stop_condition") or "",
+                    action=raw.get("action") or "",
+                    score=float_field(raw, "score"),
+                    review_gate=raw.get("review_gate") or "",
+                    gate_reason=raw.get("gate_reason") or "",
+                    page_id=raw.get("page_id") or "",
+                    page_title=raw.get("page_title") or "",
+                    page_path=raw.get("page_path") or "",
+                    newest_evidence_at=raw.get("newest_evidence_at") or "",
+                    source_card_count=int_field(raw, "source_card_count"),
+                    primary_count=int_field(raw, "primary_count"),
+                    secondary_count=int_field(raw, "secondary_count"),
+                    signal_count=int_field(raw, "signal_count"),
+                    exactish_count=int_field(raw, "exactish_count"),
+                    source_match_count=int_field(raw, "source_match_count"),
+                    duplicate_title_count=int_field(raw, "duplicate_title_count"),
+                    source_card_ids=split_semicolon(raw.get("source_card_ids") or ""),
+                    source_titles=raw.get("source_titles") or "",
+                    source_urls=raw.get("source_urls") or "",
+                    reason=raw.get("reason") or "",
+                    provenance=raw.get("provenance") or "",
+                )
+            )
+            if limit and len(rows) >= limit:
+                break
+    return rows
+
+
+def load_decision_ledger(path: Path | None) -> list[LedgerDecision]:
+    if not path or not path.exists():
+        return []
+    decisions: list[LedgerDecision] = []
+    with path.open(newline="", encoding="utf-8") as handle:
+        for raw in csv.DictReader(handle):
+            decision = (raw.get("decision") or "").strip()
+            if decision not in {"hold", "reject"}:
+                continue
+            source_ids = (
+                raw.get("reviewed_source_card_ids")
+                or raw.get("source_card_ids")
+                or raw.get("accepted_source_card_ids")
+                or ""
+            )
+            reviewed_source_card_ids = set(split_semicolon(source_ids))
+            if not raw.get("page_id") or not reviewed_source_card_ids:
+                continue
+            decisions.append(
+                LedgerDecision(
+                    page_id=raw.get("page_id") or "",
+                    page_title=raw.get("page_title") or "",
+                    decision=decision,
+                    reviewed_source_card_ids=reviewed_source_card_ids,
+                    rationale=raw.get("rationale") or "",
+                    follow_up=raw.get("follow_up") or "",
+                    reviewed_at=raw.get("reviewed_at") or "",
+                )
+            )
+    return decisions
+
+
+def reviewed_suppression_for(row: QueueRow, ledger: list[LedgerDecision]) -> LedgerDecision | None:
+    candidate_source_ids = set(row.source_card_ids)
+    if not candidate_source_ids:
+        return None
+    for decision in ledger:
+        if decision.page_id != row.page_id:
+            continue
+        if candidate_source_ids.issubset(decision.reviewed_source_card_ids):
+            return decision
+    return None
+
+
+def fetch_source_cards(conn: sqlite3.Connection, ids: list[str]) -> list[sqlite3.Row]:
+    if not ids:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"""
+        SELECT id, title, url, source_type, provider, summary, retrieved_at,
+               metadata_json
+        FROM source_cards
+        WHERE id IN ({placeholders})
+        """,
+        ids,
+    ).fetchall()
+    by_id = {row["id"]: row for row in rows}
+    return [by_id[source_id] for source_id in ids if source_id in by_id]
+
+
+def page_row(conn: sqlite3.Connection, page_id: str) -> sqlite3.Row | None:
+    if not page_id:
+        return None
+    return conn.execute(
+        """
+        SELECT id, title, path, source, updated_at, content_sha256
+        FROM wiki_pages
+        WHERE id = ?1
+        """,
+        (page_id,),
+    ).fetchone()
+
+
+def duplicate_siblings(conn: sqlite3.Connection, title: str) -> list[sqlite3.Row]:
+    if not title:
+        return []
+    return conn.execute(
+        """
+        SELECT id, title, path, source, updated_at
+        FROM wiki_pages
+        WHERE lower(title) = lower(?1)
+          AND status = 'active'
+        ORDER BY updated_at DESC
+        """,
+        (title,),
+    ).fetchall()
+
+
+def read_excerpt(path: str, max_chars: int) -> tuple[str, bool]:
+    if not path:
+        return "", False
+    page_path = Path(path).expanduser()
+    if not page_path.exists():
+        return "", False
+    text = page_path.read_text(encoding="utf-8", errors="replace")
+    return text[:max_chars], len(text) > max_chars
+
+
+def metadata_object(row: sqlite3.Row) -> dict:
+    try:
+        value = json.loads(row["metadata_json"] or "{}")
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def host_for(url: str) -> str:
+    parsed = urlparse(url or "")
+    return parsed.netloc.lower().removeprefix("www.")
+
+
+def github_owner_for(url: str) -> str:
+    parsed = urlparse(url or "")
+    if parsed.netloc.lower().removeprefix("www.") != "github.com":
+        return ""
+    parts = [part for part in parsed.path.split("/") if part]
+    return parts[0].lower() if parts else ""
+
+
+def review_flags(
+    row: QueueRow,
+    page: sqlite3.Row | None,
+    cards: list[sqlite3.Row],
+    siblings: list[sqlite3.Row],
+) -> list[str]:
+    flags: list[str] = []
+    hosts = sorted({host for card in cards if (host := host_for(card["url"]))})
+    owners = sorted({owner for card in cards if (owner := github_owner_for(card["url"]))})
+    arxiv_count = sum(1 for card in cards if host_for(card["url"]) == "arxiv.org" or card["provider"] == "arxiv")
+    generated_count = sum(1 for card in cards if (card["provider"] or "").startswith("generated"))
+    social_count = sum(1 for card in cards if (card["provider"] or "") in {"x", "twitter", "reddit"})
+
+    ambiguous_queues = {"ambiguous_single_topic", "duplicate_title_consolidation"}
+    if row.queue in ambiguous_queues and len(owners) > 1:
+        flags.append(f"mixed_github_owners={len(owners)}")
+    if row.queue in ambiguous_queues and arxiv_count:
+        flags.append(f"arxiv_overlap={arxiv_count}")
+    if generated_count:
+        flags.append(f"generated_synthesis_cards={generated_count}")
+    if row.signal_count > row.primary_count or social_count > row.primary_count:
+        flags.append("signal_heavy_evidence")
+    if row.queue == "generated_knowledge_promotion":
+        flags.append("generated_knowledge_candidate")
+    if siblings:
+        flags.append(f"same_title_pages={len(siblings)}")
+    if not row.page_path and page:
+        flags.append("candidate_missing_page_path")
+    elif not row.page_path:
+        flags.append("no_existing_page")
+    if len(hosts) > 6:
+        flags.append(f"many_source_hosts={len(hosts)}")
+    return flags
+
+
+def recommendation_for(row: QueueRow) -> str:
+    if row.queue == "generated_knowledge_promotion":
+        return "hold_for_promotion_review"
+    if row.queue == "duplicate_title_consolidation":
+        return "consolidate_duplicate_before_write"
+    if row.queue == "ambiguous_single_topic":
+        return "verify_entity_identity"
+    if row.queue == "signal_heavy_primary_verification":
+        return "wait_for_or_find_primary_corrob"
+    if row.queue == "low_score_safe_gate_review":
+        return "manual_confirm_before_safe_apply"
+    return "review_claim_delta"
+
+
+def write_packet(
+    packet_path: Path,
+    row: QueueRow,
+    page: sqlite3.Row | None,
+    siblings: list[sqlite3.Row],
+    cards: list[sqlite3.Row],
+    excerpt: str,
+    excerpt_truncated: bool,
+    flags: list[str],
+) -> None:
+    with packet_path.open("w", encoding="utf-8") as handle:
+        handle.write(f"# Editorial Review Packet: {row.page_title or row.page_id or 'generated candidate'}\n\n")
+        handle.write("## Queue\n\n")
+        handle.write(f"- Queue: `{row.queue}`\n")
+        handle.write(f"- Rank: `{row.rank}`\n")
+        handle.write(f"- Score: `{row.score}`\n")
+        handle.write(f"- Action: `{row.action}`\n")
+        handle.write(f"- Gate reason: {row.gate_reason}\n")
+        handle.write(f"- Next action: {row.next_action}\n")
+        handle.write(f"- Stop condition: {row.stop_condition}\n")
+        handle.write(f"- Recommended decision: `{recommendation_for(row)}`\n\n")
+
+        if flags:
+            handle.write("## Review Flags\n\n")
+            for flag in flags:
+                handle.write(f"- `{flag}`\n")
+            handle.write("\n")
+
+        handle.write("## Candidate\n\n")
+        handle.write(f"- Page id: `{row.page_id}`\n")
+        handle.write(f"- Page title: `{row.page_title}`\n")
+        handle.write(f"- Page path: `{row.page_path}`\n")
+        handle.write(f"- Newest evidence: `{row.newest_evidence_at}`\n")
+        handle.write(
+            f"- Evidence mix: {row.primary_count} primary, {row.secondary_count} secondary, {row.signal_count} signal\n"
+        )
+        handle.write(
+            f"- Match shape: {row.exactish_count} exact-ish, {row.source_match_count} source-url, {row.duplicate_title_count} duplicate-title pages\n"
+        )
+        handle.write(f"- Scanner reason: {row.reason}\n\n")
+
+        handle.write("## Current Page\n\n")
+        if page:
+            handle.write(f"- DB title: `{page['title']}`\n")
+            handle.write(f"- Source: `{page['source'] or ''}`\n")
+            handle.write(f"- Updated: `{page['updated_at'] or ''}`\n")
+            handle.write(f"- SHA-256: `{page['content_sha256'] or ''}`\n\n")
+        else:
+            handle.write("No existing wiki page row was attached to this candidate.\n\n")
+        if excerpt:
+            handle.write("```markdown\n")
+            handle.write(excerpt.rstrip())
+            if excerpt_truncated:
+                handle.write("\n...\n")
+            handle.write("\n```\n\n")
+
+        if siblings:
+            handle.write("## Same-Title Active Pages\n\n")
+            handle.write("| Page id | Updated | Source | Path |\n")
+            handle.write("| --- | --- | --- | --- |\n")
+            for sibling in siblings:
+                handle.write(
+                    f"| `{sibling['id']}` | {sibling['updated_at'] or ''} | `{sibling['source'] or ''}` | `{sibling['path'] or ''}` |\n"
+                )
+            handle.write("\n")
+
+        handle.write("## Evidence Cards\n\n")
+        if not cards:
+            handle.write("No source cards resolved from the candidate ids.\n\n")
+        else:
+            for card in cards:
+                meta = metadata_object(card)
+                role = meta.get("source_role") or ""
+                trust = meta.get("trust_level") or ""
+                handle.write(f"### `{card['id']}`\n\n")
+                handle.write(f"- Title: {card['title']}\n")
+                handle.write(f"- URL: {markdown_link(card['url'], card['url'])}\n")
+                handle.write(f"- Provider/type: `{card['provider']}` / `{card['source_type']}`\n")
+                handle.write(f"- Retrieved: `{card['retrieved_at'] or ''}`\n")
+                handle.write(f"- Role/trust: `{role}` / `{trust}`\n")
+                handle.write(f"- Summary: {compact(card['summary'], 600)}\n\n")
+
+        handle.write("## Decision Template\n\n")
+        handle.write("- Decision: `promote | update_existing | consolidate | reject | hold`\n")
+        handle.write("- Rationale:\n")
+        handle.write("- Source-card ids accepted:\n")
+        handle.write("- Page ids affected:\n")
+        handle.write("- Required follow-up:\n")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Build per-candidate editorial packets from manual_review_queues.csv."
+    )
+    parser.add_argument("--queues", required=True, type=Path)
+    parser.add_argument("--db", type=Path, default=default_db_path())
+    parser.add_argument("--proof-dir", required=True, type=Path)
+    parser.add_argument("--queue", default="")
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--page-excerpt-chars", type=int, default=2400)
+    parser.add_argument("--decision-ledger", type=Path)
+    parser.add_argument("--suppress-reviewed-decisions", action="store_true")
+    args = parser.parse_args()
+
+    args.proof_dir.mkdir(parents=True, exist_ok=True)
+    packets_dir = args.proof_dir / "packets"
+    packets_dir.mkdir(parents=True, exist_ok=True)
+    generated_at = now_iso()
+    rows = load_queue_rows(args.queues, args.queue, args.limit)
+    decision_ledger = load_decision_ledger(args.decision_ledger)
+    suppressed_rows = []
+    if args.suppress_reviewed_decisions and decision_ledger:
+        remaining_rows = []
+        for row in rows:
+            decision = reviewed_suppression_for(row, decision_ledger)
+            if decision:
+                suppressed_rows.append({
+                    "rank": row.rank,
+                    "queue": row.queue,
+                    "page_id": row.page_id,
+                    "page_title": row.page_title,
+                    "score": row.score,
+                    "decision": decision.decision,
+                    "reviewed_at": decision.reviewed_at,
+                    "reviewed_source_card_ids": ";".join(sorted(decision.reviewed_source_card_ids)),
+                    "candidate_source_card_ids": ";".join(row.source_card_ids),
+                    "rationale": decision.rationale,
+                    "follow_up": decision.follow_up,
+                })
+            else:
+                remaining_rows.append(row)
+        rows = remaining_rows
+    packet_rows = []
+
+    with sqlite3.connect(args.db) as conn:
+        conn.row_factory = sqlite3.Row
+        for row in rows:
+            page = page_row(conn, row.page_id)
+            siblings = duplicate_siblings(conn, row.page_title) if row.duplicate_title_count > 1 else []
+            cards = fetch_source_cards(conn, row.source_card_ids)
+            excerpt, truncated = read_excerpt(row.page_path or (page["path"] if page else ""), args.page_excerpt_chars)
+            flags = review_flags(row, page, cards, siblings)
+            packet_name = f"{int(row.rank):04d}-{row.queue}-{slug(row.page_title or row.page_id)}.md"
+            packet_path = packets_dir / packet_name
+            write_packet(packet_path, row, page, siblings, cards, excerpt, truncated, flags)
+            packet_rows.append({
+                "rank": row.rank,
+                "queue": row.queue,
+                "page_id": row.page_id,
+                "page_title": row.page_title,
+                "action": row.action,
+                "score": row.score,
+                "recommendation": recommendation_for(row),
+                "packet_path": str(packet_path),
+                "source_card_count": len(cards),
+                "duplicate_sibling_count": len(siblings),
+                "page_row_found": bool(page),
+                "review_flags": ";".join(flags),
+            })
+
+    summary = {
+        "ok": True,
+        "generated_at": generated_at,
+        "db": str(args.db),
+        "queues": str(args.queues),
+        "decision_ledger": str(args.decision_ledger) if args.decision_ledger else "",
+        "suppress_reviewed_decisions": args.suppress_reviewed_decisions,
+        "proof_dir": str(args.proof_dir),
+        "packets_dir": str(packets_dir),
+        "queue_filter": args.queue,
+        "limit": args.limit,
+        "candidate_count": len(rows) + len(suppressed_rows),
+        "packet_count": len(packet_rows),
+        "suppressed_reviewed_decisions": len(suppressed_rows),
+        "queue_counts": {},
+        "recommendation_counts": {},
+        "review_flag_counts": {},
+    }
+    for packet in packet_rows:
+        summary["queue_counts"][packet["queue"]] = summary["queue_counts"].get(packet["queue"], 0) + 1
+        summary["recommendation_counts"][packet["recommendation"]] = summary["recommendation_counts"].get(packet["recommendation"], 0) + 1
+        for flag in split_semicolon(packet["review_flags"]):
+            flag_key = flag.split("=", 1)[0]
+            summary["review_flag_counts"][flag_key] = summary["review_flag_counts"].get(flag_key, 0) + 1
+
+    (args.proof_dir / "editorial_review_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with (args.proof_dir / "editorial_review_index.csv").open("w", newline="", encoding="utf-8") as handle:
+        fieldnames = [
+            "rank", "queue", "page_id", "page_title", "action", "score",
+            "recommendation", "packet_path", "source_card_count",
+            "duplicate_sibling_count", "page_row_found", "review_flags",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(packet_rows)
+    with (args.proof_dir / "reviewed_decision_suppressed.csv").open("w", newline="", encoding="utf-8") as handle:
+        fieldnames = [
+            "rank", "queue", "page_id", "page_title", "score", "decision",
+            "reviewed_at", "reviewed_source_card_ids", "candidate_source_card_ids",
+            "rationale", "follow_up",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(suppressed_rows)
+    with (args.proof_dir / "editorial_decisions_template.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        fieldnames = [
+            "rank", "queue", "page_id", "page_title", "recommendation",
+            "review_flags",
+            "decision", "accepted_source_card_ids", "affected_page_ids",
+            "rationale", "follow_up",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for packet in packet_rows:
+            writer.writerow({
+                "rank": packet["rank"],
+                "queue": packet["queue"],
+                "page_id": packet["page_id"],
+                "page_title": packet["page_title"],
+                "recommendation": packet["recommendation"],
+                "review_flags": packet["review_flags"],
+                "decision": "",
+                "accepted_source_card_ids": "",
+                "affected_page_ids": "",
+                "rationale": "",
+                "follow_up": "",
+            })
+    (args.proof_dir / "README.md").write_text(
+        "# Editorial Review Packets\n\n"
+        f"Generated: `{generated_at}`\n\n"
+        "This folder contains read-only review packets for Arcwell wiki freshness candidates. "
+        "Packets are evidence bundles, not approvals. Fill `editorial_decisions_template.csv` "
+        "before any future apply/promote/reject workflow.\n",
+        encoding="utf-8",
+    )
+
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

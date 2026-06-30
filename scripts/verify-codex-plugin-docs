@@ -110,7 +110,12 @@ function rel(root, file) {
 
 function extractMcpTools(root) {
   const main = path.join(root, "crates/arcwell-cli/src/main.rs");
-  const text = read(main);
+  const mcpDir = path.join(root, "crates/arcwell-cli/src/mcp");
+  const sourceFiles = [
+    main,
+    ...listFiles(mcpDir, (file) => file.endsWith(".rs")),
+  ].filter((file) => fs.existsSync(file));
+  const text = sourceFiles.map((file) => read(file)).join("\n");
   return new Set(
     [...text.matchAll(/\btool(?:_with_schema)?\(\s*"([a-z0-9_]+)"/g)].map(
       (match) => match[1]

@@ -644,6 +644,23 @@ pub struct JobApplicationPacketExport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobApplicationPacketSetExport {
+    pub profile_id: String,
+    pub packet_ids: Vec<String>,
+    pub out_dir: String,
+    pub manifest_path: String,
+    pub exported_count: usize,
+    pub total_byte_len: usize,
+    pub export_set_sha256: String,
+    pub exports: Vec<JobApplicationPacketExport>,
+    pub proof_level: String,
+    pub delivery_status: String,
+    pub application_status_changed: bool,
+    pub warnings: Vec<String>,
+    pub non_claims: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobCompanyCardInput {
     pub company_name: String,
     pub website_url: String,
@@ -821,6 +838,62 @@ pub struct JobWeeklyReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobWeeklyReportDeliveryInput {
+    pub report_id: String,
+    pub channel: String,
+    pub subject: String,
+    pub target: String,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobWeeklyReportDelivery {
+    pub id: String,
+    pub report_id: String,
+    pub channel: String,
+    pub subject: String,
+    pub target: String,
+    pub status: String,
+    pub privacy_check_id: Option<String>,
+    pub channel_message_id: Option<String>,
+    pub idempotency_key: String,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobWeeklyReportDeliveryReport {
+    pub delivery: JobWeeklyReportDelivery,
+    pub weekly_report: JobWeeklyReport,
+    pub privacy_check: Option<JobPrivacyCheck>,
+    pub channel_message: Option<ChannelMessage>,
+    pub idempotent_replay: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobWeeklyReportDeliverySendInput {
+    pub delivery_id: String,
+    pub telegram_bot_token: Option<String>,
+    pub email_account_id: Option<String>,
+    pub email_api_token: Option<String>,
+    pub email_from: Option<String>,
+    pub api_base: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobWeeklyReportDeliverySendReport {
+    pub delivery: JobWeeklyReportDelivery,
+    pub weekly_report: JobWeeklyReport,
+    pub privacy_check: Option<JobPrivacyCheck>,
+    pub channel_message: Option<ChannelMessage>,
+    pub channel_delivery_attempt: Option<ChannelDeliveryAttempt>,
+    pub idempotent_replay: bool,
+    pub proof_level: String,
+    pub non_claims: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobShortlistEntry {
     pub role: JobRoleCard,
     pub score: Option<JobFitScore>,
@@ -832,6 +905,68 @@ pub struct JobShortlist {
     pub profile_id: String,
     pub generated_at: String,
     pub entries: Vec<JobShortlistEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobOutreachReadinessEntry {
+    pub role: JobRoleCard,
+    pub score: Option<JobFitScore>,
+    pub packet_id: Option<String>,
+    pub packet_status: Option<String>,
+    pub privacy_check_id: Option<String>,
+    pub intro_path_ids: Vec<String>,
+    pub contact_ids: Vec<String>,
+    pub warm_intro_ready_count: usize,
+    pub public_only_count: usize,
+    pub decision: String,
+    pub blockers: Vec<String>,
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobOutreachReadinessReport {
+    pub profile_id: String,
+    pub generated_at: String,
+    pub proof_level: String,
+    pub ready_count: usize,
+    pub blocked_count: usize,
+    pub entries: Vec<JobOutreachReadinessEntry>,
+    pub non_claims: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobOperationalAuditGate {
+    pub name: String,
+    pub decision: String,
+    pub evidence: Value,
+    pub missing_requirements: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobOperationalAudit {
+    pub profile_id: String,
+    pub scope: String,
+    pub generated_at: String,
+    pub decision: String,
+    pub proof_level: String,
+    pub ops_summary: JobOpsSummary,
+    pub refresh_audit: JobRefreshAudit,
+    pub outreach_readiness: JobOutreachReadinessReport,
+    pub source_family_counts: BTreeMap<String, usize>,
+    pub evidence_visibility_counts: BTreeMap<String, usize>,
+    pub packet_status_counts: BTreeMap<String, usize>,
+    pub intro_status_counts: BTreeMap<String, usize>,
+    pub weekly_report_count: usize,
+    pub weekly_delivery_status_counts: BTreeMap<String, usize>,
+    pub weekly_report_delivery_attempt_count: usize,
+    pub job_radar_job_status_counts: BTreeMap<String, usize>,
+    pub job_radar_completed_count: usize,
+    pub job_radar_dead_lettered_count: usize,
+    pub job_radar_attempt_count: i64,
+    pub gates: Vec<JobOperationalAuditGate>,
+    pub operational_blockers: Vec<String>,
+    pub warnings: Vec<String>,
+    pub non_claims: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

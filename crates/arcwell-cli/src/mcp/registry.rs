@@ -416,6 +416,12 @@ pub(crate) fn mcp_tools() -> Vec<Value> {
             [("profile_id", "string", "Job candidate profile id.")],
         ),
         tool_with_schema(
+            "job_outreach_readiness",
+            "Classify scored roles for outreach readiness from approved packets, privacy rechecks, and warm-intro/contact paths. Public-only contacts are not warm intros; this does not send outreach.",
+            job_outreach_readiness_tool_properties(),
+            &["profile_id"],
+        ),
+        tool_with_schema(
             "job_company_targets",
             "Compile a local-proof company scouting report from durable company cards and public evidence tags. This does not claim current openings or create application-ready role cards.",
             job_company_targets_tool_properties(),
@@ -444,6 +450,12 @@ pub(crate) fn mcp_tools() -> Vec<Value> {
             "Export an approved privacy-passing application packet to a local Markdown file. This does not send or record an application.",
             job_packet_export_tool_properties(),
             &["packet_id", "out_dir"],
+        ),
+        tool_with_schema(
+            "job_packet_export_set",
+            "Export approved privacy-passing application packets for one profile to local Markdown files plus a manifest. This does not create Google Docs, send, submit, or record applications.",
+            job_packet_export_set_tool_properties(),
+            &["profile_id", "packet_ids", "out_dir"],
         ),
         tool_with_schema(
             "job_application_record",
@@ -481,6 +493,12 @@ pub(crate) fn mcp_tools() -> Vec<Value> {
             job_refresh_audit_tool_properties(),
             &["profile_id", "scope"],
         ),
+        tool_with_schema(
+            "job_operational_audit",
+            "Compile a read-only job-hunting operational readiness audit from durable state. It reports blockers for recurrence, provider delivery, warm routes, source freshness, packets, applications, and privacy; it does not fetch, send, or submit.",
+            job_operational_audit_tool_properties(),
+            &["profile_id", "scope"],
+        ),
         tool(
             "job_weekly_report",
             "Compile a local-proof weekly report from durable role, score, source-health, and application state.",
@@ -488,6 +506,24 @@ pub(crate) fn mcp_tools() -> Vec<Value> {
                 ("profile_id", "string", "Job candidate profile id."),
                 ("scope", "string", "Report scope label."),
             ],
+        ),
+        tool_with_schema(
+            "job_weekly_report_delivery_prepare",
+            "Prepare a weekly job report for an authorized channel subject after privacy checks. This writes a prepared channel message only; it does not call provider APIs or send.",
+            job_weekly_report_delivery_prepare_tool_properties(),
+            &["report_id", "channel", "subject", "target"],
+        ),
+        tool_with_schema(
+            "job_weekly_report_delivery_send",
+            "Send a prepared weekly job report through an authorized provider channel after rechecking authorization and privacy. This records a provider delivery attempt; it does not schedule recurrence or submit applications.",
+            job_weekly_report_delivery_send_tool_properties(),
+            &["delivery_id"],
+        ),
+        tool_with_schema(
+            "job_weekly_report_deliveries",
+            "List weekly job report delivery rows and their prepared/sent/failed/blocked state.",
+            job_weekly_report_deliveries_tool_properties(),
+            &[],
         ),
         tool(
             "research_plan",

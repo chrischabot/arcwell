@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUN_STAMP="${ARCWELL_JOB_RADAR_RETRY_RECOVERY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_RADAR_RETRY_RECOVERY_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-radar-retry-recovery-local-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+
+for required in cargo date jq shasum; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the job-radar retry/recovery proof." >&2
+    exit 2
+  fi
+done
+
+mkdir -p "$ARTIFACT_DIR"
+TEST_RESULTS="$ARTIFACT_DIR/test-results.jsonl"
+: >"$TEST_RESULTS"
+
+run_check() {
+  local name="$1"
+  shift
+  local stdout="$ARTIFACT_DIR/$name.stdout"
+  local stderr="$ARTIFACT_DIR/$name.stderr"
+  local status="pass"
+  local exit_code=0
+
+  printf '[job-radar-retry-recovery-local-proof] running %s\n' "$*"
+  set +e
+  "$@" >"$stdout" 2>"$stderr"
+  exit_code=$?
+  set -e
+  if [ "$exit_code" -ne 0 ]; then
+    status="fail"
+  fi
+
+  jq -n \
+    --arg name "$name" \
+    --arg command "$*" \
+    --arg status "$status" \
+    --arg stdout "${stdout#$REPO_ROOT/}" \
+    --arg stderr "${stderr#$REPO_ROOT/}" \
+    --arg stdout_sha256 "$(shasum -a 256 "$stdout" | awk '{print $1}')" \
+    --arg stderr_sha256 "$(shasum -a 256 "$stderr" | awk '{print $1}')" \
+    --argjson exit_code "$exit_code" \
+    '{
+      name: $name,
+      command: $command,
+      status: $status,
+      exit_code: $exit_code,
+      stdout: $stdout,
+      stderr: $stderr,
+      stdout_sha256: $stdout_sha256,
+      stderr_sha256: $stderr_sha256
+    }' >>"$TEST_RESULTS"
+
+  [ "$status" = "pass" ]
+}
+
+FAILED=0
+run_check "same-job-policy-recovery" \
+  cargo test -p arcwell-core severe_job_radar_refresh_policy_recovery_retries_same_failed_job -- --nocapture || FAILED=1
+run_check "policy-denial-dead-letter" \
+  cargo test -p arcwell-core severe_job_radar_refresh_policy_denial_dead_letters_after_retry_exhaustion -- --nocapture || FAILED=1
+
+STATUS="Local Proof"
+DECISION="promote_local_slice"
+if [ "$FAILED" != "0" ]; then
+  STATUS="blocked_current_tree"
+  DECISION="block"
+fi
+
+jq -n \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg artifact_dir "$ARTIFACT_DIR" \
+  --arg status "$STATUS" \
+  --arg decision "$DECISION" \
+  --slurpfile tests "$TEST_RESULTS" \
+  '{
+    feature: "Job radar retry, recovery, and dead-letter behavior",
+    status: $status,
+    audit_decision: $decision,
+    created_at: $created_at,
+    proof_root: $proof_root,
+    artifact_dir: $artifact_dir,
+    user_visible_claim: "A policy-blocked job_radar_refresh worker job does not fail silently: it records profile-level failure health, retries the same queued job when due, can recover after policy is repaired, and dead-letters after retry exhaustion. This is Local Proof only.",
+    proof_level: "Local Proof",
+    tests: $tests,
+    durable_state_under_test: [
+      "same queued job retry",
+      "policy repair recovery",
+      "dead_lettered terminal state after retry exhaustion",
+      "profile-level radar source health",
+      "absence of role/source writes while denied"
+    ],
+    non_claims: [
+      "No live provider recovery is proven by this proof.",
+      "No live recurrence is proven by this proof.",
+      "No one-day refresh gate is satisfied by this proof.",
+      "No operational service reliability is proven by this proof."
+    ],
+    adversarial_review_judgment: (
+      if $status == "Local Proof"
+      then "Promote this slice to rerunnable Local Proof. Hold any Operational or live-freshness claim until bounded fetch_live recurrence, live policy/cost recovery, ops proof, and one-day wall-clock refresh proof pass."
+      else "Block. The current tree did not pass the retry/recovery/dead-letter local tests."
+      end
+    ),
+    remaining_risks: [
+      {
+        risk: "Live job-source provider behavior after policy/cost recovery is not proven by replay snapshots.",
+        next_action: "Run bounded live fetch_live recurrence over configured sources in a controlled home."
+      },
+      {
+        risk: "One-day freshness loop remains unproven.",
+        next_action: "Run two refreshes at least one day apart and compare durable role/source-health transitions."
+      },
+      {
+        risk: "Operational scheduler reliability remains separate from run_worker_once local proof.",
+        next_action: "Use retained heartbeat and watch-source health evidence before promoting job hunting beyond Local Proof."
+      }
+    ]
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+printf '[job-radar-retry-recovery-local-proof] proof packet: %s\n' "$ARTIFACT_DIR/proof-packet.json"
+printf '[job-radar-retry-recovery-local-proof] status: %s\n' "$STATUS"
+
+if [ "$FAILED" != "0" ]; then
+  exit 2
+fi

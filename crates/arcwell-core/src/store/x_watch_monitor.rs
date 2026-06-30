@@ -273,6 +273,16 @@ impl Store {
         self.x_monitor_watch_sources_with_base(max_sources, max_results_per_source, &endpoint)
     }
 
+    pub fn x_monitor_watch_source(
+        &self,
+        handle: &str,
+        max_results_per_source: usize,
+    ) -> Result<XMonitorReport> {
+        let endpoint =
+            std::env::var("ARCWELL_X_API_BASE").unwrap_or_else(|_| "https://api.x.com".to_string());
+        self.x_monitor_watch_source_with_base(handle, max_results_per_source, &endpoint)
+    }
+
     pub(crate) fn x_monitor_watch_sources_with_base(
         &self,
         max_sources: usize,
@@ -623,28 +633,40 @@ impl Store {
         max_results: usize,
     ) -> Result<XMonitorSourceReport> {
         validate_x_handle(handle)?;
-        let mut url = base.join("/2/tweets/search/recent")?;
-        {
-            let mut pairs = url.query_pairs_mut();
-            pairs
-                .append_pair("query", &format!("from:{handle} -is:retweet"))
-                .append_pair("max_results", &max_results.clamp(10, 100).to_string())
-                .append_pair("tweet.fields", "created_at,author_id")
-                .append_pair("expansions", "author_id")
-                .append_pair("user.fields", "username,name");
-            if let Some(previous_cursor) = previous_cursor {
-                pairs.append_pair("since_id", previous_cursor);
+        let url = x_watch_recent_search_url(base, handle, previous_cursor, max_results)?;
+        let mut stale_since_id_retried = false;
+        let value = match fetch_x_json(url.as_str(), Some(token)) {
+            Ok(value) => match x_fail_on_response_errors(&value) {
+                Ok(()) => value,
+                Err(error) if previous_cursor.is_some() && x_is_stale_since_id_error(&error) => {
+                    stale_since_id_retried = true;
+                    let url = x_watch_recent_search_url(base, handle, None, max_results)?;
+                    let value = fetch_x_json(url.as_str(), Some(token))?;
+                    x_fail_on_response_errors(&value)?;
+                    value
+                }
+                Err(error) => return Err(error),
+            },
+            Err(error) if previous_cursor.is_some() && x_is_stale_since_id_error(&error) => {
+                stale_since_id_retried = true;
+                let url = x_watch_recent_search_url(base, handle, None, max_results)?;
+                let value = fetch_x_json(url.as_str(), Some(token))?;
+                x_fail_on_response_errors(&value)?;
+                value
             }
-        }
-
-        let value = fetch_x_json(url.as_str(), Some(token))?;
-        x_fail_on_response_errors(&value)?;
+            Err(error) => return Err(error),
+        };
         let import_value =
             x_search_response_to_import_items(&value, "watch_monitor", Some(handle))?;
         let report = self.import_x_json_value_without_sync_run(&import_value)?;
         if report.rejected > 0 {
+            let first_error = report
+                .rejected_errors
+                .first()
+                .map(|error| format!("; first rejection: {error}"))
+                .unwrap_or_default();
             bail!(
-                "X monitor source @{handle} returned {rejected} malformed item(s); cursor was not advanced",
+                "X monitor source @{handle} returned {rejected} malformed item(s){first_error}; cursor was not advanced",
                 rejected = report.rejected
             );
         }
@@ -653,11 +675,18 @@ impl Store {
             .pointer("/meta/newest_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        let effective_cursor = x_effective_cursor(previous_cursor, newest_id.as_deref());
+        let cursor_baseline = if stale_since_id_retried {
+            None
+        } else {
+            previous_cursor
+        };
+        let effective_cursor = x_effective_cursor(cursor_baseline, newest_id.as_deref());
         if effective_cursor.as_deref() != previous_cursor
             && let Some(cursor) = &effective_cursor
         {
             self.set_cursor(cursor_key, cursor)?;
+        } else if stale_since_id_retried && effective_cursor.is_none() {
+            self.delete_cursor(cursor_key)?;
         }
 
         let source_card_ids: Vec<String> = report
@@ -797,4 +826,32 @@ impl Store {
         validate_key(user_id)?;
         Ok(user_id.to_string())
     }
+}
+
+fn x_watch_recent_search_url(
+    base: &Url,
+    handle: &str,
+    previous_cursor: Option<&str>,
+    max_results: usize,
+) -> Result<Url> {
+    let mut url = base.join("/2/tweets/search/recent")?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs
+            .append_pair("query", &format!("from:{handle} -is:retweet"))
+            .append_pair("max_results", &max_results.clamp(10, 100).to_string())
+            .append_pair("tweet.fields", "created_at,author_id")
+            .append_pair("expansions", "author_id")
+            .append_pair("user.fields", "username,name");
+        if let Some(previous_cursor) = previous_cursor {
+            pairs.append_pair("since_id", previous_cursor);
+        }
+    }
+    Ok(url)
+}
+
+fn x_is_stale_since_id_error(error: &anyhow::Error) -> bool {
+    let error = error.to_string();
+    error.contains("'since_id' must be a tweet id created after")
+        || error.contains("\"since_id\" must be a tweet id created after")
 }

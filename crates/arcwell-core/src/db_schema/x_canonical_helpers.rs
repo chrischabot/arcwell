@@ -437,6 +437,118 @@ pub(crate) fn resolve_x_profile_id_on(
     Ok(x_profile_id(handle))
 }
 
+pub(crate) fn upsert_x_profile_record_on(
+    conn: &Connection,
+    user: &Value,
+    source: &str,
+    observed_at: &str,
+) -> Result<String> {
+    let x_user_id = user
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .context("X profile response missing id")?;
+    let handle = user
+        .get("username")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .context("X profile response missing username")?;
+    validate_x_handle(handle)?;
+    let display_name = user.get("name").and_then(Value::as_str).unwrap_or(handle);
+    let description = user
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let raw_json = canonical_json(user)?;
+    let conflict_input = XItemInput {
+        x_id: format!("profile:{x_user_id}:{handle}"),
+        author: handle.to_string(),
+        text: String::new(),
+        url: format!("https://x.com/{}", handle.trim_start_matches('@')),
+        created_at: None,
+        conversation_id: None,
+        reply_to_x_id: None,
+        quote_x_id: None,
+        retweet_x_id: None,
+        retrieved_at: Some(observed_at.to_string()),
+        metrics: json!({}),
+        raw: user.clone(),
+        source_kind: source.to_string(),
+        source_detail: Some("profile_lookup".to_string()),
+        source_metadata: json!({
+            "x_author_id": x_user_id,
+            "author_name": display_name,
+            "author_description": description,
+            "verified": user.get("verified").cloned(),
+            "verified_type": user.get("verified_type").cloned()
+        }),
+    };
+    let profile_id = resolve_x_profile_id_on(conn, handle, Some(x_user_id), &conflict_input)?;
+    conn.execute(
+        r#"
+        INSERT INTO x_profiles
+          (id, x_user_id, handle, display_name, description, raw_json, first_seen_at, last_seen_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)
+        ON CONFLICT(id) DO UPDATE SET
+          handle = excluded.handle,
+          x_user_id = COALESCE(x_profiles.x_user_id, excluded.x_user_id),
+          display_name = CASE WHEN excluded.display_name != '' THEN excluded.display_name ELSE x_profiles.display_name END,
+          description = CASE WHEN excluded.description != '' THEN excluded.description ELSE x_profiles.description END,
+          raw_json = CASE WHEN excluded.raw_json != '{}' THEN excluded.raw_json ELSE x_profiles.raw_json END,
+          last_seen_at = excluded.last_seen_at,
+          updated_at = excluded.updated_at
+        "#,
+        params![
+            profile_id,
+            x_user_id,
+            handle.trim_start_matches('@'),
+            display_name,
+            description,
+            raw_json,
+            observed_at,
+        ],
+    )?;
+    upsert_x_profile_alias_on(
+        conn,
+        &profile_id,
+        handle,
+        Some(x_user_id),
+        source,
+        observed_at,
+        &raw_json,
+    )?;
+    let snapshot_hash = sha256(
+        format!(
+            "{}\n{}\n{}\n{}",
+            handle.trim_start_matches('@'),
+            display_name,
+            description,
+            raw_json
+        )
+        .as_bytes(),
+    );
+    conn.execute(
+        r#"
+        INSERT INTO x_profile_snapshots
+          (profile_id, snapshot_hash, observed_at, last_seen_at, source, handle, display_name, description, raw_json)
+        VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, ?7, ?8)
+        ON CONFLICT(profile_id, snapshot_hash) DO UPDATE SET
+          last_seen_at = excluded.last_seen_at
+        "#,
+        params![
+            profile_id,
+            snapshot_hash,
+            observed_at,
+            source,
+            handle.trim_start_matches('@'),
+            display_name,
+            description,
+            raw_json,
+        ],
+    )?;
+    Ok(profile_id)
+}
+
 pub(crate) fn upsert_x_profile_alias_on(
     conn: &Connection,
     profile_id: &str,

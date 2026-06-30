@@ -664,6 +664,7 @@ fn seed_knowledge_event(store: &Store, canonical_key: &str) -> KnowledgeEvent {
 
 mod knowledge;
 use knowledge::seed_saturated_convergence_fixture;
+mod proof;
 mod schema_memory_policy;
 use schema_memory_policy::{
     clear_x_bearer_env, mock_base_server, mock_header_server, mock_json_server,

@@ -1,0 +1,342 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in jq sqlite3 shasum; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the job source-family boundary proof." >&2
+    exit 2
+  fi
+done
+
+RUN_STAMP="${ARCWELL_JOB_SOURCE_FAMILY_BOUNDARY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_SOURCE_FAMILY_BOUNDARY_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-source-family-boundary-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_JOB_SOURCE_FAMILY_BOUNDARY_HOME:-$PROOF_ROOT/home}"
+DB="$ARCWELL_HOME/arcwell.sqlite3"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[job-source-family-boundary-proof] %s\n' "$*"
+}
+
+fail() {
+  printf '[job-source-family-boundary-proof] BLOCKED: %s\n' "$*" >&2
+  exit 2
+}
+
+run_arcwell() {
+  "$ARCWELL_BIN" "$@"
+}
+
+sql_json() {
+  sqlite3 -json "$DB" "$1"
+}
+
+json_field() {
+  jq -r "$1 // empty"
+}
+
+log "proof root: $PROOF_ROOT"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+
+cat >"$ARCWELL_HOME/arcwell-policy.toml" <<'POLICY'
+[[rules]]
+id = "allow-job-source-family-boundary-live-proof"
+effect = "allow"
+action = "provider.network"
+package = "arcwell-job-hunting"
+provider = "web"
+source = "job_source_refresh"
+reason = "controlled proof of job source-family boundary parsing on a live public board"
+priority = 30
+POLICY
+
+cat >"$ARTIFACT_DIR/vc-board-fixture.html" <<'HTML'
+<main>
+  <p>London AI infrastructure startups building APIs for developers.</p>
+  <a href="/companies/encord/jobs/E9vvz7Y-product-engineer">Product Engineer</a>
+  <a href="/jobs/role/product-manager">Product Manager</a>
+  <a href="/jobs/role/product-manager/london">Product Manager Jobs in London</a>
+  <a href="/jobs/role/software-engineer/remote">Remote Software Engineer Jobs</a>
+  <a href="/jobs/role/product-manager/new-york">Product Manager Jobs in New York</a>
+</main>
+HTML
+
+cat >"$ARTIFACT_DIR/job-board-fixture.html" <<'HTML'
+<main>
+  <p>Search results from a broad aggregator, not a company-owned careers page.</p>
+  <a href="https://jobboard.example/jobs/staff-ai-platform-engineer">Staff AI Platform Engineer</a>
+  <a href="https://jobboard.example/jobs/senior-developer-advocate">Senior Developer Advocate</a>
+</main>
+HTML
+
+cat >"$ARTIFACT_DIR/company-detail-fixture.html" <<'HTML'
+<html>
+  <head>
+    <title>Senior Platform Engineer</title>
+    <meta property="og:title" content="Senior Platform Engineer" />
+  </head>
+  <body>
+    <main>
+      <h1>Senior Platform Engineer</h1>
+      <p>Build the developer platform and infrastructure used by product teams.</p>
+    </main>
+  </body>
+</html>
+HTML
+
+VC_SOURCE_JSON="$(run_arcwell job source-add \
+  --source-family vc_board \
+  --name "YC London fixture board" \
+  --url "https://proof.example/yc-london-fixture-board" \
+  --market-scope london \
+  --refresh-policy manual_review_before_apply \
+  --metadata-json '{"proof_scope":"job_source_family_boundary","fixture":"vc_board_categories"}')"
+printf '%s\n' "$VC_SOURCE_JSON" >"$ARTIFACT_DIR/vc-source.json"
+VC_SOURCE_ID="$(printf '%s\n' "$VC_SOURCE_JSON" | json_field '.id')"
+
+JOB_BOARD_SOURCE_JSON="$(run_arcwell job source-add \
+  --source-family job_board \
+  --name "Example broad job board" \
+  --url "https://jobboard.example/jobs/software-engineer-london" \
+  --market-scope global \
+  --refresh-policy manual_review_before_apply \
+  --metadata-json '{"proof_scope":"job_source_family_boundary","fixture":"job_board"}')"
+printf '%s\n' "$JOB_BOARD_SOURCE_JSON" >"$ARTIFACT_DIR/job-board-source.json"
+JOB_BOARD_SOURCE_ID="$(printf '%s\n' "$JOB_BOARD_SOURCE_JSON" | json_field '.id')"
+
+COMPANY_SOURCE_JSON="$(run_arcwell job source-add \
+  --source-family company_ats \
+  --name "Example Ashby" \
+  --url "https://jobs.ashbyhq.com/example/1234567890abcdef" \
+  --market-scope london \
+  --refresh-policy manual_review_before_apply \
+  --metadata-json '{"proof_scope":"job_source_family_boundary","fixture":"company_detail"}')"
+printf '%s\n' "$COMPANY_SOURCE_JSON" >"$ARTIFACT_DIR/company-source.json"
+COMPANY_SOURCE_ID="$(printf '%s\n' "$COMPANY_SOURCE_JSON" | json_field '.id')"
+
+log "refreshing snapshot fixtures"
+run_arcwell job source-refresh "$VC_SOURCE_ID" \
+  --body-path "$ARTIFACT_DIR/vc-board-fixture.html" \
+  --fetched-url "https://www.ycombinator.com/jobs/role/software-engineer/london" \
+  >"$ARTIFACT_DIR/vc-refresh.json"
+run_arcwell job source-refresh "$JOB_BOARD_SOURCE_ID" \
+  --body-path "$ARTIFACT_DIR/job-board-fixture.html" \
+  --fetched-url "https://jobboard.example/jobs/software-engineer-london" \
+  >"$ARTIFACT_DIR/job-board-refresh.json"
+run_arcwell job source-refresh "$COMPANY_SOURCE_ID" \
+  --body-path "$ARTIFACT_DIR/company-detail-fixture.html" \
+  --fetched-url "https://jobs.ashbyhq.com/example/1234567890abcdef" \
+  >"$ARTIFACT_DIR/company-refresh.json"
+
+if ! jq -e '
+  (.roles | length) == 1
+  and .roles[0].role_title == "Product Engineer"
+  and .roles[0].source_confidence == "secondary_confirmed"
+  and .source_health.status == "partial"
+  and .source_health.rejected_count == 4
+' "$ARTIFACT_DIR/vc-refresh.json" >/dev/null; then
+  fail "VC-board snapshot did not reject generic category links while keeping the company job detail link"
+fi
+
+if ! jq -e '
+  (.roles | length) == 2
+  and all(.roles[]; .source_confidence == "aggregator_only")
+' "$ARTIFACT_DIR/job-board-refresh.json" >/dev/null; then
+  fail "job-board snapshot did not mark broad aggregator roles as aggregator_only"
+fi
+
+if ! jq -e '
+  (.roles | length) == 1
+  and .roles[0].role_title == "Senior Platform Engineer"
+  and .roles[0].source_confidence == "canonical_confirmed"
+  and .roles[0].posting_freshness == "captured_snapshot"
+' "$ARTIFACT_DIR/company-refresh.json" >/dev/null; then
+  fail "company detail snapshot did not produce one canonical confirmed captured role"
+fi
+
+LIVE_SOURCE_JSON="$(run_arcwell job source-add \
+  --source-family vc_board \
+  --name "YC London jobs live boundary proof" \
+  --url "https://www.ycombinator.com/jobs/role/software-engineer/london" \
+  --market-scope london \
+  --refresh-policy manual_review_before_apply \
+  --metadata-json '{"proof_scope":"job_source_family_boundary","fixture":"live_yc_london"}')"
+printf '%s\n' "$LIVE_SOURCE_JSON" >"$ARTIFACT_DIR/live-yc-source.json"
+LIVE_SOURCE_ID="$(printf '%s\n' "$LIVE_SOURCE_JSON" | json_field '.id')"
+
+log "refreshing live YC London jobs page"
+run_arcwell job source-refresh "$LIVE_SOURCE_ID" --fetch-live >"$ARTIFACT_DIR/live-yc-refresh.json"
+
+if ! jq -e '
+  (.roles | length) >= 1
+  and (.source_health.status == "healthy" or .source_health.status == "partial")
+  and all(.roles[]; .source_confidence == "secondary_confirmed")
+  and all(.roles[]; ((.role_title | contains(" Jobs")) | not))
+  and all(.roles[]; ((.source_url | contains("/jobs/role/")) | not))
+' "$ARTIFACT_DIR/live-yc-refresh.json" >/dev/null; then
+  fail "live YC refresh did not preserve the source-family boundary"
+fi
+
+sql_json "
+  SELECT COUNT(*) AS generic_category_roles
+  FROM job_role_cards r
+  JOIN job_role_source_links l ON l.role_id = r.id
+  WHERE l.source_id = '$LIVE_SOURCE_ID'
+    AND (r.role_title LIKE '% Jobs%' OR r.source_url LIKE '%/jobs/role/%');
+" >"$ARTIFACT_DIR/live-yc-generic-category-role-count.json"
+
+if ! jq -e '.[0].generic_category_roles == 0' "$ARTIFACT_DIR/live-yc-generic-category-role-count.json" >/dev/null; then
+  fail "live YC refresh imported generic category links as role cards"
+fi
+
+sql_json "
+  SELECT r.source_confidence, COUNT(DISTINCT r.id) AS count
+  FROM job_role_cards r
+  JOIN job_role_source_links l ON l.role_id = r.id
+  WHERE l.source_id = '$LIVE_SOURCE_ID'
+  GROUP BY r.source_confidence
+  ORDER BY r.source_confidence;
+" >"$ARTIFACT_DIR/live-yc-confidence-counts.json"
+
+if ! jq -e 'length == 1 and .[0].source_confidence == "secondary_confirmed" and .[0].count >= 1' "$ARTIFACT_DIR/live-yc-confidence-counts.json" >/dev/null; then
+  fail "live YC refresh wrote roles outside the secondary_confirmed boundary"
+fi
+
+sql_json "
+  SELECT r.company, r.role_title, r.source_confidence, r.source_url
+  FROM job_role_cards r
+  JOIN job_role_source_links l ON l.role_id = r.id
+  WHERE l.source_id = '$LIVE_SOURCE_ID'
+  ORDER BY lower(r.role_title), r.id
+  LIMIT 50;
+" >"$ARTIFACT_DIR/live-yc-roles.json"
+
+sql_json "
+  SELECT src.source_family, COUNT(DISTINCT r.id) AS count
+  FROM job_role_cards r
+  JOIN job_role_source_links l ON l.role_id = r.id
+  JOIN job_sources src ON src.id = l.source_id
+  WHERE src.metadata_json LIKE '%job_source_family_boundary%'
+  GROUP BY src.source_family
+  ORDER BY src.source_family;
+" >"$ARTIFACT_DIR/source-family-role-counts.json"
+
+sql_json "
+  SELECT action, package, provider, source, allowed, reason
+  FROM policy_decisions
+  WHERE reason = 'controlled proof of job source-family boundary parsing on a live public board'
+  ORDER BY created_at;
+" >"$ARTIFACT_DIR/policy-decisions.json"
+
+if ! jq -e '
+  any(.[]; .action == "provider.network" and .package == "arcwell-job-hunting" and .provider == "web" and .source == "job_source_refresh" and .allowed == 1)
+' "$ARTIFACT_DIR/policy-decisions.json" >/dev/null; then
+  fail "live refresh did not record the expected provider.network policy allow decision"
+fi
+
+jq -n \
+  --arg feature "job source-family boundary parsing" \
+  --arg status "Production Data Proof (bounded source-family boundary slice)" \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg copied_home "$ARCWELL_HOME" \
+  --arg vc_sha256 "$(shasum -a 256 "$ARTIFACT_DIR/vc-refresh.json" | awk '{print $1}')" \
+  --arg job_board_sha256 "$(shasum -a 256 "$ARTIFACT_DIR/job-board-refresh.json" | awk '{print $1}')" \
+  --arg company_sha256 "$(shasum -a 256 "$ARTIFACT_DIR/company-refresh.json" | awk '{print $1}')" \
+  --arg live_sha256 "$(shasum -a 256 "$ARTIFACT_DIR/live-yc-refresh.json" | awk '{print $1}')" \
+  --slurpfile vc "$ARTIFACT_DIR/vc-refresh.json" \
+  --slurpfile job_board "$ARTIFACT_DIR/job-board-refresh.json" \
+  --slurpfile company "$ARTIFACT_DIR/company-refresh.json" \
+  --slurpfile live "$ARTIFACT_DIR/live-yc-refresh.json" \
+  --slurpfile live_generic "$ARTIFACT_DIR/live-yc-generic-category-role-count.json" \
+  --slurpfile live_confidence "$ARTIFACT_DIR/live-yc-confidence-counts.json" \
+  --slurpfile live_roles "$ARTIFACT_DIR/live-yc-roles.json" \
+  --slurpfile family_counts "$ARTIFACT_DIR/source-family-role-counts.json" \
+  --slurpfile policy_decisions "$ARTIFACT_DIR/policy-decisions.json" \
+  '{
+    feature: $feature,
+    status: $status,
+    created_at: $created_at,
+    skill_gates: ["arc:anti-mirage", "arc:job-hunting"],
+    user_visible_claim: "Arcwell now keeps job-source family boundaries visible during source refresh: company/ATS pages can create canonical-confirmed roles, VC/startup boards create secondary-confirmed leads, broad job boards create aggregator-only leads, and generic role-category navigation is rejected instead of entering the apply-now role set.",
+    non_claims: [
+      "This is not exhaustive London market coverage.",
+      "This is not a complete list of openings the user should apply to.",
+      "This is not one-day recurrence proof.",
+      "This is not operational scheduled radar.",
+      "This does not submit applications, approve packets, or send outreach.",
+      "This does not prove hiring outcomes or warm-intro availability."
+    ],
+    inputs: {
+      proof_root: $proof_root,
+      copied_home: $copied_home,
+      snapshot_fixtures: [
+        "vc-board-fixture.html",
+        "job-board-fixture.html",
+        "company-detail-fixture.html"
+      ],
+      live_source: "https://www.ycombinator.com/jobs/role/software-engineer/london"
+    },
+    outputs: {
+      vc_board_snapshot_sha256: $vc_sha256,
+      job_board_snapshot_sha256: $job_board_sha256,
+      company_detail_snapshot_sha256: $company_sha256,
+      live_yc_refresh_sha256: $live_sha256,
+      vc_board_snapshot: $vc[0],
+      job_board_snapshot: $job_board[0],
+      company_detail_snapshot: $company[0],
+      live_yc_refresh: $live[0],
+      live_yc_generic_category_role_count: $live_generic[0][0],
+      live_yc_confidence_counts: $live_confidence[0],
+      live_yc_roles_sample: $live_roles[0],
+      source_family_role_counts: $family_counts[0],
+      policy_decisions: $policy_decisions[0]
+    },
+    durable_state_written: [
+      "one disposable proof home",
+      "four job_sources in that proof home",
+      "snapshot job_source_health rows for VC-board, job-board, and company-detail fixtures",
+      "one live_fetch job_source_health row for the YC London jobs page",
+      "role cards and source links bounded by source family confidence"
+    ],
+    durable_state_not_written: [
+      "no writes to the user operational home",
+      "no writes to prior proof homes",
+      "no application packet approval or export",
+      "no sent/delivered/submitted provider rows"
+    ],
+    commands_run: [
+      "scripts/job-source-family-boundary-proof"
+    ],
+    adversarial_review_judgment: "Promote only as a bounded parser/source-family proof. It is strong evidence that noisy broad-board links no longer poison role cards, but it is not a market-coverage or apply-now claim.",
+    remaining_risks: [
+      {
+        risk: "The live YC page can change or become unavailable.",
+        next_action: "Keep the snapshot fixtures as the deterministic regression surface and rerun the live proof when using YC as current evidence."
+      },
+      {
+        risk: "The proof covers representative source families, not every job board or ATS layout.",
+        next_action: "Add source-specific fixtures when a new board produces noisy roles."
+      },
+      {
+        risk: "Secondary-confirmed leads still require direct company or ATS confirmation before high-confidence apply decisions.",
+        next_action: "Use company-target role confirmation proof before promoting a role to canonical apply-now status."
+      }
+    ]
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"
+log "job source-family boundary proof passed"

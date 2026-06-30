@@ -1,0 +1,461 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in jq sqlite3 node; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the one-day job refresh proof." >&2
+    exit 2
+  fi
+done
+
+DEFAULT_SOURCE_PROOF="$REPO_ROOT/.arcwell-dev/proofs/job-hunting-p1-tier1-import-20260628T214548Z"
+SOURCE_PROOF="${ARCWELL_JOB_REFRESH_ONE_DAY_SOURCE_PROOF:-$DEFAULT_SOURCE_PROOF}"
+PROOF_ROOT="${ARCWELL_JOB_REFRESH_ONE_DAY_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-refresh-one-day-controlled-proof}"
+MIN_ELAPSED_HOURS="${ARCWELL_JOB_REFRESH_ONE_DAY_MIN_HOURS:-24}"
+ALLOW_INCOMPLETE=0
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/job-refresh-one-day-proof [options]
+
+Creates or resumes a controlled one-day job-refresh proof. The script preserves
+one copied Arcwell home, records a first refresh checkpoint, waits for real
+wall-clock time, and records the second refresh only after the elapsed-time gate
+is met. It does not synthesize or compress time.
+
+Options:
+  --proof-root path        Proof root to create/resume.
+  --source-proof path      Controlled P1 import proof to copy on first run.
+  --min-elapsed-hours n    Required elapsed time between first and latest run.
+                          Default: 24.
+  --allow-incomplete       Write an incomplete proof packet and exit 0.
+  -h, --help              Show this help.
+USAGE
+}
+
+fail() {
+  printf '[job-refresh-one-day-proof] BLOCKED: %s\n' "$*" >&2
+  exit 2
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --proof-root)
+      [[ $# -ge 2 ]] || fail "--proof-root requires a path"
+      PROOF_ROOT="$2"
+      shift
+      ;;
+    --source-proof)
+      [[ $# -ge 2 ]] || fail "--source-proof requires a path"
+      SOURCE_PROOF="$2"
+      shift
+      ;;
+    --min-elapsed-hours)
+      [[ $# -ge 2 ]] || fail "--min-elapsed-hours requires a value"
+      MIN_ELAPSED_HOURS="$2"
+      shift
+      ;;
+    --allow-incomplete)
+      ALLOW_INCOMPLETE=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+  shift
+done
+
+SOURCE_HOME="$SOURCE_PROOF/home"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="$PROOF_ROOT/home"
+STATE_FILE="$ARTIFACT_DIR/state.json"
+PACKET_FILE="$ARTIFACT_DIR/proof-packet.json"
+SCOPE="Controlled one-day job refresh proof"
+
+mkdir -p "$ARTIFACT_DIR"
+
+log() {
+  printf '[job-refresh-one-day-proof] %s\n' "$*"
+}
+
+run_arcwell() {
+  "$ARCWELL_BIN" "$@"
+}
+
+json_get() {
+  jq -r "$1 // empty" "$STATE_FILE"
+}
+
+write_packet() {
+  local status="$1"
+  local decision="$2"
+  local failure="$3"
+  local hours_since_first="$4"
+  local audit_file="$5"
+  local first_run_id="${FIRST_RUN_ID:-}"
+  local second_run_id="${SECOND_RUN_ID:-}"
+  local first_started_at="${FIRST_STARTED_AT:-}"
+  local second_started_at="${SECOND_STARTED_AT:-}"
+  local ready_at=""
+  local hours_remaining="0"
+  local hours_between_runs="null"
+  local gate_state="incomplete"
+  local next_action=""
+
+  if [ -n "$first_started_at" ]; then
+    ready_at="$(node -e '
+const first = Date.parse(process.argv[1]);
+const minHours = Number(process.argv[2]);
+if (!Number.isFinite(first) || !Number.isFinite(minHours)) {
+  console.log("");
+} else {
+  console.log(new Date(first + minHours * 3600000).toISOString());
+}
+' "$first_started_at" "$MIN_ELAPSED_HOURS")"
+    hours_remaining="$(node -e '
+const since = Number(process.argv[1]);
+const minHours = Number(process.argv[2]);
+if (!Number.isFinite(since) || !Number.isFinite(minHours)) {
+  console.log("0");
+} else {
+  console.log(JSON.stringify(Number(Math.max(0, minHours - since).toFixed(6))));
+}
+' "$hours_since_first" "$MIN_ELAPSED_HOURS")"
+  fi
+
+  if [ -n "$first_started_at" ] && [ -n "$second_started_at" ]; then
+    hours_between_runs="$(node -e '
+const first = Date.parse(process.argv[1]);
+const second = Date.parse(process.argv[2]);
+if (!Number.isFinite(first) || !Number.isFinite(second)) {
+  console.log("null");
+} else {
+  console.log(JSON.stringify(Number(((second - first) / 3600000).toFixed(6))));
+}
+' "$first_started_at" "$second_started_at")"
+  fi
+
+  if [ "$status" = "passed" ]; then
+    gate_state="passed"
+  elif [ "$hours_remaining" = "0" ] && [ -n "$ready_at" ]; then
+    gate_state="ready_for_rerun"
+  elif [ -n "$ready_at" ]; then
+    gate_state="waiting_wall_clock"
+  fi
+
+  if [ "$status" = "passed" ]; then
+    next_action="No rerun required for this controlled proof. Keep broad coverage, operational-home monitoring, external delivery, application sending, and final operational-audit gates separate."
+  elif [ -n "$ready_at" ]; then
+    next_action="Rerun scripts/job-refresh-one-day-proof --proof-root $PROOF_ROOT after $ready_at UTC."
+  else
+    next_action="Rerun scripts/job-refresh-one-day-proof --proof-root $PROOF_ROOT after the elapsed-time gate can be evaluated."
+  fi
+
+  jq -n \
+    --arg feature "controlled one-day job refresh proof" \
+    --arg status "$status" \
+    --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg ready_at "$ready_at" \
+    --arg next_action "$next_action" \
+    --arg gate_state "$gate_state" \
+    --arg source_proof "$SOURCE_PROOF" \
+    --arg proof_root "$PROOF_ROOT" \
+    --arg copied_home "$ARCWELL_HOME" \
+    --arg scope "$SCOPE" \
+    --arg first_run_id "$first_run_id" \
+    --arg second_run_id "$second_run_id" \
+    --arg first_started_at "$first_started_at" \
+    --arg second_started_at "$second_started_at" \
+    --arg decision "$decision" \
+    --arg failure "$failure" \
+    --arg audit_file "$audit_file" \
+    --argjson minimum_elapsed_hours "$MIN_ELAPSED_HOURS" \
+    --argjson hours_since_first "$hours_since_first" \
+    --argjson hours_remaining "$hours_remaining" \
+    --argjson hours_between_runs "$hours_between_runs" \
+    '{
+      feature: $feature,
+      status: $status,
+      gate_state: $gate_state,
+      created_at: $created_at,
+      next_action: $next_action,
+      skill_gate: "arc:anti-mirage",
+      user_visible_claim: "Arcwell can prove controlled job-refresh history only after two completed refresh runs for the same profile/scope are at least the configured wall-clock window apart and the audit sees durable new, unchanged, stale, and closed transitions with source evidence.",
+      non_claims: [
+        "This script does not synthesize or compress 24 hours.",
+        "This is not live fetch recurrence proof.",
+        "This is not exhaustive market coverage.",
+        "This is not operational scheduled job radar.",
+        "This is not user application sending or delivery proof."
+      ],
+      inputs: {
+        source_proof: $source_proof,
+        copied_home: $copied_home,
+        scope: $scope,
+        minimum_elapsed_hours: $minimum_elapsed_hours
+      },
+      timestamps: {
+        packet_created_at: $created_at,
+        first_started_at: (if $first_started_at == "" then null else $first_started_at end),
+        second_started_at: (if $second_started_at == "" then null else $second_started_at end),
+        ready_at_utc: (if $ready_at == "" then null else $ready_at end),
+        minimum_elapsed_hours: $minimum_elapsed_hours,
+        hours_since_first: $hours_since_first,
+        hours_between_runs: $hours_between_runs,
+        hours_remaining: $hours_remaining
+      },
+      run_state: {
+        first_run_id: (if $first_run_id == "" then null else $first_run_id end),
+        second_run_id: (if $second_run_id == "" then null else $second_run_id end),
+        first_started_at: (if $first_started_at == "" then null else $first_started_at end),
+        second_started_at: (if $second_started_at == "" then null else $second_started_at end),
+        hours_since_first: $hours_since_first
+      },
+      audit: {
+        decision: $decision,
+        artifact: $audit_file
+      },
+      failure: (if $failure == "" then null else $failure end),
+      durable_state_written: [
+        "copied proof home under the proof root",
+        "first completed job_search_run and linked role-status events on first execution",
+        if $status == "passed" then
+          "second completed job_search_run and linked role-status events after the elapsed-time gate"
+        else
+          "no second refresh checkpoint is written until the elapsed-time gate is met"
+        end
+      ],
+      durable_state_not_written: [
+        "no writes to the source proof home",
+        "no writes to the user operational home",
+        "no provider delivery rows",
+        "no application submission rows"
+      ],
+      adversarial_review_judgment:
+        (if $status == "passed" then
+          "Promote only as controlled one-day manual refresh proof; keep live fetch recurrence and operational scheduled radar as separate gates."
+        else
+          "Hold promotion. The proof is intentionally incomplete until real wall-clock elapsed time and the final refresh/audit pass exist."
+        end),
+      remaining_risks: [
+        {
+          risk: "Manual refresh reconciliation uses caller-supplied role ids and existing source-health rows.",
+          next_action: "Keep live source fetch recurrence as a separate proof gate."
+        },
+        {
+          risk: "The proof uses a copied controlled home.",
+          next_action: "Do not claim user operational-home monitoring from this packet."
+        },
+        if $status == "passed" then
+          {
+            risk: "The proof is a controlled manual refresh-history gate, not a recurring live-fetch scheduler.",
+            next_action: "Rerun the final aggregate and operational audits before calling job hunting operational."
+          }
+        else
+          {
+            risk: "The final pass requires actual elapsed time.",
+            next_action: "Rerun the same proof root after the configured wall-clock window."
+          }
+        end
+      ]
+    }' >"$PACKET_FILE"
+}
+
+if [ ! -f "$STATE_FILE" ]; then
+  [ -f "$SOURCE_HOME/arcwell.sqlite3" ] || fail "source proof home not found: $SOURCE_HOME"
+  log "creating proof root: $PROOF_ROOT"
+  mkdir -p "$ARCWELL_HOME"
+  cp -R "$SOURCE_HOME/." "$ARCWELL_HOME/"
+  printf '%s\n' "$SOURCE_PROOF" >"$ARTIFACT_DIR/source-proof.txt"
+  printf '%s\n' "$SOURCE_HOME" >"$ARTIFACT_DIR/source-home.txt"
+
+  run_arcwell job profiles >"$ARTIFACT_DIR/profiles.json"
+  run_arcwell job roles >"$ARTIFACT_DIR/roles-before-first-refresh.json"
+  run_arcwell ops >"$ARTIFACT_DIR/ops-before-first-refresh.json"
+
+  PROFILE_ID="$(jq -r '.[0].id // empty' "$ARTIFACT_DIR/profiles.json")"
+  UNCHANGED_ROLE_ID="$(jq -r '[.[] | select(.metadata.tier == "tier_1")][0].id // empty' "$ARTIFACT_DIR/roles-before-first-refresh.json")"
+  STALE_ROLE_ID="$(jq -r '[.[] | select(.metadata.tier == "tier_1")][1].id // empty' "$ARTIFACT_DIR/roles-before-first-refresh.json")"
+  CLOSED_ROLE_ID="$(jq -r '[.[] | select(.metadata.tier == "tier_1")][2].id // empty' "$ARTIFACT_DIR/roles-before-first-refresh.json")"
+  SOURCE_HEALTH_IDS="$(sqlite3 "$ARCWELL_HOME/arcwell.sqlite3" "SELECT id FROM job_source_health ORDER BY checked_at ASC, id ASC LIMIT 7;" | tr '\n' ' ')"
+
+  if [ -z "$PROFILE_ID" ] || [ -z "$UNCHANGED_ROLE_ID" ] || [ -z "$STALE_ROLE_ID" ] || [ -z "$CLOSED_ROLE_ID" ]; then
+    fail "copied source home must contain a profile and at least three Tier 1 roles"
+  fi
+  if [ -z "${SOURCE_HEALTH_IDS// /}" ]; then
+    fail "copied source home must contain source-health evidence"
+  fi
+
+  CONTROLLED_ROLE_JSON="$(run_arcwell job role-add \
+    --company "Arcwell Controlled Refresh Proof" \
+    --role-title "New Role For One-Day Refresh Gate" \
+    --source-family company \
+    --source-url "https://example.com/arcwell/job-refresh-one-day-proof/new-role" \
+    --canonical-url "https://example.com/arcwell/job-refresh-one-day-proof/new-role" \
+    --source-confidence canonical_confirmed \
+    --posting-freshness same_day \
+    --location "Controlled proof home" \
+    --work-mode remote-uk \
+    --company-stage-or-size "controlled fixture" \
+    --role-seniority senior \
+    --requirement "Controlled role with no prior status event, used only to prove the new-transition gate." \
+    --implied-business-problem "Exercise durable refresh-history transition accounting without touching the operational home." \
+    --why-they-might-need-user "Controlled proof role; not a real opportunity." \
+    --gap-or-blocker "Synthetic controlled role; must never appear as an apply-now recommendation." \
+    --cluster "refresh-proof" \
+    --current-status live \
+    --metadata-json '{"proof_scope":"job_refresh_one_day_controlled","real_opportunity":false}')"
+  CONTROLLED_NEW_ROLE_ID="$(printf '%s\n' "$CONTROLLED_ROLE_JSON" | jq -r '.id')"
+  printf '%s\n' "$CONTROLLED_ROLE_JSON" >"$ARTIFACT_DIR/controlled-new-role.json"
+
+  REFRESH_ARGS=()
+  for health_id in $SOURCE_HEALTH_IDS; do
+    REFRESH_ARGS+=(--source-health-id "$health_id")
+  done
+
+  log "recording first controlled refresh checkpoint"
+  run_arcwell job refresh "$PROFILE_ID" \
+    --scope "$SCOPE" \
+    --observed-role-id "$CONTROLLED_NEW_ROLE_ID" \
+    --observed-role-id "$UNCHANGED_ROLE_ID" \
+    --stale-role-id "$STALE_ROLE_ID" \
+    --closed-role-id "$CLOSED_ROLE_ID" \
+    "${REFRESH_ARGS[@]}" \
+    --proof-level local_proof \
+    --report-artifact-id job-refresh-one-day-first-checkpoint \
+    >"$ARTIFACT_DIR/first-refresh.json"
+
+  FIRST_RUN_ID="$(jq -r '.run.id' "$ARTIFACT_DIR/first-refresh.json")"
+  FIRST_STARTED_AT="$(jq -r '.run.started_at' "$ARTIFACT_DIR/first-refresh.json")"
+  jq -n \
+    --arg profile_id "$PROFILE_ID" \
+    --arg scope "$SCOPE" \
+    --arg unchanged_role_id "$UNCHANGED_ROLE_ID" \
+    --arg stale_role_id "$STALE_ROLE_ID" \
+    --arg closed_role_id "$CLOSED_ROLE_ID" \
+    --arg controlled_new_role_id "$CONTROLLED_NEW_ROLE_ID" \
+    --arg first_run_id "$FIRST_RUN_ID" \
+    --arg first_started_at "$FIRST_STARTED_AT" \
+    --arg source_health_ids "$SOURCE_HEALTH_IDS" \
+    '{
+      profile_id: $profile_id,
+      scope: $scope,
+      unchanged_role_id: $unchanged_role_id,
+      stale_role_id: $stale_role_id,
+      closed_role_id: $closed_role_id,
+      controlled_new_role_id: $controlled_new_role_id,
+      first_run_id: $first_run_id,
+      first_started_at: $first_started_at,
+      source_health_ids: ($source_health_ids | split(" ") | map(select(length > 0)))
+    }' >"$STATE_FILE"
+else
+  log "resuming proof root: $PROOF_ROOT"
+  [ -f "$ARCWELL_HOME/arcwell.sqlite3" ] || fail "proof home missing for resumed state: $ARCWELL_HOME"
+fi
+
+PROFILE_ID="$(json_get '.profile_id')"
+FIRST_RUN_ID="$(json_get '.first_run_id')"
+SECOND_RUN_ID="$(json_get '.second_run_id')"
+FIRST_STARTED_AT="$(json_get '.first_started_at')"
+SECOND_STARTED_AT="$(json_get '.second_started_at')"
+CONTROLLED_NEW_ROLE_ID="$(json_get '.controlled_new_role_id')"
+UNCHANGED_ROLE_ID="$(json_get '.unchanged_role_id')"
+
+if [ -z "$PROFILE_ID" ] || [ -z "$FIRST_RUN_ID" ] || [ -z "$FIRST_STARTED_AT" ]; then
+  fail "proof state is missing profile_id, first_run_id, or first_started_at"
+fi
+
+if [ -n "$SECOND_RUN_ID" ] && [ -z "$SECOND_STARTED_AT" ]; then
+  SECOND_STARTED_AT="$(sqlite3 "$ARCWELL_HOME/arcwell.sqlite3" \
+    "SELECT started_at FROM job_search_runs WHERE id = '$SECOND_RUN_ID' LIMIT 1;" || true)"
+fi
+
+HOURS_SINCE_FIRST="$(node -e '
+const first = Date.parse(process.argv[1]);
+if (!Number.isFinite(first)) throw new Error("invalid first_started_at: " + process.argv[1]);
+const hours = Math.max(0, (Date.now() - first) / 3600000);
+console.log(JSON.stringify(Number(hours.toFixed(6))));
+' "$FIRST_STARTED_AT")"
+
+if [ -z "$SECOND_RUN_ID" ]; then
+  READY_FOR_SECOND="$(node -e '
+const hours = Number(process.argv[1]);
+const min = Number(process.argv[2]);
+console.log(hours >= min ? "yes" : "no");
+' "$HOURS_SINCE_FIRST" "$MIN_ELAPSED_HOURS")"
+  if [ "$READY_FOR_SECOND" = "yes" ]; then
+    log "elapsed-time gate met; recording second controlled refresh"
+    REFRESH_ARGS=()
+    while IFS= read -r health_id; do
+      [ -n "$health_id" ] || continue
+      REFRESH_ARGS+=(--source-health-id "$health_id")
+    done < <(jq -r '.source_health_ids[]' "$STATE_FILE")
+    run_arcwell job refresh "$PROFILE_ID" \
+      --scope "$SCOPE" \
+      --observed-role-id "$UNCHANGED_ROLE_ID" \
+      --observed-role-id "$CONTROLLED_NEW_ROLE_ID" \
+      "${REFRESH_ARGS[@]}" \
+      --proof-level local_proof \
+      --report-artifact-id job-refresh-one-day-second-checkpoint \
+      >"$ARTIFACT_DIR/second-refresh.json"
+    SECOND_RUN_ID="$(jq -r '.run.id' "$ARTIFACT_DIR/second-refresh.json")"
+    SECOND_STARTED_AT="$(jq -r '.run.started_at' "$ARTIFACT_DIR/second-refresh.json")"
+    tmp_state="$STATE_FILE.tmp"
+    jq \
+      --arg second_run_id "$SECOND_RUN_ID" \
+      --arg second_started_at "$SECOND_STARTED_AT" \
+      '. + {second_run_id: $second_run_id, second_started_at: $second_started_at}' \
+      "$STATE_FILE" >"$tmp_state"
+    mv "$tmp_state" "$STATE_FILE"
+  else
+    log "elapsed-time gate not met yet: ${HOURS_SINCE_FIRST}h < ${MIN_ELAPSED_HOURS}h"
+  fi
+fi
+
+AUDIT_FILE="$ARTIFACT_DIR/refresh-audit.json"
+if run_arcwell job refresh-audit "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --min-elapsed-hours "$MIN_ELAPSED_HOURS" \
+  >"$AUDIT_FILE" 2>"$ARTIFACT_DIR/refresh-audit.err"; then
+  AUDIT_EXIT=0
+else
+  AUDIT_EXIT=$?
+fi
+
+AUDIT_DECISION="$(jq -r '.decision // "unknown"' "$AUDIT_FILE")"
+run_arcwell job weekly-report "$PROFILE_ID" --scope "$SCOPE" >"$ARTIFACT_DIR/weekly-report.json" || true
+run_arcwell ops >"$ARTIFACT_DIR/ops-after.json" || true
+
+if [ "$AUDIT_EXIT" = "0" ] && [ "$AUDIT_DECISION" = "pass" ]; then
+  write_packet "passed" "$AUDIT_DECISION" "" "$HOURS_SINCE_FIRST" "$AUDIT_FILE"
+  log "proof packet: $PACKET_FILE"
+  log "controlled one-day job refresh proof passed"
+  exit 0
+fi
+
+FAILURE="$(jq -r '.missing_requirements // [] | join("; ")' "$AUDIT_FILE" 2>/dev/null || true)"
+if [ -z "$FAILURE" ]; then
+  FAILURE="refresh audit did not pass"
+fi
+write_packet "incomplete" "$AUDIT_DECISION" "$FAILURE" "$HOURS_SINCE_FIRST" "$AUDIT_FILE"
+log "proof packet: $PACKET_FILE"
+if [ "$ALLOW_INCOMPLETE" = "1" ]; then
+  log "recorded incomplete proof packet"
+  exit 0
+fi
+fail "$FAILURE"

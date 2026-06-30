@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""Validate Arcwell wiki editorial review decisions without mutating wiki pages."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
+
+VALID_DECISIONS = {"", "promote", "update_existing", "consolidate", "reject", "hold"}
+HARD_REVIEW_FLAGS = {
+    "mixed_github_owners",
+    "arxiv_overlap",
+    "generated_synthesis_cards",
+    "same_title_pages",
+    "no_existing_page",
+}
+
+
+def now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def split_semicolon(value: str) -> list[str]:
+    return [part.strip() for part in (value or "").split(";") if part.strip()]
+
+
+def flag_key(flag: str) -> str:
+    return flag.split("=", 1)[0]
+
+
+@dataclass
+class QueueRow:
+    rank: str
+    queue: str
+    page_id: str
+    page_title: str
+    action: str
+    score: str
+    review_gate: str
+    page_path: str
+    newest_evidence_at: str
+    primary_count: str
+    secondary_count: str
+    signal_count: str
+    source_card_ids: list[str]
+
+
+@dataclass
+class IndexRow:
+    rank: str
+    queue: str
+    page_id: str
+    page_title: str
+    recommendation: str
+    packet_path: str
+    review_flags: list[str]
+
+
+def load_queue_rows(path: Path) -> dict[tuple[str, str, str], QueueRow]:
+    rows: dict[tuple[str, str, str], QueueRow] = {}
+    with path.open(newline="", encoding="utf-8") as handle:
+        for raw in csv.DictReader(handle):
+            row = QueueRow(
+                rank=raw.get("rank") or "",
+                queue=raw.get("queue") or "",
+                page_id=raw.get("page_id") or "",
+                page_title=raw.get("page_title") or "",
+                action=raw.get("action") or "",
+                score=raw.get("score") or "",
+                review_gate=raw.get("review_gate") or "",
+                page_path=raw.get("page_path") or "",
+                newest_evidence_at=raw.get("newest_evidence_at") or "",
+                primary_count=raw.get("primary_count") or "0",
+                secondary_count=raw.get("secondary_count") or "0",
+                signal_count=raw.get("signal_count") or "0",
+                source_card_ids=split_semicolon(raw.get("source_card_ids") or ""),
+            )
+            rows[(row.rank, row.queue, row.page_id)] = row
+    return rows
+
+
+def load_index_rows(path: Path) -> dict[tuple[str, str, str], IndexRow]:
+    rows: dict[tuple[str, str, str], IndexRow] = {}
+    with path.open(newline="", encoding="utf-8") as handle:
+        for raw in csv.DictReader(handle):
+            row = IndexRow(
+                rank=raw.get("rank") or "",
+                queue=raw.get("queue") or "",
+                page_id=raw.get("page_id") or "",
+                page_title=raw.get("page_title") or "",
+                recommendation=raw.get("recommendation") or "",
+                packet_path=raw.get("packet_path") or "",
+                review_flags=split_semicolon(raw.get("review_flags") or ""),
+            )
+            rows[(row.rank, row.queue, row.page_id)] = row
+    return rows
+
+
+def load_decisions(path: Path) -> list[dict[str, str]]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def validate_decision(
+    decision_row: dict[str, str],
+    queue_row: QueueRow | None,
+    index_row: IndexRow | None,
+) -> tuple[str, list[str], list[str]]:
+    decision = (decision_row.get("decision") or "").strip()
+    rationale = (decision_row.get("rationale") or "").strip()
+    follow_up = (decision_row.get("follow_up") or "").strip()
+    accepted_ids = split_semicolon(decision_row.get("accepted_source_card_ids") or "")
+    affected_ids = split_semicolon(decision_row.get("affected_page_ids") or "")
+    page_id = decision_row.get("page_id") or ""
+    queue = decision_row.get("queue") or ""
+    flags = index_row.review_flags if index_row else split_semicolon(decision_row.get("review_flags") or "")
+    hard_flags = sorted({flag_key(flag) for flag in flags if flag_key(flag) in HARD_REVIEW_FLAGS})
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if decision not in VALID_DECISIONS:
+        errors.append(f"invalid_decision={decision}")
+        return decision or "invalid", errors, warnings
+    if queue_row is None:
+        errors.append("missing_matching_queue_row")
+    if index_row is None:
+        errors.append("missing_matching_index_row")
+    if not decision:
+        return "pending", errors, warnings
+
+    if decision in {"update_existing", "promote", "consolidate", "reject"} and len(rationale) < 20:
+        errors.append("rationale_too_short")
+    if decision == "hold" and len(rationale) < 20 and len(follow_up) < 20:
+        errors.append("hold_requires_rationale_or_follow_up")
+    if decision == "update_existing":
+        if not page_id:
+            errors.append("update_existing_missing_page_id")
+        if page_id and page_id not in affected_ids:
+            errors.append("update_existing_must_affect_page_id")
+        if not accepted_ids:
+            errors.append("update_existing_requires_accepted_source_card_ids")
+        if queue_row and not set(accepted_ids).issubset(set(queue_row.source_card_ids)):
+            errors.append("accepted_source_card_ids_not_in_candidate")
+        if hard_flags and len(rationale) < 80:
+            errors.append("hard_review_flags_need_explicit_rationale")
+    elif decision == "promote":
+        if queue != "generated_knowledge_promotion":
+            errors.append("promote_only_allowed_for_generated_knowledge_promotion")
+        if not accepted_ids:
+            errors.append("promote_requires_accepted_source_card_ids")
+        if queue_row and not set(accepted_ids).issubset(set(queue_row.source_card_ids)):
+            errors.append("accepted_source_card_ids_not_in_candidate")
+    elif decision == "consolidate":
+        if queue != "duplicate_title_consolidation":
+            errors.append("consolidate_only_allowed_for_duplicate_title_queue")
+        if len(affected_ids) < 2:
+            errors.append("consolidate_requires_multiple_affected_page_ids")
+    elif decision == "reject":
+        if accepted_ids:
+            warnings.append("reject_ignores_accepted_source_card_ids")
+
+    if decision in {"update_existing", "promote", "consolidate"} and any(
+        flag_key(flag) == "signal_heavy_evidence" for flag in flags
+    ):
+        warnings.append("signal_heavy_decision_needs_primary_source_review")
+    return decision, errors, warnings
+
+
+def write_csv(path: Path, rows: list[dict[str, object]], fieldnames: list[str]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Validate editorial_decisions_template.csv before any wiki freshness apply step."
+    )
+    parser.add_argument("--decisions", required=True, type=Path)
+    parser.add_argument("--queues", required=True, type=Path)
+    parser.add_argument("--index", required=True, type=Path)
+    parser.add_argument("--proof-dir", required=True, type=Path)
+    args = parser.parse_args()
+
+    args.proof_dir.mkdir(parents=True, exist_ok=True)
+    generated_at = now_iso()
+    queue_rows = load_queue_rows(args.queues)
+    index_rows = load_index_rows(args.index)
+    decisions = load_decisions(args.decisions)
+    validation_rows: list[dict[str, object]] = []
+    update_export_rows: list[dict[str, object]] = []
+    ledger_rows: list[dict[str, object]] = []
+
+    for raw in decisions:
+        key = (raw.get("rank") or "", raw.get("queue") or "", raw.get("page_id") or "")
+        queue_row = queue_rows.get(key)
+        index_row = index_rows.get(key)
+        decision, errors, warnings = validate_decision(raw, queue_row, index_row)
+        accepted_ids = split_semicolon(raw.get("accepted_source_card_ids") or "")
+        affected_ids = split_semicolon(raw.get("affected_page_ids") or "")
+        status = "valid" if not errors else "invalid"
+        if decision == "pending" and not errors:
+            status = "pending"
+        validation_rows.append({
+            "rank": raw.get("rank") or "",
+            "queue": raw.get("queue") or "",
+            "page_id": raw.get("page_id") or "",
+            "page_title": raw.get("page_title") or "",
+            "recommendation": raw.get("recommendation") or "",
+            "decision": decision,
+            "status": status,
+            "errors": ";".join(errors),
+            "warnings": ";".join(warnings),
+            "accepted_source_card_ids": ";".join(accepted_ids),
+            "affected_page_ids": ";".join(affected_ids),
+        })
+        if status == "valid" and decision == "update_existing" and queue_row:
+            update_export_rows.append({
+                "rank": queue_row.rank,
+                "score": queue_row.score,
+                "review_gate": "editorial_decision_update_existing",
+                "action": "update_existing_page",
+                "page_id": queue_row.page_id,
+                "page_title": queue_row.page_title,
+                "page_path": queue_row.page_path,
+                "newest_evidence_at": queue_row.newest_evidence_at,
+                "primary_count": queue_row.primary_count,
+                "secondary_count": queue_row.secondary_count,
+                "signal_count": queue_row.signal_count,
+                "source_card_ids": ";".join(accepted_ids),
+                "decision_rationale": raw.get("rationale") or "",
+            })
+        if status == "valid" and decision in {"hold", "reject"} and queue_row:
+            reviewed_source_card_ids = queue_row.source_card_ids
+            ledger_rows.append({
+                "reviewed_at": generated_at,
+                "rank": queue_row.rank,
+                "queue": queue_row.queue,
+                "page_id": queue_row.page_id,
+                "page_title": queue_row.page_title,
+                "decision": decision,
+                "reviewed_source_card_ids": ";".join(reviewed_source_card_ids),
+                "rationale": raw.get("rationale") or "",
+                "follow_up": raw.get("follow_up") or "",
+            })
+
+    counts: dict[str, int] = {}
+    decision_counts: dict[str, int] = {}
+    for row in validation_rows:
+        counts[str(row["status"])] = counts.get(str(row["status"]), 0) + 1
+        decision_counts[str(row["decision"])] = decision_counts.get(str(row["decision"]), 0) + 1
+    summary = {
+        "ok": counts.get("invalid", 0) == 0,
+        "generated_at": generated_at,
+        "decisions": str(args.decisions),
+        "queues": str(args.queues),
+        "index": str(args.index),
+        "proof_dir": str(args.proof_dir),
+        "decision_rows": len(decisions),
+        "status_counts": counts,
+        "decision_counts": decision_counts,
+        "update_existing_export_rows": len(update_export_rows),
+        "decision_ledger_rows": len(ledger_rows),
+        "remaining_pending": counts.get("pending", 0),
+    }
+    (args.proof_dir / "editorial_decision_validation_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with (args.proof_dir / "editorial_decision_validation_results.jsonl").open(
+        "w", encoding="utf-8"
+    ) as handle:
+        for row in validation_rows:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+    write_csv(
+        args.proof_dir / "editorial_decision_validation_results.csv",
+        validation_rows,
+        [
+            "rank", "queue", "page_id", "page_title", "recommendation", "decision",
+            "status", "errors", "warnings", "accepted_source_card_ids",
+            "affected_page_ids",
+        ],
+    )
+    write_csv(
+        args.proof_dir / "editorial_update_existing_export.csv",
+        update_export_rows,
+        [
+            "rank", "score", "review_gate", "action", "page_id", "page_title",
+            "page_path", "newest_evidence_at", "primary_count", "secondary_count",
+            "signal_count", "source_card_ids", "decision_rationale",
+        ],
+    )
+    write_csv(
+        args.proof_dir / "editorial_decision_ledger.csv",
+        ledger_rows,
+        [
+            "reviewed_at", "rank", "queue", "page_id", "page_title",
+            "decision", "reviewed_source_card_ids", "rationale", "follow_up",
+        ],
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0 if summary["ok"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

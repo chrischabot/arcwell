@@ -1,0 +1,1629 @@
+handle,safe_recommendation,raw_recommendation,score,local_tweets,tech_tweet_hits,bookmarked_items,profile_present,description_present,display_name,description,latest_local_tweet,latest_bookmark_seen,label
+Dimillian,keep,keep,21,101,23,2,yes,yes,Dimillian,"Developer Experience, Codex  @OpenAI
+Builder, Entrepreneur, iOS/macOS, Swift/SwiftUI & more",2026-06-25T06:36:08.261557+00:00,2026-06-27T15:33:21.021429+00:00,@Dimillian - Thomas Ricouard
+OpenAIDevs,keep,keep,20,39,30,30,yes,yes,OpenAIDevs,Official updates for developers building with Codex & the OpenAI Platform • Service status: https://t.co/kZwnwdYYEq,2026-06-25T06:36:15.013616+00:00,2026-06-27T15:33:21.765043+00:00,@OpenAIDevs - OpenAI Developers
+thsottiaux,keep,keep,19,20,18,20,yes,yes,thsottiaux,Codex & ChatGPT @OpenAI,2026-06-27T15:27:36.434733+00:00,2026-06-27T15:33:21.811216+00:00,@thsottiaux - Tibo
+cursor_ai,keep,keep,19,18,15,10,yes,yes,cursor_ai,Coding agent for building ambitious software,2026-06-27T15:27:37.765952+00:00,2026-06-27T15:33:22.066926+00:00,@cursor_ai - Cursor
+dkundel,keep,keep,18,15,9,5,yes,yes,dkundel,"@OpenAI DevX, Codex, gpt-oss, TS Agents SDK  - he/him - Opinions my own",2026-06-27T15:27:36.274163+00:00,2026-06-27T15:33:21.805252+00:00,@dkundel - dominik kundel
+ritakozlov,keep,keep,18,11,6,1,yes,yes,ritakozlov,vp developers & ai @cloudflare ✨ and how does that error make you feel?,2026-06-23T08:57:19.072767+00:00,2026-06-27T15:33:20.440731+00:00,@ritakozlov - rita kozlov 🐀
+aisdk,keep,keep,18,12,2,2,yes,yes,aisdk,The Open Source AI Toolkit for TypeScript. Built by @Vercel.,2026-06-27T15:27:33.827680+00:00,2026-06-27T15:33:20.341273+00:00,@aisdk - AI SDK
+claudeai,keep,keep,17,41,36,34,yes,yes,claudeai,"Claude is an AI assistant built by @anthropicai to be safe, accurate, and secure. Talk to Claude on https://t.co/ZhTwG8d1e5 or download the app.",2026-06-27T15:27:36.992087+00:00,2026-06-27T15:33:22.179381+00:00,@claudeai - Claude
+AnthropicAI,keep,keep,17,30,25,14,yes,yes,AnthropicAI,"We're an AI safety and research company that builds reliable, interpretable, and steerable AI systems. Talk to our AI assistant @claudeai on https://t.co/FhDI3KQh0n.",2026-06-27T15:27:36.530880+00:00,2026-06-27T15:33:21.891589+00:00,@AnthropicAI - Anthropic
+vercel,keep,keep,17,7,7,7,yes,yes,vercel,Agentic Infrastructure for apps and agents.,2026-06-25T06:36:17.322195+00:00,2026-06-27T15:33:22.038464+00:00,@vercel - Vercel
+guinnesschen,keep,keep,17,12,6,2,yes,yes,guinnesschen,"Building codex at @openai, prev @stanford, @imbue_ai",2026-06-25T06:36:11.387572+00:00,2026-06-27T15:33:21.371080+00:00,@guinnesschen - Guinness Chen
+ajambrosino,keep,keep,17,6,4,6,yes,yes,ajambrosino,Codex & Chill @OpenAI,2026-06-27T15:27:34.246658+00:00,2026-06-27T15:33:21.667935+00:00,@ajambrosino - Andrew Ambrosino
+shshnkp,keep,keep,17,4,3,1,yes,yes,shshnkp," AI/ML Technologies Evangelist MLX, CoreAI, Foundation Models. Formerly Product+DevRel @modular (acq. @qualcomm), @pytorch, @awscloud, @nvidia. My own opinions",2026-06-23T08:57:22.609468+00:00,2026-06-27T15:33:20.433551+00:00,@shshnkp - Shashank Prasanna
+ClaudeDevs,keep,keep,16,41,37,18,yes,yes,ClaudeDevs,Official updates for developers building with @ClaudeAI,2026-06-27T15:27:34.482487+00:00,2026-06-27T15:33:20.873318+00:00,@ClaudeDevs - ClaudeDevs
+steipete,keep,keep,16,17,14,17,yes,yes,steipete,"Polyagentmorous ClawFather. Came back from retirement to mess with AI and help a lobster take over the world.
+@OpenClaw🦞 + @OpenAI",2026-06-25T06:36:17.816535+00:00,2026-06-27T15:33:22.093450+00:00,@steipete - Peter Steinberger 🦞
+CloudflareDev,keep,keep,16,18,13,4,yes,yes,CloudflareDev,"Have questions, or building something cool with Cloudflare's Developer products? We're here to help. For help with your account please try @CloudflareHelp",2026-06-25T06:36:10.695250+00:00,2026-06-27T15:33:21.292010+00:00,@CloudflareDev - Cloudflare Developers
+embirico,keep,keep,16,2,2,2,yes,yes,embirico,Codex @OpenAI,2026-06-25T06:36:15.065292+00:00,2026-06-27T15:33:21.770651+00:00,@embirico - Alexander Embiricos
+ClaudeCodeLog,keep,keep,15,28,28,3,yes,yes,ClaudeCodeLog,"UNOFFICIAL – but tolerated – bot posting Claude Code CLI, feature flag & prompt changes. Full CC history in github repo.",2026-06-25T06:36:14.330861+00:00,2026-06-27T15:33:21.687723+00:00,@ClaudeCodeLog - Claude Code Changelog
+trq212,keep,keep,15,27,17,27,yes,yes,trq212,"Claude Code @anthropicai.   prev YC W20, @southpkcommons, @medialab",2026-06-27T15:27:37.653938+00:00,2026-06-27T15:33:22.020787+00:00,@trq212 - Thariq
+bcherny,keep,keep,15,17,16,17,yes,yes,bcherny,Claude Code @anthropicai,2026-06-27T15:27:35.266358+00:00,2026-06-27T15:33:22.177560+00:00,@bcherny - Boris Cherny
+GoogleDeepMind,keep,keep,15,15,13,4,yes,yes,GoogleDeepMind,The engine room of @Google. Building AI safely and responsibly to solve the world’s most complex problems. Join us: https://t.co/jUHQA27iBL,2026-06-27T15:16:32.145336+00:00,2026-06-27T15:33:21.405530+00:00,@GoogleDeepMind - Google DeepMind
+vercel_dev,keep,keep,15,14,12,14,yes,yes,vercel_dev,For developers building on @vercel.,2026-06-27T15:27:37.505740+00:00,2026-06-27T15:33:21.964562+00:00,@vercel_dev - Vercel Developers
+addyosmani,keep,keep,15,7,6,7,yes,yes,addyosmani,"Engineering & DevRel Leader, Prev: Director @GoogleCloud AI/Gemini  ✨, Eng Lead @GoogleChrome • Author @OReillyMedia • Great user, developer & AI experiences",2026-06-25T06:36:18.346979+00:00,2026-06-27T15:33:22.164905+00:00,@addyosmani - Addy Osmani
+googlegemma,keep,keep,15,11,6,5,yes,yes,googlegemma,"The official home of Google's Gemma. Lightweight, state-of-the-art open models by Google DeepMind, built on Gemini tech. What will you build? 🚀💻",2026-06-25T06:36:06.438977+00:00,2026-06-27T15:33:20.817978+00:00,@googlegemma - Google Gemma
+mattpocockuk,keep,keep,15,14,3,4,yes,yes,mattpocockuk,I teach devs for a living. Author of Total TypeScript and AI Hero. Ex-@vercel. Used to be a voice coach.,2026-06-25T06:36:21.036621+00:00,2026-06-27T15:33:22.440207+00:00,@mattpocockuk - Matt Pocock
+mattzcarey,keep,keep,15,13,3,3,yes,yes,mattzcarey,"agents and mcp @cloudflare, former pro windsurfer 🇲🇹🌊 hype @demodaysai @badagentpod.. occasional angel",2026-06-25T06:36:17.850927+00:00,2026-06-27T15:33:22.097027+00:00,@mattzcarey - Matt Carey
+Cloudflare,keep,keep,14,21,18,8,yes,yes,Cloudflare,"Cloudflare is the world’s leading #ConnectivityCloud, and we have our eyes set on an ambitious goal — to help build a #BetterInternet.",2026-06-27T15:27:35.503793+00:00,2026-06-27T15:33:21.906379+00:00,@Cloudflare - Cloudflare
+noahzweben,keep,keep,14,7,6,6,yes,yes,noahzweben,Claude Code PM @anthropicai,2026-06-27T15:27:35.840932+00:00,2026-06-27T15:33:21.437345+00:00,@noahzweben - Noah Zweben
+leerob,keep,keep,14,6,4,6,yes,yes,leerob,Model behavior @cursor_ai. Helping train useful models.,2026-06-25T06:36:19.987689+00:00,2026-06-27T15:33:22.336401+00:00,@leerob - Lee Robinson
+whoiskatrin,keep,keep,14,2,1,2,yes,yes,whoiskatrin,"building agents and sandboxes @cloudflare, so you don't have to",2026-06-25T06:36:13.890356+00:00,2026-06-27T15:33:21.639089+00:00,@whoiskatrin - kate
+OpenAI,keep,keep,13,44,39,19,yes,yes,OpenAI,OpenAI’s mission is to ensure that artificial general intelligence benefits all of humanity. We’re hiring: https://t.co/dJGr6LgzPA,2026-06-27T15:27:37.181325+00:00,2026-06-27T15:33:21.777801+00:00,@OpenAI - OpenAI
+FactoryAI,keep,keep,13,31,11,3,yes,yes,FactoryAI,"Assembling @droid, the frontier software development agent. Available to anyone, with any model, in any IDE/terminal.",2026-06-25T06:36:10.309838+00:00,2026-06-27T15:33:21.247710+00:00,@FactoryAI - Factory
+cognition,keep,keep,13,9,6,5,yes,yes,cognition,"Makers of Devin, the first AI software engineer. We are an applied AI lab building end-to-end software agents. Join us: https://t.co/4Ss9hvpjRG",2026-06-25T06:36:17.196350+00:00,2026-06-27T15:33:22.022582+00:00,@cognition - Cognition
+felixrieseberg,keep,keep,13,5,4,5,yes,yes,felixrieseberg,"Claude Cowork / Code @AnthropicAI, Co-Maintainer https://t.co/g4potti8nq",2026-06-25T06:36:09.828186+00:00,2026-06-27T15:33:21.193353+00:00,@felixrieseberg - Felix Rieseberg
+ctatedev,keep,keep,12,24,18,15,yes,yes,ctatedev,"@Vercel Labs | Created https://t.co/473Fqx4HKt, https://t.co/ZekOfFeoXF, https://t.co/9MKvOdyxN3, https://t.co/Bnt6dbEdSi, https://t.co/SODeKvPbac | Husband & Dad | He/him | Musician, Space Nerd, Foodie | Vegan",2026-06-27T15:27:36.106862+00:00,2026-06-27T15:33:22.148238+00:00,@ctatedev - Chris Tate
+CFchangelog,keep,keep,12,16,10,1,yes,yes,CFchangelog,The official @Cloudflare changelog feed.,2026-06-25T05:32:31.079526+00:00,2026-06-27T15:33:20.484942+00:00,@CFchangelog - Cloudflare Changelog
+jarredsumner,keep,keep,12,7,4,7,yes,yes,jarredsumner,building @bunjavascript at @anthropicai. formerly: @stripe (twice) @thielfellowship. high school dropout. npm i -g bun,2026-06-27T15:27:37.243833+00:00,2026-06-27T15:33:22.304599+00:00,@jarredsumner - Jarred Sumner
+fatih,keep,keep,12,12,4,2,yes,yes,fatih,"Software Engineer at @planetscale. 
+Creator of vim-go. Design addict. Photographer.
+Previously at @github, @digitalocean",2026-06-25T06:36:21.318585+00:00,2026-06-27T15:33:22.471028+00:00,@fatih - Fatih Arslan
+amorriscode,keep,keep,12,3,3,3,yes,yes,amorriscode,"claude code @anthropicAI | ex @stripe
+→ https://t.co/AjndW0qdf0",2026-06-27T15:27:37.864817+00:00,2026-06-27T15:33:22.100686+00:00,@amorriscode - Anthony Morris ツ
+cramforce,keep,keep,12,6,2,6,yes,yes,cramforce,"Self-driving infrastructure
+
+@Vercel CTO.
+Immigrant 🇺🇸/🇩🇪/acc",2026-06-27T15:27:35.102267+00:00,2026-06-27T15:33:22.399134+00:00,@cramforce - Malte Ubl
+_catwu,keep,keep,12,2,2,2,yes,yes,_catwu,"claude code + cowork @anthropicai, prev: @dagster, @scale_ai",2026-06-25T06:36:10.469008+00:00,2026-06-27T15:33:21.267130+00:00,@_catwu - cat
+lydiahallie,keep,keep,12,2,2,2,yes,yes,lydiahallie,Claude Code @AnthropicAI @ClaudeDevs,2026-06-25T06:36:17.661304+00:00,2026-06-27T15:33:22.073950+00:00,@lydiahallie - Lydia Hallie ✨
+alistaiir,keep,keep,12,1,1,1,yes,yes,alistaiir,"Claude Code, @bunjavascript at @anthropicai",2026-06-25T06:36:08.141471+00:00,2026-06-27T15:33:21.010254+00:00,@alistaiir - alistair
+dillon_mulroy,keep,keep,12,2,0,2,yes,yes,dillon_mulroy,"principal engineer @cloudflare • tweets about functional programming, typescript, neovim, & formula 1 • https://t.co/6Vr6DiQUoM • https://t.co/tlUe9v9eZC",2026-06-25T06:36:17.481778+00:00,2026-06-27T15:33:22.055157+00:00,@dillon_mulroy - Dillon Mulroy
+msmps_,keep,keep,12,6,0,1,yes,yes,msmps_,"workers observability @cloudflare • passionate about typescript, rust, and ai • oss @ opentui",2026-06-23T08:57:13.561457+00:00,2026-06-27T15:33:20.413821+00:00,@msmps_ - Matt Simpson
+JackWoth98,keep,keep,11,84,20,1,yes,yes,JackWoth98,Member of Technical Staff @GoogleDeepmind ✨,2026-06-25T06:36:06.787417+00:00,2026-06-27T15:33:20.857146+00:00,@JackWoth98 - Jack Wotherspoon
+JakeKAllDay,keep,keep,11,111,18,1,yes,yes,JakeKAllDay,"Dad
+Works in AI, still doesnt trust it
+FT: Enteprise AI Deployment
+Local AI dabbling: 5070 + 32GB | M4 Max + 64 GB  | 3090 ti + 32 GB",2026-06-25T05:33:31.017629+00:00,2026-06-27T15:33:20.408219+00:00,@JakeKAllDay - Jake
+rauchg,keep,keep,11,20,9,10,yes,yes,rauchg,@vercel CEO,2026-06-25T06:36:19.521244+00:00,2026-06-27T15:33:22.285241+00:00,@rauchg - Guillermo Rauch
+Andy_AJT,keep,keep,11,23,7,1,yes,yes,Andy_AJT,Codex Ambassador | AI Product Engineer & Run AI Demo Nights in London.,2026-06-25T06:36:05.073988+00:00,2026-06-27T15:33:20.665540+00:00,@Andy_AJT - Andy T
+Kimi_Moonshot,keep,keep,11,4,3,2,yes,yes,Kimi_Moonshot,"Built by Moonshot AI to empower everyone to be superhuman. 
+⚡️API: https://t.co/XCrgjXAqMw
+@KimiProduct where we share cool use cases.
+@Kimidevs built for developers",2026-06-25T06:36:07.260723+00:00,2026-06-27T15:33:20.911401+00:00,@Kimi_Moonshot - Kimi.ai
+hugorcd,keep,keep,11,11,3,1,yes,yes,hugorcd,"Software Engineer at @vercel ▲
+Working on https://t.co/Y6m9lUwnIW
+Ambassador @raycast
+Building https://t.co/Zgoa2Ml5oy & https://t.co/Y8kjYlQYA9",2026-06-23T08:53:15.731474+00:00,2026-06-27T15:33:20.328456+00:00,@hugorcd - Hugo
+zeddotdev,keep,keep,11,2,2,2,yes,yes,zeddotdev,A next-generation code editor that enables high-performance collaboration with AI and your team. https://t.co/4Ua0UqLrsv,2026-06-25T06:36:16.154438+00:00,2026-06-27T15:33:21.909870+00:00,@zeddotdev - Zed
+pierceboggan,keep,keep,11,2,1,2,yes,yes,pierceboggan,"developer tools @code and @github
+
+previous: @xamarinhq (acquired by microsoft)",2026-06-25T06:36:16.172910+00:00,2026-06-27T15:33:21.911659+00:00,@pierceboggan - Pierce Boggan
+kuchaev,keep,keep,11,4,1,1,yes,yes,kuchaev,Sr. Director of AI model post-training @NVIDIA,2026-06-23T08:57:08.858904+00:00,2026-06-27T15:33:20.483165+00:00,@kuchaev - Oleksii Kuchaiev
+lenadroid,keep,keep,11,1,1,1,yes,yes,lenadroid,"Senior Director, Developers & AI • Co-Founder of Droid AI • Forbes Tech Council • LLMs • Data • AI/ML • Ex AWS, MSFT Research • Opinions are mine",2026-06-25T06:36:14.381662+00:00,2026-06-27T15:33:21.693248+00:00,@lenadroid - Lena Hall
+HuggingModels,keep,keep,10,116,98,1,yes,yes,HuggingModels,We're sharing/showcasing best of @huggingface models. Follow to stay in loop. Promoting Open-Source models.,2026-06-25T05:33:20.979381+00:00,2026-06-27T15:33:20.372245+00:00,@HuggingModels - Hugging Models
+GergelyOrosz,keep,keep,10,55,17,18,yes,yes,GergelyOrosz,"Writing @Pragmatic_Eng, the #1 software engineering newsletter on Substack. Author of @EngGuidebook. Formerly Uber & Skype.",2026-06-25T06:36:21.060619+00:00,2026-06-27T15:33:22.442180+00:00,@GergelyOrosz - Gergely Orosz
+theo,keep,keep,10,20,14,20,yes,yes,theo,"Full time CEO @t3dotchat. Part time YouTuber, investor, and developer",2026-06-27T15:27:39.747020+00:00,2026-06-27T15:33:22.364820+00:00,@theo - Theo - t3.gg
+prz_chojecki,keep,keep,10,11,7,1,yes,yes,prz_chojecki,"Math Data + Evals + LLMs @ https://t.co/v2xNrVTykE, PhD in mathematics. Frontier AI Lab.",2026-06-23T08:57:17.377887+00:00,2026-06-27T15:33:20.377471+00:00,@prz_chojecki - Przemek Chojecki | PC
+TraffAlex,keep,keep,10,11,6,1,yes,yes,TraffAlex,🤖 Prompt creator 🖼️ Curating daily roundups: AI 📰 Tech ⚡ Crypto 💰 Gaming 🎮 Health 🏥 Security — Best of https://t.co/43zoM1nMea. Follow 💙 ♻️ Repost!,2026-06-23T08:52:42.186252+00:00,2026-06-27T15:33:20.374020+00:00,@TraffAlex - AlexAImaginator
+reach_vb,keep,keep,10,13,5,3,yes,yes,reach_vb,founder mode @OpenAI | ex @huggingface | F1 fan | Here for @at_sofdog’s wisdom | *opinions my own,2026-06-27T15:27:35.289689+00:00,2026-06-27T15:33:21.088331+00:00,@reach_vb - Vaibhav (VB) Srivastav
+haydenbleasel,keep,keep,10,16,4,6,yes,yes,haydenbleasel,Member of Technical Staff @OpenAI. Prev @Vercel @PalantirTech. Building https://t.co/hho1aGkHnU / https://t.co/J9ipOwGGVi / https://t.co/ml9jKeQYmS,2026-06-25T06:36:14.068399+00:00,2026-06-27T15:33:21.660861+00:00,@haydenbleasel - Hayden Bleasel
+eastdakota,keep,keep,10,11,3,1,yes,yes,eastdakota,"A little bit geek, wonk, and nerd. Repeat entrepreneur, recovering lawyer, and former ski instructor. Co-founder & CEO of Cloudflare (NYSE: NET).",2026-06-23T08:53:11.955930+00:00,2026-06-27T15:33:20.498917+00:00,@eastdakota - Matthew Prince 🌥
+zarazhangrui,keep,keep,10,6,2,6,yes,yes,zarazhangrui,Builder. Dangerously skips permissions. Harvard’17. GitHub: https://t.co/KCuEajezlL YouTube: https://t.co/8xzbGWtf6w,2026-06-27T15:27:35.475591+00:00,2026-06-27T15:33:21.196925+00:00,@zarazhangrui - Zara Zhang
+techgirl1908,keep,keep,10,2,1,2,yes,yes,techgirl1908,"VP of DX, Agentic AI Foundation. Helping developers build with agents. I ❤️ open source",2026-06-27T15:27:37.598214+00:00,2026-06-27T15:33:21.992892+00:00,@techgirl1908 - Angie Jones
+ashtom,keep,keep,10,1,1,1,yes,yes,ashtom,Building the world's next developer platform @EntireHQ. 🚀 Former CEO @GitHub.,2026-06-25T06:36:13.732356+00:00,2026-06-27T15:33:21.622410+00:00,@ashtom - Thomas Dohmke
+delba_oliveira,keep,keep,10,1,1,1,yes,yes,delba_oliveira,Claude Code • @ClaudeDevs @AnthropicAI | Prev. @Vercel,2026-06-25T06:36:13.924364+00:00,2026-06-27T15:33:21.642497+00:00,@delba_oliveira - Delba
+heccbrent,keep,keep,10,1,1,1,yes,yes,heccbrent,Developer Experience @OpenAI making developer videos | prev dev video @Twilio * Streaming @ https://t.co/vEDF5mACEv *  Inquiries: contact@chefbrent.com,2026-06-25T06:36:12.155281+00:00,2026-06-27T15:33:21.452054+00:00,@heccbrent - Brent Schooley
+sidbid,keep,keep,10,1,1,1,yes,yes,sidbid,"building Claude Code @AnthropicAI 
+
+previously @robinhoodapp @rubrikinc",2026-06-25T06:36:03.757678+00:00,2026-06-27T15:33:20.522380+00:00,@sidbid - Sid
+cassidoo,keep,keep,10,3,0,3,yes,yes,cassidoo,"Making memes, dreams, & software!
+Sr. Director of Dev Advocacy at @github.
+Married to @ijoosong, mom of 2 nerdy babies.
+She/Her ✝️ Subscribe to my newsletter!",2026-06-25T06:36:21.867071+00:00,2026-06-27T15:33:22.522424+00:00,@cassidoo - Cassidy
+simonw,keep,keep,9,23,18,23,yes,yes,simonw,"Creator @datasetteproj, co-creator Django. PSF board. Hangs out with @natbat. He/Him. Mastodon: https://t.co/t0MrmnJW0K Bsky: https://t.co/OnWIyhX4CH",2026-06-25T06:36:19.820360+00:00,2026-06-27T15:33:22.319138+00:00,@simonw - Simon Willison
+SocketSecurity,keep,keep,9,10,7,1,yes,yes,SocketSecurity,Socket is the #1 software supply chain security platform. Next-gen SCA + SBOM + 0-day prevention. LOVED BY DEVELOPERS. 👀 @npm_malware,2026-06-27T15:27:34.702631+00:00,2026-06-27T15:33:20.774758+00:00,@SocketSecurity - Socket
+jxnlco,keep,keep,9,12,4,2,yes,yes,jxnlco,everything experience @openai,2026-06-27T15:27:34.152462+00:00,2026-06-27T15:33:20.598368+00:00,@jxnlco - jason
+nicoalbanese10,keep,keep,9,3,3,3,yes,yes,nicoalbanese10,"@aisdk @vercel, unfortunate @arsenal fan, like to build stuff",2026-06-25T06:36:14.593676+00:00,2026-06-27T15:33:21.718696+00:00,@nicoalbanese10 - Nico Albanese
+dsp_,keep,keep,9,6,3,2,yes,yes,dsp_,Member of Technical Staff @AnthropicAI. Co-Creator of https://t.co/cn31cNYQD3. Ex-Meta. Playing with computers and tech. https://t.co/yDyCddC26H,2026-06-25T06:36:09.551997+00:00,2026-06-27T15:33:21.164244+00:00,@dsp_ - David Soria Parra
+mntruell,keep,keep,9,3,2,3,yes,yes,mntruell,Building @cursor_ai,2026-06-25T06:36:17.569243+00:00,2026-06-27T15:33:22.065063+00:00,@mntruell - Michael Truell
+AmpCode,keep,keep,9,3,1,1,yes,yes,AmpCode,The frontier coding agent.,2026-06-27T15:27:36.889999+00:00,2026-06-27T15:33:21.647748+00:00,@AmpCode - Amp
+elithrar,keep,keep,9,1,1,1,yes,yes,elithrar,“who do we say the rules are for?” “other people.” • VP product @cloudflare,2026-06-25T06:36:17.236883+00:00,2026-06-27T15:33:22.026350+00:00,@elithrar - Matt Silverlock 🐀
+mem0ai,keep,keep,9,4,1,1,yes,yes,mem0ai,Memory Layer for your AI agents. Open source: https://t.co/HqLHhUMUpN,2026-06-23T08:57:11.827895+00:00,2026-06-27T15:33:20.487047+00:00,@mem0ai - mem0
+michellechen,keep,keep,9,1,1,1,yes,yes,michellechen,terminal romantic @cloudflare,2026-06-25T06:36:07.211996+00:00,2026-06-27T15:33:20.905349+00:00,@michellechen - michelle
+saffronhuang,keep,keep,9,1,1,1,yes,yes,saffronhuang,"how shall we live together?
+
+societal impacts researcher @AnthropicAI • ex @GoogleDeepMind @AISecurityInst⋅ @collect_intel co-founder • views mine",2026-06-25T06:36:14.456928+00:00,2026-06-27T15:33:21.700904+00:00,@saffronhuang - Saffron Huang
+tomgreenwald,keep,keep,9,1,1,1,yes,yes,tomgreenwald,"Building @usemagnitude. Coding agents, dev tools, open source. YC S25",2026-06-21T19:19:05.792172+00:00,2026-06-27T15:33:20.312177+00:00,@tomgreenwald - Tom Greenwald
+sawyerhood,keep,keep,8,12,7,2,yes,yes,sawyerhood,"Software Engineer that is building weird shit in public, latest projects:  https://t.co/rQyv2zpSkj. Prev: @figma, @facebook.",2026-06-25T06:36:09.244565+00:00,2026-06-27T15:33:21.127728+00:00,@sawyerhood - Sawyer Hood
+GaryMarcus,keep,keep,8,35,6,1,yes,yes,GaryMarcus,"OG GenAI Skeptic; spoke at US Senate. Warned about hallucinations in 2001. Advocating world models & neurosymbolic AI ever since. Author, Marcus on AI & 6 books",2026-06-25T05:33:04.225272+00:00,2026-06-27T15:33:20.386780+00:00,@GaryMarcus - Gary Marcus
+harvey,keep,keep,8,11,6,1,yes,yes,harvey,AI for the world’s most complex legal work.,2026-06-23T08:53:14.580901+00:00,2026-06-27T15:33:20.490496+00:00,@harvey - Harvey
+tessak22,keep,keep,8,5,4,5,yes,yes,tessak22,"Unapologetically Fearless | Dev GTM @tabstack @mozilla + @builtfordevs, former DevRel @Snapchat, @Twitter+. Biz + Dev 🧠 Obsessed with cows, justice & Jesus.",2026-06-27T15:27:39.243283+00:00,2026-06-27T15:33:22.408823+00:00,@tessak22 - Tessa Kriesel
+MiniMax_AI,keep,keep,8,13,3,3,yes,yes,MiniMax_AI,"Agent: @MiniMaxAgent 
+Token Plan: https://t.co/BDCycxepZw 
+API: https://t.co/fHRdSV7BwZ
+Community: https://t.co/uhxxfLgkLU",2026-06-27T15:27:34.082773+00:00,2026-06-27T15:33:20.402749+00:00,@MiniMax_AI - MiniMax (official)
+AriX,keep,keep,8,7,3,1,yes,yes,AriX,"@OpenAI. Previously co-founder of https://t.co/EpbAUfAcoO, manager of Shortcuts at Apple, co-founder of Workflow.",2026-06-27T15:27:34.966397+00:00,2026-06-27T15:33:20.931361+00:00,@AriX - Ari Weinstein
+sama,keep,keep,8,2,2,2,yes,yes,sama,AI is cool i guess,2026-06-27T15:27:37.040162+00:00,2026-06-27T15:33:21.727738+00:00,@sama - Sam Altman
+stitchbygoogle,keep,keep,8,2,2,2,yes,yes,stitchbygoogle,"Stitch by @GoogleLabs turns your ideas into beautiful interface designs, powered by some of the latest Gemini models. Try free of charge.",2026-06-25T06:36:09.962768+00:00,2026-06-27T15:33:21.210802+00:00,@stitchbygoogle - Stitch by Google
+doodlestein,keep,keep,8,1,0,1,yes,yes,doodlestein,"Former Quant Investor | My Open Source Projects: https://t.co/9qbOCDlaqM |
+Try https://t.co/oCtjI2mBIl , my collection of agent coding tooling.",2026-06-25T06:36:11.851652+00:00,2026-06-27T15:33:21.420868+00:00,@doodlestein - Jeffrey Emanuel
+kathyyliao,keep,keep,8,1,0,1,yes,yes,kathyyliao,"product @cloudflare 😎
+https://t.co/HwteiBYYR4",2026-06-25T06:36:10.678128+00:00,2026-06-27T15:33:21.290209+00:00,@kathyyliao - kathyl
+Dimillian,keep,keep,7,101,23,2,yes,no,Dimillian,,2026-06-25T06:36:08.261557+00:00,2026-06-27T15:33:21.021429+00:00,@Dimillian - Thomas Ricouard
+karpathy,keep,keep,7,13,10,13,yes,yes,karpathy,I like training large deep neural nets.,2026-06-27T15:27:37.532227+00:00,2026-06-27T15:33:21.956925+00:00,@karpathy - Andrej Karpathy
+GoogleCloudTech,keep,keep,7,14,6,2,yes,yes,GoogleCloudTech,"Follow along for how-tos, demos, product news, and more.
+
+For company updates, check out @GoogleCloud.
+
+Watch #GoogleCloudNext on demand ⬇️",2026-06-25T06:36:06.771253+00:00,2026-06-27T15:33:20.855390+00:00,@GoogleCloudTech - Google Cloud Tech
+jlongster,keep,keep,7,8,5,1,yes,yes,jlongster,"work at @opencode. prev @stripe, maker of @actualbudget, @mozilla. also started prettier.",2026-06-25T06:36:11.521442+00:00,2026-06-27T15:33:21.383992+00:00,@jlongster - James Long
+GeminiApp,keep,keep,7,5,4,1,yes,yes,GeminiApp,"The Gemini app turns research into reality, bringing frontier AI experiences like Omni, Deep Think, Nano Banana, and more to hundreds of millions of people.",2026-06-25T06:36:13.290814+00:00,2026-06-27T15:33:21.575302+00:00,@GeminiApp - Google Gemini
+NousResearch,keep,keep,7,13,3,3,yes,yes,NousResearch,"A bunch of nerds making progress toward open source AI
+https://t.co/vrD0aDJeto",2026-06-25T06:36:06.136374+00:00,2026-06-27T15:33:20.782168+00:00,@NousResearch - Nous Research
+beyang,keep,keep,7,12,3,2,yes,yes,beyang,"Amplifying human agency @ampcode, founder @sourcegraph",2026-06-25T06:36:17.695936+00:00,2026-06-27T15:33:22.077764+00:00,@beyang - Beyang
+EnoReyes,keep,keep,7,8,3,2,yes,yes,EnoReyes,cto @FactoryAI - Building software that builds software,2026-06-25T06:36:16.789324+00:00,2026-06-27T15:33:21.979239+00:00,@EnoReyes - Eno Reyes
+dexhorthy,keep,keep,7,11,3,1,yes,yes,dexhorthy,"building the post-IDE IDE at https://t.co/9PCpYRSVea - @aitinkerers sf lead, prev @replicatedhq @SproutSocial @nasa - ai that works pod @ https://t.co/69BhaNtWfd",2026-06-23T08:53:10.677294+00:00,2026-06-27T15:33:20.326624+00:00,@dexhorthy - dex
+sqs,keep,keep,7,4,2,4,yes,yes,sqs,"CEO & Member of Technical Staff @ampcode, founded @sourcegraph",2026-06-25T06:36:15.417436+00:00,2026-06-27T15:33:21.834212+00:00,@sqs - Quinn Slack
+UnslothAI,keep,keep,7,2,2,1,yes,yes,UnslothAI,Train and run models locally! 🦥 https://t.co/2kXqhhvLsb,2026-06-23T08:52:42.500405+00:00,2026-06-27T15:33:20.317667+00:00,@UnslothAI - Unsloth AI
+thdxr,keep,keep,7,6,1,6,yes,yes,thdxr,"building @opencode at @anomalyco
+not the ceo",2026-06-27T15:27:37.698476+00:00,2026-06-27T15:33:22.188490+00:00,@thdxr - dax
+btaylor,keep,keep,7,1,1,1,yes,yes,btaylor,Co-Founder @SierraPlatform. Board @OpenAI.,2026-06-25T06:36:09.227614+00:00,2026-06-27T15:33:21.125993+00:00,@btaylor - Bret Taylor
+charmaine_klee,keep,keep,7,1,1,1,yes,yes,charmaine_klee,"@anthropicai. prev: @valdottown, dev tools @snap 👻, @unitygames labs. 🇨🇦",2026-06-25T06:36:13.012353+00:00,2026-06-27T15:33:21.543438+00:00,@charmaine_klee - charmaine
+DarioAmodei,keep,keep,7,1,1,1,yes,yes,DarioAmodei,Anthropic CEO. https://t.co/qXHIf42jTl,2026-06-23T08:52:12.982797+00:00,2026-06-27T15:33:20.430004+00:00,@DarioAmodei - Dario Amodei
+helloitsaustin,keep,keep,7,1,1,1,yes,yes,helloitsaustin,doing growth marketing stuff @anthropicai,2026-06-25T06:36:09.295033+00:00,2026-06-27T15:33:21.133043+00:00,@helloitsaustin - austin lau
+jeantimex,keep,keep,7,11,1,1,yes,yes,jeantimex,Maps JavaScript engineer @google、日本語を勉強しています,2026-06-23T08:53:17.625860+00:00,2026-06-27T15:33:20.461840+00:00,@jeantimex - jeantimex
+lexxbarn,keep,keep,7,1,1,1,yes,yes,lexxbarn,"Leading influencer/podcast @anthropicai, prev did influ and social at @notionhq amongst other things like pop-ups | Views are my own ✌🏼",2026-06-25T06:36:17.764456+00:00,2026-06-27T15:33:22.087906+00:00,@lexxbarn - Lexie
+badlogicgames,keep,keep,7,2,0,2,yes,yes,badlogicgames,"Armin's handler at https://t.co/B05ybKGkzx. Old man yelling at Claudes.
+
+https://t.co/Q1wG57v1yc
+
+https://t.co/mnOoWUr0TO
+
+https://t.co/8i5vIRE0Wn",2026-06-25T06:36:09.138421+00:00,2026-06-27T15:33:21.116879+00:00,@badlogicgames - Mario Zechner
+timneutkens,keep,keep,7,2,0,2,yes,yes,timneutkens,"Tech lead for Next.js and Turbopack @vercel, co-author of @nextjs, MDX, Micro, and ncc. Opinions are my own.",2026-06-27T15:27:36.594377+00:00,2026-06-27T15:33:21.534869+00:00,@timneutkens - Tim
+aiDotEngineer,keep,keep,7,10,0,0,yes,no,aiDotEngineer,,2026-06-23T08:53:02.884034+00:00,,@aiDotEngineer - AI Engineer
+shadcn,review_keep_leaning,review_keep_leaning,6,20,5,10,yes,yes,shadcn,I own a computer / https://t.co/4fNiupeP5z / https://t.co/bqCwwgHFQ4,2026-06-27T15:27:33.763663+00:00,2026-06-27T15:33:22.232709+00:00,@shadcn - shadcn
+GoogleOSS,review_keep_leaning,review_keep_leaning,6,10,5,0,yes,no,GoogleOSS,,2026-06-25T05:33:10.547679+00:00,,@GoogleOSS - Google Open Source
+Vercantez,review_keep_leaning,review_keep_leaning,6,3,2,2,yes,yes,Vercantez,Building @useCamelAI Ex Apple (Swift/WebKit),2026-06-25T06:36:09.689808+00:00,2026-06-27T15:33:21.178694+00:00,@Vercantez - Miguel Salinas
+GoogleAIStudio,review_keep_leaning,review_keep_leaning,6,6,2,0,yes,no,GoogleAIStudio,,2026-06-25T05:33:09.212259+00:00,,@GoogleAIStudio - Google AI Studio
+kitlangton,review_keep_leaning,review_keep_leaning,6,4,1,4,yes,yes,kitlangton,"Over 9,000x Developer ⋅ 𝚘𝚙𝚎𝚗𝚌𝚘𝚍𝚎 ⋅ https://t.co/YIWUfa4RSA",2026-06-27T15:27:34.648389+00:00,2026-06-27T15:33:21.309666+00:00,@kitlangton - Kit Langton
+walden_yan,review_keep_leaning,review_keep_leaning,6,2,1,2,yes,yes,walden_yan,I sometimes code @cognition,2026-06-25T06:36:17.128863+00:00,2026-06-27T15:33:22.015210+00:00,@walden_yan - Walden
+alexandr_wang,review_keep_leaning,review_keep_leaning,6,1,1,1,yes,yes,alexandr_wang,"chief ai officer @meta, founder @scale_ai. rational in the fullness of time",2026-06-25T06:36:08.299866+00:00,2026-06-27T15:33:21.025050+00:00,@alexandr_wang - Alexandr Wang
+haroonc,review_keep_leaning,review_keep_leaning,6,4,1,1,yes,yes,haroonc,"Dad of two. Building in AI for 10 years. Founder @seeko_so, helping bring teams get more from AI. Berkeley ML ‘19.",2026-06-23T08:53:14.157706+00:00,2026-06-27T15:33:20.463585+00:00,@haroonc - Haroon Choudery
+kalomaze,review_keep_leaning,review_keep_leaning,6,11,1,1,yes,yes,kalomaze,"ML researcher (@primeintellect), speculator • extremely silly jester",2026-06-23T08:57:07.880288+00:00,2026-06-27T15:33:20.379281+00:00,@kalomaze - kalomaze
+petergyang,review_keep_leaning,review_keep_leaning,6,1,1,1,yes,yes,petergyang,Practical AI tutorials and interviews for busy people | Get my best AI skills and guides at https://t.co/6VAA6p81x6,2026-06-25T06:36:06.506638+00:00,2026-06-27T15:33:20.825248+00:00,@petergyang - Peter Yang
+Replit,review_keep_leaning,review_keep_leaning,6,1,1,1,yes,yes,Replit,"Idea to app, fast. Create beautiful, modern web applications at the speed of thought with the power of Replit's AI Agent.",2026-06-25T06:36:12.648746+00:00,2026-06-27T15:33:21.504504+00:00,@Replit - Replit ⠕
+rxwei,review_keep_leaning,review_keep_leaning,6,1,1,1,yes,yes,rxwei,AI frameworks at Apple,2026-06-25T06:36:11.710871+00:00,2026-06-27T15:33:21.403541+00:00,@rxwei - Richard Wei
+sayashk,review_keep_leaning,review_keep_leaning,6,1,1,1,yes,yes,sayashk,"I tweet about AI agents, AI evals, AI for science.
+AI as Normal Technology: https://t.co/5amOkqKDf2
+Book: https://t.co/DabpkhNrcM",2026-06-23T08:52:13.023244+00:00,2026-06-27T15:33:20.435358+00:00,@sayashk - Sayash Kapoor
+tomosman,review_keep_leaning,review_keep_leaning,6,1,1,1,yes,yes,tomosman,"Exploring what's possible with technology | Initiator of @JunoAgent, https://t.co/DeyFTaQpIW. | Tool Maker",2026-06-23T08:52:12.403406+00:00,2026-06-27T15:33:20.308609+00:00,@tomosman - Tom Osman 🐦‍⬛
+xenovacom,review_keep_leaning,review_keep_leaning,6,1,1,1,yes,yes,xenovacom,Bringing the power of machine learning to the web. Currently working on Transformers.js (@huggingface 🤗),2026-06-23T08:52:12.737495+00:00,2026-06-27T15:33:20.381292+00:00,@xenovacom - Xenova
+xeophon,review_keep_leaning,review_keep_leaning,6,1,1,1,yes,yes,xeophon,evals @PrimeIntellect | open models @interconnectsai,2026-06-23T08:52:12.674017+00:00,2026-06-27T15:33:20.370516+00:00,@xeophon - Florian Brand
+jh3yy,review_keep_leaning,review_keep_leaning,6,11,0,11,yes,yes,jh3yy,"designing interfaces. engineering experiences.
+many can build it. few can explain it.
+
+@shopify brand design studio
+
+💎 playbook waitlist → https://t.co/DtDQ0KB5hQ",2026-06-27T15:27:39.675343+00:00,2026-06-27T15:33:22.313501+00:00,@jh3yy - jhey ʕ•ᴥ•ʔ
+bytebot,review_keep_leaning,review_keep_leaning,6,1,0,1,yes,yes,bytebot,"Applied AI, open source, databases & infrastructure, remote. itinerant businessperson. globalist.",2026-06-25T06:36:18.216408+00:00,2026-06-27T15:33:22.152287+00:00,@bytebot - Colin Charles
+demishassabis,review_keep_leaning,review_keep_leaning,6,1,0,1,yes,yes,demishassabis,Nobel Laureate. Co-Founder & CEO @GoogleDeepMind - working on AGI. Solving disease @IsomorphicLabs. Trying to understand the fundamental nature of reality.,2026-06-25T06:36:10.621623+00:00,2026-06-27T15:33:21.284887+00:00,@demishassabis - Demis Hassabis
+evilrabbit_,review_keep_leaning,review_keep_leaning,6,1,0,1,yes,yes,evilrabbit_,@vercel Founding Designer | Co-created the new “Anda Pa’ Allá” meme.,2026-06-25T06:36:14.102307+00:00,2026-06-27T15:33:21.664373+00:00,@evilrabbit_ - Evil Rabbit
+gdb,review_keep_leaning,review_keep_leaning,6,1,0,1,yes,yes,gdb,President & Co-Founder @OpenAI,2026-06-25T06:36:13.103834+00:00,2026-06-27T15:33:21.552453+00:00,@gdb - Greg Brockman
+RachelTobac,review_keep_leaning,review_keep_leaning,6,1,0,1,yes,yes,RachelTobac,"Friendly Hacker & CEO @SocialProofSec security awareness/social engineering prevention Training, Videos, Talks | 3X @DEFCON🥈| Ex CISA gov Tech Advisory Council",2026-06-25T06:36:21.078094+00:00,2026-06-27T15:33:22.443992+00:00,@RachelTobac - Rachel Tobac
+RLanceMartin,review_keep_leaning,review_keep_leaning,6,1,0,1,yes,yes,RLanceMartin,MTS @anthropicai,2026-06-25T06:36:06.532297+00:00,2026-06-27T15:33:20.827040+00:00,@RLanceMartin - Lance Martin
+EffectTS_,review_keep_leaning,review_keep_leaning,6,9,0,0,yes,no,EffectTS_,,2026-06-25T05:32:56.271610+00:00,,@EffectTS_ - Effect | TypeScript for the AI Era
+ImLunaHey,review_keep_leaning,review_keep_leaning,5,99,22,0,yes,no,ImLunaHey,,2026-06-25T05:33:23.915110+00:00,,@ImLunaHey - luna
+FredKSchott,review_keep_leaning,review_keep_leaning,5,21,6,2,yes,yes,FredKSchott,@astrodotbuild co-creator • Flue creator • ex-CEO of HTML,2026-06-27T15:27:34.618608+00:00,2026-06-27T15:33:20.753069+00:00,@FredKSchott - fks
+HiTw93,review_keep_leaning,review_keep_leaning,5,101,5,2,yes,yes,HiTw93,Kaku · Pake · MiaoYan · Waza · Kami · https://t.co/PAsOstTM76,2026-06-25T06:36:10.118101+00:00,2026-06-27T15:33:21.227496+00:00,@HiTw93 - Tw93
+mitsuhiko,review_keep_leaning,review_keep_leaning,5,16,4,6,yes,yes,mitsuhiko,Creator of Flask. Building at https://t.co/uGuzfu0LKT. Bypassing Permissions. Can hand crank. Husband and father of 3 — “more nuanced in person”,2026-06-27T15:27:37.901760+00:00,2026-06-27T15:33:22.115355+00:00,@mitsuhiko - Armin Ronacher ⇌
+bunjavascript,review_keep_leaning,review_keep_leaning,5,7,1,4,yes,yes,bunjavascript,"Bun is a fast, all-in-one toolkit for installing, bundling, running and testing JavaScript & TypeScript. To install: `npm i -g bun`",2026-06-25T06:36:10.135801+00:00,2026-06-27T15:33:21.229335+00:00,@bunjavascript - Bun
+adamwathan,review_keep_leaning,review_keep_leaning,5,1,1,1,yes,yes,adamwathan,Markdown engineer. Creator of @tailwindcss. Listener of Slayer. Austin 3:16.,2026-06-25T06:36:15.537167+00:00,2026-06-27T15:33:21.847146+00:00,@adamwathan - Adam Wathan
+googledevs,review_keep_leaning,review_keep_leaning,5,1,1,1,yes,yes,googledevs,"Discover the latest developer tools, resources, events, and announcements to help you build smarter, ship faster. 🚀",2026-06-25T06:36:12.725903+00:00,2026-06-27T15:33:21.514507+00:00,@googledevs - Google for Developers
+ID_AA_Carmack,review_keep_leaning,review_keep_leaning,5,10,1,1,yes,yes,ID_AA_Carmack,"AGI at Keen Technologies, former CTO Oculus VR, Founder Id Software and Armadillo Aerospace",2026-06-25T06:36:21.504107+00:00,2026-06-27T15:33:22.488956+00:00,@ID_AA_Carmack - John Carmack
+nexxeln,review_keep_leaning,review_keep_leaning,5,11,1,1,yes,yes,nexxeln,cardist and maker of things • building @opencode,2026-06-23T08:57:13.941744+00:00,2026-06-27T15:33:20.457924+00:00,@nexxeln - nexxel
+mipsytipsy,review_keep_leaning,review_keep_leaning,5,3,0,3,yes,yes,mipsytipsy,"honeycomb, observability, the second edition of ""Observability Engineering"" is coming out soon. find me on substack, bsky, LI, and occasionally here. 🐝🏳️‍🌈🦄",2026-06-25T06:36:20.438506+00:00,2026-06-27T15:33:22.379321+00:00,@mipsytipsy - Charity Majors
+clairevo,review_keep_leaning,review_keep_leaning,5,11,0,1,yes,yes,clairevo,building @chatprd • 🎧 host https://t.co/9WUoI4N5GU  👩‍👦‍👦 mama 💻 3x CPTO 🧠 pm + eng + ai + startups 😍 @elawless 📱chiefproductofficer on tiktok,2026-06-23T08:53:08.155626+00:00,2026-06-27T15:33:20.419445+00:00,@clairevo - claire vo 🖤
+doctorow,review_keep_leaning,review_keep_leaning,5,1,0,1,yes,yes,doctorow,"New book: The Reverse Centaur's Guide to Life After AI 
+https://t.co/3gAAFiEgJJ
+
+@pluralistic@mamot.fr (Masto)/@doctorow.pluralistic.net (Bsky)",2026-06-25T06:36:21.300764+00:00,2026-06-27T15:33:22.469043+00:00,@doctorow - Cory Doctorow NO LONGER ON TWIT TER
+itsDanielSuarez,review_keep_leaning,review_keep_leaning,5,1,0,1,yes,yes,itsDanielSuarez,"NYT Bestselling Author. Writes high-tech / sci-fi thrillers: Daemon, Freedom™, Kill Decision, Influx, Change Agent, Delta-v & Critical Mass.
+
+BSky| Mastodon| FB",2026-06-25T06:36:21.095777+00:00,2026-06-27T15:33:22.445771+00:00,@itsDanielSuarez - Daniel Suarez ✍️ New Short Story ~ HEIR APPARENT
+lewis_goodall,review_keep_leaning,review_keep_leaning,5,1,0,1,yes,yes,lewis_goodall,Reporter. Presenter: @thenewsagents and Sunday with Lewis Goodall @lbc | DMs open- tell me your stories. Enquiries: LewisGoodallTeam@unitedtalent.com,2026-06-25T06:36:20.611622+00:00,2026-06-27T15:33:22.395714+00:00,@lewis_goodall - Lewis Goodall
+RandallKanna,review_keep_leaning,review_keep_leaning,5,1,0,1,yes,yes,RandallKanna,Founder at https://t.co/R65ale13Mm (@tryKelsey) helping teams win in AI search.,2026-06-25T06:36:21.628757+00:00,2026-06-27T15:33:22.496089+00:00,@RandallKanna - Randall Kanna Franson
+sarah_edo,review_keep_leaning,review_keep_leaning,5,1,0,1,yes,yes,sarah_edo,"Opinions my own
+
+Area Tech Lead, AI and Web Ecosystem @chrome, Formerly Sr. Director of Core Infra @google • O'Reilly Author • https://t.co/HhzYWwxYAH",2026-06-25T06:36:20.401682+00:00,2026-06-27T15:33:22.375607+00:00,@sarah_edo - Sarah Drasner
+GitHubNext,review_keep_leaning,review_keep_leaning,5,0,0,0,no,no,,,,,@GitHubNext - GitHub Next
+ChombaBupe,review_keep_leaning,review_keep_leaning,4,64,17,0,yes,no,ChombaBupe,,2026-06-25T05:32:36.121408+00:00,,@ChombaBupe - Chomba Bupe
+0xblacklight,review_keep_leaning,review_keep_leaning,4,71,15,0,yes,no,0xblacklight,,2026-06-25T05:32:03.138351+00:00,,@0xblacklight - Kyle Mistele 🏴‍☠️
+GoogleWorkspace,review_keep_leaning,review_keep_leaning,4,19,15,0,yes,no,GoogleWorkspace,,2026-06-25T05:33:11.171664+00:00,,@GoogleWorkspace - Google Workspace
+9to5mac,review_keep_leaning,review_keep_leaning,4,100,13,0,yes,no,9to5mac,,2026-06-25T05:32:06.782654+00:00,,@9to5mac - 9to5Mac
+MacRumors,review_keep_leaning,review_keep_leaning,4,78,12,0,yes,no,MacRumors,,2026-06-25T05:33:53.297166+00:00,,@MacRumors - MacRumors.com
+LyalinDotCom,review_keep_leaning,review_keep_leaning,4,98,11,0,yes,no,LyalinDotCom,,2026-06-25T05:33:51.117368+00:00,,@LyalinDotCom - Dmitry Lyalin
+majidmanzarpour,review_keep_leaning,review_keep_leaning,4,11,7,1,yes,yes,majidmanzarpour,"Technology Advisor, Game Designer, Prompt Wizard, Sold Startup to @Google",2026-06-23T08:57:10.099776+00:00,2026-06-27T15:33:20.351975+00:00,@majidmanzarpour - Majid Manzarpour
+AravSrinivas,review_keep_leaning,review_keep_leaning,4,19,6,1,yes,yes,AravSrinivas,CEO @perplexity_ai,2026-06-25T06:36:11.783805+00:00,2026-06-27T15:33:21.413667+00:00,@AravSrinivas - Aravind Srinivas
+mitchellh,review_keep_leaning,review_keep_leaning,4,14,4,4,yes,yes,mitchellh,"Creator of Ghostty. 👻 Prev founded @HashiCorp, created Vagrant, Terraform, Vault, and others.",2026-06-25T06:36:14.398966+00:00,2026-06-27T15:33:21.695174+00:00,@mitchellh - Mitchell Hashimoto
+satyanadella,review_keep_leaning,review_keep_leaning,4,4,3,2,yes,yes,satyanadella,Chairman and CEO at Microsoft,2026-06-25T06:36:06.975756+00:00,2026-06-27T15:33:20.877061+00:00,@satyanadella - Satya Nadella
+OfficialLoganK,review_keep_leaning,review_keep_leaning,4,2,2,2,yes,yes,OfficialLoganK,"Member of technical staff, working on Gemini, @GoogleAIStudio, the Gemini API, & Kaggle. My views!",2026-06-25T06:36:14.364446+00:00,2026-06-27T15:33:21.691337+00:00,@OfficialLoganK - Logan Kilpatrick
+datacurve,review_keep_leaning,review_keep_leaning,4,7,2,0,yes,no,datacurve,,2026-06-23T08:53:10.286535+00:00,,@datacurve - Datacurve
+serenaa_ge,review_keep_leaning,review_keep_leaning,4,4,1,1,yes,yes,serenaa_ge,ceo @datacurve,2026-06-25T06:36:04.036819+00:00,2026-06-27T15:33:20.554377+00:00,@serenaa_ge - Serena Ge (Datacurve)
+typescript,review_keep_leaning,review_keep_leaning,4,1,1,1,yes,yes,typescript,TypeScript is a language for application-scale JavaScript development. It's a typed superset of JavaScript that compiles to plain JavaScript.,2026-06-25T06:36:06.820368+00:00,2026-06-27T15:33:20.860942+00:00,@typescript - TypeScript
+AmazonAppDev,review_keep_leaning,review_keep_leaning,4,2,1,0,yes,no,AmazonAppDev,,2026-06-25T05:32:13.740426+00:00,,@AmazonAppDev - Amazon Developer
+MetaforDevs,review_keep_leaning,review_keep_leaning,4,3,1,0,yes,no,MetaforDevs,,2026-06-25T05:33:59.979070+00:00,,@MetaforDevs - Meta for Developers
+abjt14,review_keep_leaning,review_keep_leaning,4,7,0,1,yes,yes,abjt14,senior design engineer @aave @family,2026-06-23T08:53:01.376001+00:00,2026-06-27T15:33:20.467088+00:00,@abjt14 - Abhijeet Singh
+gucaslelfond,review_keep_leaning,review_keep_leaning,4,1,0,1,yes,yes,gucaslelfond,software @a24 + writing online,2026-06-25T06:36:16.825235+00:00,2026-06-27T15:33:21.983089+00:00,@gucaslelfond - lucas gelfond
+makisuo,review_keep_leaning,review_keep_leaning,4,1,0,1,yes,yes,makisuo,"Founding Engineer @Superwall               
+Working on https://t.co/ULVVknxXsT
+https://t.co/mqumFI8AJF",2026-06-25T06:36:18.433781+00:00,2026-06-27T15:33:22.173987+00:00,@makisuo - Makisuo
+onetwoval,review_keep_leaning,review_keep_leaning,4,1,0,1,yes,yes,onetwoval,Code SWE @MistralAI,2026-06-25T06:36:18.616038+00:00,2026-06-27T15:33:22.192112+00:00,@onetwoval - Val
+pushmatrix,review_keep_leaning,review_keep_leaning,4,1,0,1,yes,yes,pushmatrix,Distinguished Engineer @ Shopify. Building random experiments in my spare time.,2026-06-23T08:52:12.972311+00:00,2026-06-27T15:33:20.428245+00:00,@pushmatrix - Daniel Beauchamp
+taylor_atx,review_keep_leaning,review_keep_leaning,4,1,0,1,yes,yes,taylor_atx,"building products developers love & touching grass. product @netlify. ex PlanetScale, Stoplight, Keen IO & other startups. my opinions. she/her. on 🦋.",2026-06-25T06:36:20.758961+00:00,2026-06-27T15:33:22.412371+00:00,@taylor_atx - Taylor Barnett-Torabi
+timsneath,review_keep_leaning,review_keep_leaning,4,1,0,1,yes,yes,timsneath,"Developer tools and frameworks at Apple. I aspire to build delightful products, and to make others smile.",2026-06-23T08:52:13.075604+00:00,2026-06-27T15:33:20.449041+00:00,@timsneath - Tim Sneath
+aikordek,review_keep_leaning,review_keep_leaning,4,0,0,0,no,no,,,,,@aikordek - Ai Kordek
+AsariAILabs,review_keep_leaning,review_keep_leaning,4,0,0,0,no,no,,,,,@AsariAILabs - Asari AI
+GoogleAI,review_keep_leaning,review_keep_leaning,4,0,0,0,no,no,,,,,@GoogleAI - Google AI
+iGent_AI,review_keep_leaning,review_keep_leaning,4,0,0,0,no,no,,,,,@iGent_AI - iGent AI
+MaxiPredict,review_keep_leaning,review_keep_leaning,4,0,0,0,no,no,,,,,@MaxiPredict - maxim | AI arc ⚽️
+MistralAI,review_keep_leaning,review_keep_leaning,4,0,0,0,no,no,,,,,@MistralAI - Mistral AI
+0xbeepit,review_drop_leaning,review_drop_leaning,3,20,9,0,yes,no,0xbeepit,,2026-06-25T05:32:01.739046+00:00,,@0xbeepit - Beep
+HeerJeet,review_drop_leaning,review_drop_leaning,3,100,9,0,yes,no,HeerJeet,,2026-06-25T05:33:15.972813+00:00,,@HeerJeet - Jeet Heer
+Flomerboy,review_drop_leaning,review_drop_leaning,3,25,8,0,yes,no,Flomerboy,,2026-06-25T05:33:02.115858+00:00,,@Flomerboy - Ryan Mather
+EstebanSuarez,review_drop_leaning,review_drop_leaning,3,13,6,0,yes,no,EstebanSuarez,,2026-06-25T05:32:58.858833+00:00,,@EstebanSuarez - Esteban Suárez
+LauraBratton5,review_drop_leaning,review_drop_leaning,3,8,6,0,yes,no,LauraBratton5,,2026-06-25T05:33:45.437732+00:00,,@LauraBratton5 - Laura Bratton
+Madisonkanna,review_drop_leaning,review_drop_leaning,3,98,6,0,yes,no,Madisonkanna,,2026-06-25T05:33:55.506747+00:00,,@Madisonkanna - Madison Kanna
+charl_dot_dev,review_drop_leaning,review_drop_leaning,3,9,5,0,yes,no,charl_dot_dev,,2026-06-23T08:53:07.297913+00:00,,@charl_dot_dev - charl.dev
+IoTBreakthrough,review_drop_leaning,review_drop_leaning,3,5,5,0,yes,no,IoTBreakthrough,,2026-06-25T05:33:24.700071+00:00,,@IoTBreakthrough - IoTBreakthrough
+LukeW,review_drop_leaning,review_drop_leaning,3,6,5,0,yes,no,LukeW,,2026-06-25T05:33:48.928914+00:00,,@LukeW - Luke Wroblewski
+rough__sea,review_drop_leaning,review_drop_leaning,3,11,3,1,yes,yes,rough__sea,"cofounder of @deno_land, creator of @nodejs. often goes by ry.",2026-06-27T15:27:37.730035+00:00,2026-06-27T15:33:22.051428+00:00,@rough__sea - Ryan Dahl
+SemiAnalysis_,review_drop_leaning,review_drop_leaning,3,11,2,1,yes,no,SemiAnalysis_,,2026-06-23T08:52:40.520775+00:00,2026-06-27T15:33:20.421166+00:00,@SemiAnalysis_ - SemiAnalysis
+matanSF,review_drop_leaning,review_drop_leaning,3,13,1,3,yes,yes,matanSF,ceo @FactoryAI,2026-06-27T15:27:35.331483+00:00,2026-06-27T15:33:21.558967+00:00,@matanSF - Matan Grinberg
+NotebookLM,review_drop_leaning,review_drop_leaning,3,3,1,3,yes,yes,NotebookLM,"Think smarter, not harder. Meet your brain's new best friend 📒",2026-06-27T15:27:38.122944+00:00,2026-06-27T15:33:22.195684+00:00,@NotebookLM - NotebookLM
+threepointone,review_drop_leaning,review_drop_leaning,3,3,1,3,yes,yes,threepointone,🎈 Entscheidungsproblem. https://t.co/DISzWsXLdc forky mcforkface.,2026-06-27T15:27:35.715477+00:00,2026-06-27T15:33:21.200790+00:00,@threepointone - sunil pai
+bekacru,review_drop_leaning,review_drop_leaning,3,2,1,2,yes,yes,bekacru,creator of @better_auth and other things,2026-06-25T06:36:18.043652+00:00,2026-06-27T15:33:22.113601+00:00,@bekacru - Beka
+jamespotter,review_drop_leaning,review_drop_leaning,3,5,0,1,yes,yes,jamespotter,"Building https://t.co/nmwK08MUwm (podcast database). Distracted by https://t.co/J1vFqRubxe (fix your wi-fi), https://t.co/5c6R9aonB7 (newsletter database), https://t.co/jqWrfEGKqa (get reviews)",2026-06-23T08:53:17.212086+00:00,2026-06-27T15:33:20.406426+00:00,@jamespotter - James Potter (rephonic.com)
+pamelafox,review_drop_leaning,review_drop_leaning,3,1,0,1,yes,yes,pamelafox,"(she/her) Currently a Principal Cloud Advocate in Python at Microsoft.
+Happy Pride! 🏳️‍🌈 🏳️‍🌈 👩🏽‍❤️‍💋‍👩🏼 👨🏼‍❤️‍👨🏿",2026-06-25T06:36:19.322476+00:00,2026-06-27T15:33:22.264952+00:00,@pamelafox - Pamela Fox
+_sysengineer,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@_sysengineer - sysengineer
+anne_engineer,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@anne_engineer - Anne Barela
+augmentcode,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@augmentcode - Augment Code
+BinaryCoder,review_drop_leaning,review_drop_leaning,3,3,0,0,yes,no,BinaryCoder,,2026-06-25T05:32:27.860093+00:00,,@BinaryCoder - Edgars Adamovics
+cassiecodes,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@cassiecodes - Cassie Evans
+code,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@code - Visual Studio Code
+codepo8,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@codepo8 - Chris Heilmann codepo8.bsky.social
+CodingStars,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@CodingStars - CodingStars
+devexpftw,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@devexpftw - Developer Experience
+DevRelAvocados,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@DevRelAvocados - Developer Avocados 🥑
+dmofengineering,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@dmofengineering - DM of Engineering
+DNAEngineer,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@DNAEngineer - Sean Ward
+eileencodes,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@eileencodes - eileencodes
+encodeclub,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@encodeclub - Encode Club
+Engineering,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@Engineering - Engineering
+engineering_bae,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@engineering_bae - Taylor Poindexter
+katiecodes91,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@katiecodes91 - Katie Walters
+KimiDevs,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@KimiDevs - Kimi Developers
+LeadDevRel,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@LeadDevRel - Lead DevRel
+mattcarrollcode,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@mattcarrollcode - Matt Carroll
+Meta_Engineers,review_drop_leaning,review_drop_leaning,3,1,0,0,yes,no,Meta_Engineers,,2026-06-25T05:33:59.726266+00:00,,@Meta_Engineers - Engineering at Meta
+MetaOpenSource,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@MetaOpenSource - Meta Open Source
+MimmingCodes,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@MimmingCodes - Jen Tong
+NikemaCodes,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@NikemaCodes - Nikema is Podcasting
+opencode,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@opencode - OpenCode
+pikacodes,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@pikacodes - Ale (pikacodes)
+Trump_Developer,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@Trump_Developer - Trump Developer
+XDevelopers,review_drop_leaning,review_drop_leaning,3,0,0,0,no,no,,,,,@XDevelopers - Developers
+KentonVarda,review_drop_leaning,review_drop_leaning,2,14,4,0,yes,no,KentonVarda,,2026-06-25T05:33:42.239320+00:00,,@KentonVarda - Kenton Varda
+pashmerepat,review_drop_leaning,review_drop_leaning,2,9,4,0,yes,no,pashmerepat,,2026-06-23T08:57:16.627195+00:00,,@pashmerepat - pash
+TheRohanVarma,review_drop_leaning,review_drop_leaning,2,5,4,0,yes,no,TheRohanVarma,,2026-06-23T08:52:41.784999+00:00,,@TheRohanVarma - Rohan Varma
+AccidentalCISO,review_drop_leaning,review_drop_leaning,2,20,3,0,yes,no,AccidentalCISO,,2026-06-25T05:32:11.745099+00:00,,@AccidentalCISO - Accidental CISO
+AJamesMcCarthy,review_drop_leaning,review_drop_leaning,2,100,3,0,yes,no,AJamesMcCarthy,,2026-06-25T05:32:09.111341+00:00,,@AJamesMcCarthy - Andrew McCarthy
+andrewdfeldman,review_drop_leaning,review_drop_leaning,2,5,3,0,yes,no,andrewdfeldman,,2026-06-23T08:53:03.846278+00:00,,@andrewdfeldman - Andrew Feldman
+benedictk__,review_drop_leaning,review_drop_leaning,2,10,3,0,yes,no,benedictk__,,2026-06-23T08:53:05.482697+00:00,,@benedictk__ - Benedict Kerres
+chompie1337,review_drop_leaning,review_drop_leaning,2,8,3,0,yes,no,chompie1337,,2026-06-23T08:53:07.707535+00:00,,@chompie1337 - chompie
+GVteam,review_drop_leaning,review_drop_leaning,2,10,3,0,yes,no,GVteam,,2026-06-25T05:33:03.531411+00:00,,@GVteam - GV
+JRUrbaneNetwork,review_drop_leaning,review_drop_leaning,2,63,3,0,yes,no,JRUrbaneNetwork,,2026-06-25T05:33:26.846801+00:00,,@JRUrbaneNetwork - JR Urbane Network
+kdaigle,review_drop_leaning,review_drop_leaning,2,10,3,0,yes,no,kdaigle,,2026-06-23T08:57:08.268256+00:00,,@kdaigle - Kyle Daigle
+LukeParkerDev,review_drop_leaning,review_drop_leaning,2,24,3,0,yes,no,LukeParkerDev,,2026-06-25T05:33:48.555094+00:00,,@LukeParkerDev - Luke Parker
+MasumiNetwork,review_drop_leaning,review_drop_leaning,2,3,3,0,yes,no,MasumiNetwork,,2026-06-25T05:33:57.061635+00:00,,@MasumiNetwork - Masumi
+meaghaneschoi,review_drop_leaning,review_drop_leaning,2,4,3,0,yes,no,meaghaneschoi,,2026-06-23T08:57:11.561573+00:00,,@meaghaneschoi - Meaghan
+nickbaumann_,review_drop_leaning,review_drop_leaning,2,10,3,0,yes,no,nickbaumann_,,2026-06-23T08:57:14.335034+00:00,,@nickbaumann_ - Nick
+AlexPalcuie,review_drop_leaning,review_drop_leaning,2,13,2,0,yes,no,AlexPalcuie,,2026-06-25T05:32:13.096628+00:00,,@AlexPalcuie - palcu
+antonosika,review_drop_leaning,review_drop_leaning,2,7,2,0,yes,no,antonosika,,2026-06-23T08:53:04.399308+00:00,,@antonosika - Anton Osika
+AzorFrank,review_drop_leaning,review_drop_leaning,2,4,2,0,yes,no,AzorFrank,,2026-06-25T05:32:23.138008+00:00,,@AzorFrank - Frank Azor
+btraut,review_drop_leaning,review_drop_leaning,2,8,2,0,yes,no,btraut,,2026-06-23T08:53:06.236507+00:00,,@btraut - Brent Traut
+GoogleLabs,review_drop_leaning,review_drop_leaning,2,2,2,0,yes,no,GoogleLabs,,2026-06-25T05:33:10.086072+00:00,,@GoogleLabs - Google Labs
+jietang,review_drop_leaning,review_drop_leaning,2,7,2,0,yes,no,jietang,,2026-06-23T08:53:18.182888+00:00,,@jietang - jietang
+kevin_flansburg,review_drop_leaning,review_drop_leaning,2,5,2,0,yes,no,kevin_flansburg,,2026-06-23T08:57:08.588625+00:00,,@kevin_flansburg - Kevin Flansburg
+KimZetter,review_drop_leaning,review_drop_leaning,2,9,2,0,yes,no,KimZetter,,2026-06-25T05:33:42.876752+00:00,,@KimZetter - Kim Zetter
+liu8in,review_drop_leaning,review_drop_leaning,2,10,2,0,yes,no,liu8in,,2026-06-23T08:57:09.260321+00:00,,@liu8in - Bin Liu
+ManusAI,review_drop_leaning,review_drop_leaning,2,8,2,0,yes,no,ManusAI,,2026-06-25T05:33:55.904113+00:00,,@ManusAI - Manus
+ohlennart,review_drop_leaning,review_drop_leaning,2,5,2,0,yes,no,ohlennart,,2026-06-23T08:57:15.201558+00:00,,@ohlennart - Lennart Heim
+PriyankaPhatak,review_drop_leaning,review_drop_leaning,2,2,2,0,yes,no,PriyankaPhatak,,2026-06-23T08:52:38.572017+00:00,,@PriyankaPhatak - Priyanka Phatak
+rguldener,review_drop_leaning,review_drop_leaning,2,5,2,0,yes,no,rguldener,,2026-06-23T08:57:18.648762+00:00,,@rguldener - Robin Guldener
+0xishans,review_drop_leaning,review_drop_leaning,2,6,1,1,yes,yes,0xishans,Investing at @nomadcapital_io I Ex @wellowealth I Ex @binance @ceffuglobal | @LSEnews,2026-06-25T06:36:11.246848+00:00,2026-06-27T15:33:21.353449+00:00,@0xishans - Ishan.hl
+_chenglou,review_drop_leaning,review_drop_leaning,2,7,1,1,yes,yes,_chenglou,"Worked on: @reactjs, @messenger, @reasonml, @rescriptlang
+Currently: @midjourney, Pretext",2026-06-25T06:36:08.539042+00:00,2026-06-27T15:33:21.048854+00:00,@_chenglou - Cheng Lou
+aidenybai,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,aidenybai,building https://t.co/CgPMVUejOr at https://t.co/mZTFRDBAtk,2026-06-27T15:27:37.931396+00:00,2026-06-27T15:33:22.119152+00:00,@aidenybai - Aiden Bai
+alexellisuk,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,alexellisuk,"Founder @openfaas, @inletsdev & @slicervm",2026-06-25T06:36:15.308569+00:00,2026-06-27T15:33:21.823258+00:00,@alexellisuk - Alex Ellis
+amir,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,amir,Executive Editor @theinformation. We're hiring. amir @ https://t.co/XVwTW5utuC amir.62 on Signal,2026-06-27T15:27:34.053078+00:00,2026-06-27T15:33:20.388579+00:00,@amir - Amir Efrati
+dabit3,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,dabit3,Growth @cognition @devinai,2026-06-25T06:36:13.120752+00:00,2026-06-27T15:33:21.554210+00:00,@dabit3 - nader dabit
+danshipper,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,danshipper,ceo @every | the only subscription you need to stay at the edge of AI,2026-06-25T06:36:12.284984+00:00,2026-06-27T15:33:21.467080+00:00,@danshipper - Dan Shipper 📧
+dreamer,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,dreamer,Your home for personal intelligence. Now in beta.,2026-06-25T06:36:12.995229+00:00,2026-06-27T15:33:21.541697+00:00,@dreamer - Dreamer
+emilkowalski,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,emilkowalski,"Currently @linear,  https://t.co/uxXxCQx3aK",2026-06-25T06:36:10.377833+00:00,2026-06-27T15:33:21.257981+00:00,@emilkowalski - Emil Kowalski
+howietl,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,howietl,Cofounder/CEO @ Airtable,2026-06-25T06:36:12.435494+00:00,2026-06-27T15:33:21.482054+00:00,@howietl - Howie Liu
+iannuttall,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,no,iannuttall,,2026-06-25T06:36:14.051639+00:00,2026-06-27T15:33:21.655241+00:00,@iannuttall - Ian Nuttall
+intellectronica,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,no,intellectronica,,2026-06-25T06:36:15.611213+00:00,2026-06-27T15:33:21.852830+00:00,@intellectronica - Eleanor Berger
+jasonfried,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,jasonfried,"Started & runs 37signals (makers of Basecamp, HEY, and ONCE). Non-serial entrepreneur, serial author. DM or email me at jason@hey.com.",2026-06-25T06:36:18.529686+00:00,2026-06-27T15:33:22.182923+00:00,@jasonfried - Jason Fried
+MikeIsaac,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,no,MikeIsaac,,2026-06-27T15:31:05.788726+00:00,2026-06-27T15:33:20.280192+00:00,@MikeIsaac - rat king 🐀
+orcdev,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,orcdev,"true web dev warrior ⚔️
+
+🚢 https://t.co/FFxoqmj7Fw
+👾 https://t.co/iteijarlFC
+🤖 https://t.co/uZzQnhZiiC
+🎥 https://t.co/hLii89erw3 (coming soon)",2026-06-25T06:36:06.218803+00:00,2026-06-27T15:33:20.791308+00:00,@orcdev - OrcDev
+patrick_oshag,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,patrick_oshag,building @psumvc @colossusmag hosting @investlikebest,2026-06-25T06:36:18.598483+00:00,2026-06-27T15:33:22.190252+00:00,@patrick_oshag - Patrick OShaughnessy
+perplexity_ai,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,perplexity_ai,"Curiosity changes everything. Download our free app on iOS, Mac, Windows, and Android.",2026-06-27T15:27:36.148623+00:00,2026-06-27T15:33:21.415425+00:00,@perplexity_ai - Perplexity
+pusongqi,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,pusongqi,"art, film, tech, hospitality, knowledge, human experience.
+prev. @stanford",2026-06-25T06:36:13.715124+00:00,2026-06-27T15:33:21.620640+00:00,@pusongqi - Steven Pu
+Remotion,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,Remotion,Make videos programmatically.,2026-06-25T06:36:17.111763+00:00,2026-06-27T15:33:22.013184+00:00,@Remotion - Remotion
+ScottWu46,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,ScottWu46,Building @cognition,2026-06-23T08:52:13.258374+00:00,2026-06-27T15:33:20.479500+00:00,@ScottWu46 - Scott Wu
+sundarpichai,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,sundarpichai,"CEO, Google and Alphabet",2026-06-25T06:36:13.372195+00:00,2026-06-27T15:33:21.582527+00:00,@sundarpichai - Sundar Pichai
+trevornoren,review_drop_leaning,review_drop_leaning,2,1,1,1,yes,yes,trevornoren,"Founder, SageRoadResearch.",2026-06-21T19:19:05.803031+00:00,2026-06-27T15:33:20.313925+00:00,@trevornoren - Trevor Noren
+XiaomiMiMo,review_drop_leaning,review_drop_leaning,2,2,1,1,yes,yes,XiaomiMiMo,@XiaomiMiMoDevs where we share API and product updates,2026-06-23T08:52:43.437232+00:00,2026-06-27T15:33:20.404563+00:00,@XiaomiMiMo - Xiaomi MiMo
+dieworkwear,review_drop_leaning,review_drop_leaning,2,4,0,4,yes,yes,dieworkwear,"Menswear writer. Editor at @putthison. Bylines at The New York Times, The Financial Times, Politico, Esquire, and Mr. Porter",2026-06-25T06:36:19.252892+00:00,2026-06-27T15:33:22.257770+00:00,@dieworkwear - derek guy
+karrisaarinen,review_drop_leaning,review_drop_leaning,2,2,0,2,yes,yes,karrisaarinen,"ceo of @linear 🇫🇮🇺🇸 previously: @coinbase @airbnb, YC alumni",2026-06-25T06:36:20.266579+00:00,2026-06-27T15:33:22.366609+00:00,@karrisaarinen - Karri Saarinen
+_RustyRooster,review_drop_leaning,review_drop_leaning,2,0,0,0,no,no,,,,,@_RustyRooster - Magdalena
+datasociety,review_drop_leaning,review_drop_leaning,2,0,0,0,no,no,,,,,@datasociety - Data & Society
+goserverless,review_drop_leaning,review_drop_leaning,2,0,0,0,no,no,,,,,@goserverless - Serverless
+SlashDataHQ,review_drop_leaning,review_drop_leaning,2,0,0,0,no,no,,,,,@SlashDataHQ - SlashData
+SwiftLang,review_drop_leaning,review_drop_leaning,2,0,0,0,no,no,,,,,@SwiftLang - Swift Language
+tursodatabase,review_drop_leaning,review_drop_leaning,2,0,0,0,no,no,,,,,@tursodatabase - Turso
+0xd34th,review_drop_leaning,drop_candidate,1,9,1,0,yes,no,0xd34th,,2026-06-25T05:32:03.757167+00:00,,@0xd34th - death
+60SecDocs,review_drop_leaning,drop_candidate,1,22,1,0,yes,no,60SecDocs,,2026-06-25T05:32:04.873855+00:00,,@60SecDocs - 60 Second Docs
+AskAManager,review_drop_leaning,drop_candidate,1,28,1,0,yes,no,AskAManager,,2026-06-25T05:32:21.666284+00:00,,@AskAManager - Ask a Manager
+ASpittel,review_drop_leaning,drop_candidate,1,5,1,0,yes,no,ASpittel,,2026-06-25T05:32:09.808150+00:00,,@ASpittel - Ali Spittel
+BenjDicken,review_drop_leaning,drop_candidate,1,29,1,0,yes,no,BenjDicken,,2026-06-25T05:32:25.923076+00:00,,@BenjDicken - Ben Dicken
+Bill_Gross,review_drop_leaning,drop_candidate,1,1,1,0,yes,no,Bill_Gross,,2026-06-25T05:32:27.150911+00:00,,@Bill_Gross - Bill Gross
+CompuIves,review_drop_leaning,drop_candidate,1,13,1,0,yes,no,CompuIves,,2026-06-25T05:32:42.445932+00:00,,@CompuIves - Ives van Hoorne
+DanHollick,review_drop_leaning,drop_candidate,1,8,1,0,yes,no,DanHollick,,2026-06-25T05:32:46.753869+00:00,,@DanHollick - Dan Hollick
+danizeres,review_drop_leaning,drop_candidate,1,6,1,0,yes,no,danizeres,,2026-06-23T08:53:09.860813+00:00,,@danizeres - dani bauer
+Firebase,review_drop_leaning,drop_candidate,1,3,1,0,yes,no,Firebase,,2026-06-25T05:33:01.610446+00:00,,@Firebase - Firebase
+fooming86,review_drop_leaning,drop_candidate,1,10,1,0,yes,no,fooming86,,2026-06-23T08:53:12.952809+00:00,,@fooming86 - Foo Ming Li
+GreylockVC,review_drop_leaning,drop_candidate,1,2,1,0,yes,no,GreylockVC,,2026-06-25T05:33:13.026307+00:00,,@GreylockVC - Greylock Partners
+JCorvinusVR,review_drop_leaning,drop_candidate,1,5,1,0,yes,no,JCorvinusVR,,2026-06-25T05:33:25.393350+00:00,,@JCorvinusVR - 𝕵𝕮𝖔𝖗𝖛𝖎𝖓𝖚𝖘
+JessicaLBarnard,review_drop_leaning,drop_candidate,1,13,1,0,yes,no,JessicaLBarnard,,2026-06-25T05:33:32.985634+00:00,,@JessicaLBarnard - Jess Barnard
+JohnJumperSci,review_drop_leaning,drop_candidate,1,1,1,0,yes,no,JohnJumperSci,,2026-06-23T08:52:33.518769+00:00,,@JohnJumperSci - John Jumper
+JustinBleuel,review_drop_leaning,drop_candidate,1,27,1,0,yes,no,JustinBleuel,,2026-06-25T05:33:40.078622+00:00,,@JustinBleuel - Justin
+Keir_Starmer,review_drop_leaning,drop_candidate,1,7,1,0,yes,no,Keir_Starmer,,2026-06-25T05:33:41.583233+00:00,,@Keir_Starmer - Keir Starmer
+KenOno691,review_drop_leaning,drop_candidate,1,4,1,0,yes,no,KenOno691,,2026-06-25T05:33:41.936515+00:00,,@KenOno691 - Ken Ono
+michpokrass,review_drop_leaning,drop_candidate,1,2,1,0,yes,no,michpokrass,,2026-06-23T08:57:12.458215+00:00,,@michpokrass - Michelle Pokrass
+NoamShazeer,review_drop_leaning,drop_candidate,1,1,1,0,yes,no,NoamShazeer,,2026-06-23T08:52:37.256912+00:00,,@NoamShazeer - Noam Shazeer
+Saboo_Shubham_,review_drop_leaning,drop_candidate,1,10,1,0,yes,no,Saboo_Shubham_,,2026-06-23T08:52:39.526472+00:00,,@Saboo_Shubham_ - Shubham Saboo
+asidorenko_,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,asidorenko_,I make videos for devs,2026-06-25T06:36:19.803145+00:00,2026-06-27T15:33:22.317328+00:00,@asidorenko_ - Alex Sidorenko
+basementstudio,review_drop_leaning,drop_candidate,1,2,0,1,yes,yes,basementstudio,A digital studio making cool shit that performs.,2026-06-25T06:36:07.627452+00:00,2026-06-27T15:33:20.952645+00:00,@basementstudio - basement.studio
+BrainsAndTennis,review_drop_leaning,drop_candidate,1,10,0,1,yes,yes,BrainsAndTennis,Founding scientist @fundamental co-founder and chief science officer @tryshortcutai,2026-06-25T05:32:29.405233+00:00,2026-06-27T15:33:20.417740+00:00,@BrainsAndTennis - Peter Wang
+ByDonkeys,review_drop_leaning,drop_candidate,1,2,0,1,yes,yes,ByDonkeys,"Art, activism and accountability 🐴. All our work is funded by the public, no big donors. Become a supporter or buy our new book, link below👇. DMs open 📩",2026-06-25T06:36:20.984040+00:00,2026-06-27T15:33:22.433980+00:00,@ByDonkeys - Led By Donkeys
+charlieholtz,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,charlieholtz,@conductor_build,2026-06-25T06:36:12.957483+00:00,2026-06-27T15:33:21.538273+00:00,@charlieholtz - Charlie Holtz
+dog_rates,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,dog_rates,Your Only Source For Professional Dog Ratings Instagram and Facebook ➜ WeRateDogs partnerships@weratedogs.com | nonprofit: @15outof10 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀,2026-06-25T06:36:21.753631+00:00,2026-06-27T15:33:22.511489+00:00,@dog_rates - WeRateDogs
+garius,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,garius,Historian. Streamer. Tech Strategist. Editor of @lonrec. Servant of Napoleon. Orient fan.  @garius@mastodon.me.uk. Business: business@longformist.co.uk,2026-06-25T06:36:21.336600+00:00,2026-06-27T15:33:22.472761+00:00,@garius - John Bull
+glennui,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,glennui,cd ~ / @poolsideai,2026-06-23T08:52:13.033915+00:00,2026-06-27T15:33:20.437203+00:00,@glennui - Glenn Hitchcock
+gregoryhemmer,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,gregoryhemmer,bd @fun,2026-06-25T06:36:19.538571+00:00,2026-06-27T15:33:22.287026+00:00,@gregoryhemmer - Greg Hemmer
+hausman_k,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,hausman_k,@Physical_int,2026-06-25T06:36:20.456643+00:00,2026-06-27T15:33:22.381173+00:00,@hausman_k - Karol Hausman
+hosomacho1,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,hosomacho1,自重トレを基盤に人間の調子を整える人。心と身体を武装し、人生の質を上げる方法を研究。かつて精神が底まで落ちてから、自分で人体実験し続けている。いまは静かに暮らしています。詳細な知識はsubstackで書いているよ↓,2026-06-23T08:52:13.313447+00:00,2026-06-27T15:33:20.488748+00:00,@hosomacho1 - Seiya
+ihtesham2005,review_drop_leaning,drop_candidate,1,11,0,1,yes,yes,ihtesham2005,"investor, writer, educator, and a dragon ball fan 🐉",2026-06-23T08:53:16.496252+00:00,2026-06-27T15:33:20.468834+00:00,@ihtesham2005 - Ihtesham Ali
+itsreallyvivek,review_drop_leaning,drop_candidate,1,11,0,1,yes,yes,itsreallyvivek,i am just eve,2026-06-23T08:53:16.893624+00:00,2026-06-27T15:33:20.368743+00:00,@itsreallyvivek - vivek
+justin_ng,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,justin_ng,"Aus freelance photog in London. I do not run the number10cat acct. Pls support me on my ko-fi link 
+Insta: justin_ng_photographer
+Larry Insta: justinInWhitehall",2026-06-25T06:36:16.879146+00:00,2026-06-27T15:33:21.989132+00:00,@justin_ng - Justin Ng
+KatieS,review_drop_leaning,drop_candidate,1,3,0,1,yes,yes,KatieS,Mom of 3 & @tacopuppy. Founder & GP @MoxxieVentures. Co-founder @hashtagangels. Alum of @Twitter @WhiteHouse @Google @color @yahoo. Board @Vivendi @Yahoo 🎸🌎🌱,2026-06-25T06:36:17.534851+00:00,2026-06-27T15:33:22.060844+00:00,@KatieS - Katie Jacobs Stanton
+lennysan,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,lennysan,"Deeply researched product, growth, and career advice",2026-06-25T06:36:20.493048+00:00,2026-06-27T15:33:22.384790+00:00,@lennysan - Lenny Rachitsky
+Nexaabyraj,review_drop_leaning,drop_candidate,1,9,0,1,yes,yes,Nexaabyraj,Launches & Product Videos for SaaS | Clients : @MiroHQ @silhouette_ex @arca,2026-06-23T08:52:36.981515+00:00,2026-06-27T15:33:20.343143+00:00,@Nexaabyraj - Rajmoni | Motion Designer
+peer_rich,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,peer_rich,i make time @calcom https://t.co/svpVpBOIvu,2026-06-25T06:36:18.829810+00:00,2026-06-27T15:33:22.218085+00:00,@peer_rich - Peer Richelsen
+raycast,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,raycast,"Your shortcut to everything. 
+Pro → https://t.co/U2NFkqtIO4
+Community → https://t.co/R2il42iEtF
+Glaze → @glazeapp",2026-06-25T06:36:11.304469+00:00,2026-06-27T15:33:21.361726+00:00,@raycast - Raycast
+SAshworthHayes,review_drop_leaning,drop_candidate,1,11,0,1,yes,yes,SAshworthHayes,Opinions my own but feel free to appropriate them.,2026-06-23T08:52:39.138383+00:00,2026-06-27T15:33:20.384996+00:00,@SAshworthHayes - Sam Ashworth-Hayes
+simonfarshid,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,simonfarshid,Founder of https://t.co/BiQm78SSXg (YC W25),2026-06-23T08:52:13.174146+00:00,2026-06-27T15:33:20.465323+00:00,@simonfarshid - Simon Farshid
+thingskatedid,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,thingskatedid,"she/her ·
+If I unfollowed you, it's because you keep posting things without alt text
+https://t.co/FpwhLrRETb",2026-06-25T06:36:20.364985+00:00,2026-06-27T15:33:22.372035+00:00,@thingskatedid - Kate
+VictorTaelin,review_drop_leaning,drop_candidate,1,1,0,1,yes,yes,VictorTaelin,Kind / Bend / HVM / INets / λCalculus,2026-06-25T06:36:13.483215+00:00,2026-06-27T15:33:21.593792+00:00,@VictorTaelin - Taelin
+0xca0a,review_drop_leaning,drop_candidate,0,2,0,0,yes,no,0xca0a,,2026-06-25T05:32:03.378282+00:00,,@0xca0a - ☄︎
+0xCommandOSS,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@0xCommandOSS - CommandOSS
+0xJuliaW3b,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@0xJuliaW3b - Julia
+0xTimofey,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,0xTimofey,,2026-06-25T05:32:01.165677+00:00,,@0xTimofey - Tim
+5tevieM,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@5tevieM - Stevie Martin
+__apf__,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@__apf__ - Adriana Porter Felt
+_anniebabannie_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@_anniebabannie_ - Annie Sexton
+_arohan_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@_arohan_ - rohan anil
+_BillieBelieves,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@_BillieBelieves - Billie
+_birdcalls,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@_birdcalls - birdy
+_hi_mc,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@_hi_mc - Michael Cohen
+_jessicasachs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@_jessicasachs - jess
+_kcwatkins,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@_kcwatkins - Kelly Watkins
+_sn0ww,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@_sn0ww - Snow
+_workchronicles,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@_workchronicles - Work Chronicles
+_zifan_wang,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@_zifan_wang - Zifan (Sail) Wang
+a16z,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@a16z - a16z
+a_baaron,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@a_baaron - Aaron
+AaronBlake,review_drop_leaning,drop_candidate,0,56,0,0,yes,no,AaronBlake,,2026-06-25T05:32:11.165872+00:00,,@AaronBlake - Aaron Blake
+aarondfrancis,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@aarondfrancis - Aaron Francis
+aaroniker,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@aaroniker - Aaron Iker ✨
+abbyfuller,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@abbyfuller - Abby Fuller
+abcventure,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@abcventure - ABC Venture
+ac1dgoddess,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ac1dgoddess - allie🖤✨
+acambridgediary,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,acambridgediary,,2026-06-23T08:53:01.761935+00:00,,@acambridgediary - A Cambridge Diary
+acatnamedteddy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@acatnamedteddy - teddy
+acrognali,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@acrognali - Anthony Crognale
+adam_messinger,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@adam_messinger - Adam Messinger
+adamdotdev,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@adamdotdev - Adam
+adamfleming,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@adamfleming - Adam Fleming
+adamhfry,review_drop_leaning,drop_candidate,0,8,0,0,yes,no,adamhfry,,2026-06-23T08:53:02.122237+00:00,,@adamhfry - Adam Fry
+adamhjk,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,adamhjk,,2026-06-23T08:53:02.497656+00:00,,@adamhjk - Adam Jacob
+ade_oshineye,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ade_oshineye - Adewale Oshineye
+ADHD_Alien,review_drop_leaning,drop_candidate,0,6,0,0,yes,no,ADHD_Alien,,2026-06-25T05:32:07.134989+00:00,,@ADHD_Alien - Pina✨ADHD Alien Comics
+AdhdBri,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AdhdBri - Adhd_bri Comic
+ADHDelaide,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ADHDelaide - Adelaide
+AftermathFi,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@AftermathFi - Aftermath Finance (🥚, 🥚)"
+AidenClinicCat,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AidenClinicCat - Aiden
+aireenel_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@aireenel_ - Irina Lozovaya
+AishaBlake,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AishaBlake - Aisha Blake
+alanaagoyal,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@alanaagoyal - alana goyal
+alanna,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@alanna - alanna okun
+alansphotos,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@alansphotos - alan shapiro
+albertadevs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@albertadevs - Alberta Tech
+alch3mistdev,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@alch3mistdev - Anthony Nixon
+alex_watt1,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@alex_watt1 - Alex Watt
+alexalbert__,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@alexalbert__ - Alex Albert
+alexhoye,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@alexhoye - alex hoye
+alexis_susset,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@alexis_susset - Alexis Susset
+algore,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@algore - Al Gore
+alicegoldfuss,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@alicegoldfuss - bletchley punk
+aliceisplaying,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@aliceisplaying - alice
+aliisarosenthal,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@aliisarosenthal - Aliisa
+AlphaFiSUI,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AlphaFiSUI - AlphaFi (strategic arc)
+alyankovic,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@alyankovic - Al Yankovic
+amac,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@amac - Alexander Macgillivray
+amazon,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@amazon - Amazon
+ameliadimz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ameliadimz - Amelia Dimoldenberg
+AmGodsIntl,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AmGodsIntl - American Gods Intl
+amilabs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@amilabs - AMI Labs
+amitfulay,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@amitfulay - Amit Fulay
+amy_udelson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@amy_udelson - amyudelson
+AmznMovieRevws,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AmznMovieRevws - Amazon Movie Reviews
+anadiasphoto,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@anadiasphoto - Ana Dias
+anakhuita,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@anakhuita - Ana Armas Romero
+anandreea_t,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@anandreea_t - AnaTo
+Andercot,review_drop_leaning,drop_candidate,0,67,0,0,yes,no,Andercot,,2026-06-25T05:32:15.553283+00:00,,@Andercot - Andrew Côté
+andreascon,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@andreascon - Andreas Konstantinou
+andy_l_jones,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@andy_l_jones - andy jones
+AndyBurnhamGM,review_drop_leaning,drop_candidate,0,13,0,0,yes,no,AndyBurnhamGM,,2026-06-25T05:32:15.897433+00:00,,@AndyBurnhamGM - Andy Burnham
+anissagardizy8,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@anissagardizy8 - Anissa Gardizy
+ankitatr_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ankitatr_ - Ankita Tripathi
+AntiCensorship_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AntiCensorship_ - Anti-Censorship Coalition
+AntiRacismDay,review_drop_leaning,drop_candidate,0,48,0,0,yes,no,AntiRacismDay,,2026-06-25T05:32:17.812115+00:00,,@AntiRacismDay - Stand Up To Racism
+antony_btc,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@antony_btc - Antony Lewis
+anynines,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@anynines - anynines
+anyscalecompute,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@anyscalecompute - Anyscale
+API,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@API - API
+AppleHolodeck,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AppleHolodeck - Apple Spatial Computing Report
+Arbys,review_drop_leaning,drop_candidate,0,43,0,0,yes,no,Arbys,,2026-06-25T05:32:19.577354+00:00,,@Arbys - Arby's
+arcalinea,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@arcalinea - Jay Graber 🦋
+ArchDaily,review_drop_leaning,drop_candidate,0,20,0,0,yes,no,ArchDaily,,2026-06-25T05:32:20.177048+00:00,,@ArchDaily - ArchDaily
+argvee,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@argvee - Heather Adkins - Ꜻ - Spes consilium non est
+aria42,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@aria42 - Aria Haghighi
+arnaudai,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@arnaudai - Arnaud Benard
+ArtDecider,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ArtDecider - Art Or Not Art
+AsahiLinux,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AsahiLinux - Asahi Linux (@AsahiLinux@treehouse.systems)
+ashebytes,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ashebytes - ashe
+ashleymayer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ashleymayer - Ashley Mayer
+ashleymcnamara,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ashleymcnamara - Ashley Willis (McNamara)
+ASmallFiction,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ASmallFiction - A Small Fiction
+asmitter,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@asmitter - Andy Smith doo doo, doo doo doo doo"
+Astro_Christina,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Astro_Christina - Christina H Koch
+Astro_Jessica,review_drop_leaning,drop_candidate,0,5,0,0,yes,no,Astro_Jessica,,2026-06-25T05:32:22.426019+00:00,,@Astro_Jessica - Jessica Meir
+astrodotbuild,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@astrodotbuild - Astro
+AstroKatie,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AstroKatie - Katie Mack
+Astropartigirl,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Astropartigirl - Sophia Gad-Nasr
+atmoio,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,atmoio,,2026-06-23T08:53:04.803417+00:00,,@atmoio - Mo
+aurorascharff,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@aurorascharff - Aurora Scharff
+AuthorKLockwood,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AuthorKLockwood - Kirsty Lockwood
+awhalefact,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@awhalefact - whalefact
+AWS_UKI,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@AWS_UKI - AWS UK & Ireland
+aygul,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@aygul - Dr. Aygul Zagidullina
+b0rk,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@b0rk - 🔎Julia Evans🔍
+BagnolRebecca,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,BagnolRebecca,,2026-06-25T05:32:23.842423+00:00,,@BagnolRebecca - Rebecca Bagnol
+BallerinaBellax,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,BallerinaBellax,,2026-06-25T05:32:24.090764+00:00,,@BallerinaBellax - BellaBallerina
+banditelli,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@banditelli - Brett ""Solidarity 2025"" Banditelli"
+BarackObama,review_drop_leaning,drop_candidate,0,16,0,0,yes,no,BarackObama,,2026-06-25T05:32:24.628313+00:00,,@BarackObama - Barack Obama
+Barb_Nelson_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Barb_Nelson_ - Barb Nelson
+BarristerSecret,review_drop_leaning,drop_candidate,0,3,0,0,yes,no,BarristerSecret,,2026-06-25T05:32:25.118004+00:00,,@BarristerSecret - The Secret Barrister 🦋
+bbcelection,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bbcelection - BBC Election
+BBCkatyaadler,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,BBCkatyaadler,,2026-06-25T05:32:23.552200+00:00,,@BBCkatyaadler - Katya Adler
+BBCNorthAmerica,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@BBCNorthAmerica - BBC North America
+bcrypt,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bcrypt - yan
+beardigsit,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@beardigsit - Bear Douglas
+benedictevans,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@benedictevans - Benedict Evans
+bengold,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bengold - Ben Gold
+benhammersley,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@benhammersley - Ben
+benjamineevans,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@benjamineevans - Benjamin Earl Evans
+BenLesh,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,BenLesh,,2026-06-25T05:32:25.328622+00:00,,@BenLesh - Ben Lesh
+bentossell,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bentossell - Ben Tossell
+BeriJonathan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@BeriJonathan - Jonathan Beri
+bertyc,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bertyc - Bethany Crowe
+bestofnextdoor,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bestofnextdoor - Best of Nextdoor 🏡
+BethesdaStudios,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,BethesdaStudios,,2026-06-25T05:32:26.337338+00:00,,@BethesdaStudios - Bethesda Game Studios
+bhorowitz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bhorowitz - benahorowitz.eth
+BigFatCharlie_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@BigFatCharlie_ - Big Fat Charlie🍩🐱
+BigManGuac,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@BigManGuac - guacamole 🥑
+bigoldn,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bigoldn - Big-O London
+Bill_Nye_Tho,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Bill_Nye_Tho - (parody) BILL NYE THO
+BillCoughran,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@BillCoughran - Bill Coughran
+BillyWilson14,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@BillyWilson14 - Billy Wilson
+binitamshah,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@binitamshah - Binni Shah
+bitandbang,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bitandbang - tierney cyren
+bitrise,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bitrise - Bitrise
+biz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@biz - Biz Stone
+BlackMilkTweets,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@BlackMilkTweets - BlackMilk Clothing
+blaine,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@blaine - Blaine Cook
+BlairBraverman,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@BlairBraverman - Blair Braverman
+blaireerskine,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@blaireerskine - blaire erskine
+BlakeCharli,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@BlakeCharli - Charli Blake
+bling0,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bling0 - Benjamin Ling
+blockpartyapp_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@blockpartyapp_ - Block Party
+bluesky,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bluesky - Bluesky
+BobRossGameDev,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@BobRossGameDev - Bob Ross, Game Dev"
+Bodegacats_,review_drop_leaning,drop_candidate,0,6,0,0,yes,no,Bodegacats_,,2026-06-25T05:32:28.905766+00:00,,@Bodegacats_ - Bodega Cats
+boltdotnew,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@boltdotnew - bolt.new
+boyar_dad,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@boyar_dad - Beefaroni & Marvin 🍖
+BoyfrenRiley,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@BoyfrenRiley - Boyfren Riley
+boztank,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@boztank - Boz
+bradfitz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bradfitz - Brad Fitzpatrick 🌻
+BrandSanderson,review_drop_leaning,drop_candidate,0,2,0,0,yes,no,BrandSanderson,,2026-06-25T05:32:29.692455+00:00,,@BrandSanderson - Brandon Sanderson
+breadandrutter,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@breadandrutter - Catherine Rutter
+brian_d_vaughn,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@brian_d_vaughn - brian vaughn
+BrianTMcClellan,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,BrianTMcClellan,,2026-06-25T05:32:29.930841+00:00,,@BrianTMcClellan - Brian McClellan
+Brii_toe_knee,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,Brii_toe_knee,,2026-06-25T05:32:30.352580+00:00,,@Brii_toe_knee - Brii (she/her) 🧠👩🏾‍💻✊🏾💅🏾
+brit,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@brit - Brit Morin 🦞
+brooke_jamieson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@brooke_jamieson - Brooke Jamieson
+brookestevens,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@brookestevens - Brooke Stevens
+browsercompany,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@browsercompany - The Browser Company
+brsabel,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@brsabel - bersabel
+bryanl,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bryanl - Bryan Liles
+bubblewire,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@bubblewire - Ænna Westelius
+buenavistaclub_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@buenavistaclub_ - Buena Vista Club
+buildWithLit,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@buildWithLit - Lit
+builtfordevs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@builtfordevs - Built for Devs
+bunsenbernerbmd,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@bunsenbernerbmd - Bunsen, Beaker, Bernoulli & Brix"
+buster,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@buster - Buster Benson
+ByCommonConsent,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ByCommonConsent - BCC
+caenhillcc,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@caenhillcc - caenhillcc
+callingallpaper,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@callingallpaper - Calling All Papers / @cfp@calingallpapers.com
+Cameralabs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Cameralabs - Gordon Laing
+CameronFoxly,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@CameronFoxly - Cameron Foxly
+CarlaRockmore,review_drop_leaning,drop_candidate,0,3,0,0,yes,no,CarlaRockmore,,2026-06-25T05:32:31.724658+00:00,,@CarlaRockmore - Carla Rockmore
+carlsverre,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@carlsverre - Carl Sverre
+CarneyPurr67561,review_drop_leaning,drop_candidate,0,71,0,0,yes,no,CarneyPurr67561,,2026-06-25T05:32:33.111843+00:00,,"@CarneyPurr67561 - 🇨🇦 Nico Carney, Purr Minister of Canada"
+caseorganic,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@caseorganic - Amber Case
+CaseyNewton,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@CaseyNewton - Casey Newton
+catcuddles,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@catcuddles - Catcuddles London
+Caterina,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Caterina - Caterina Fake
+catwheezie,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@catwheezie - catwheezie🐾
+CatWorkers,review_drop_leaning,drop_candidate,0,35,0,0,yes,no,CatWorkers,,2026-06-25T05:32:34.187815+00:00,,@CatWorkers - cats with jobs 🛠
+cayley,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@cayley - Cayley
+cblatts,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@cblatts - Chris Blattman
+cdibona,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@cdibona - Chris DiBona
+cee,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@cee - Carlos Espinal
+cespinal,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@cespinal - Carlos Espinal
+ch402,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ch402 - Chris Olah
+charles_rqi,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@charles_rqi - Charles Qi
+charlierguo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@charlierguo - Charlie Guo
+charmcli,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@charmcli - Charm
+chfry,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@chfry - Chris Fry
+Chiragravi,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Chiragravi - Chirag Ravishankar
+ChloeS,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ChloeS - Chloe Sladden
+choir241,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@choir241 - Richard Choi
+chriscbs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@chriscbs - Chris Spiek
+christianism,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@christianism - Christian Oestlien
+christine,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@christine - Christine Herron
+ChuckWendig,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ChuckWendig - Chuck Wendig
+ChurchofSatan,review_drop_leaning,drop_candidate,0,100,0,0,yes,no,ChurchofSatan,,2026-06-25T05:32:38.139114+00:00,,@ChurchofSatan - The Church Of Satan
+ciberch,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ciberch - Mónica Goren
+CincinnatiZoo,review_drop_leaning,drop_candidate,0,25,0,0,yes,no,CincinnatiZoo,,2026-06-25T05:32:38.851144+00:00,,@CincinnatiZoo - Cincinnati Zoo
+cirospaciari,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@cirospaciari - Ciro Spaciari 🇧🇷🇺🇸
+cityjsconf,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@cityjsconf - CityJS Conferences
+claybavor,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@claybavor - Clay Bavor
+clerk,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@clerk - Clerk
+ClimateDefiance,review_drop_leaning,drop_candidate,0,24,0,0,yes,no,ClimateDefiance,,2026-06-25T05:32:40.811753+00:00,,@ClimateDefiance - Climate Defiance
+ClimateHuman,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ClimateHuman - Peter Kalmus
+cohere,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@cohere - Cohere
+colbyfayock,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@colbyfayock - Colby Fayock
+compilesandruns,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@compilesandruns - stephanie guevara
+compscienyan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@compscienyan - Nanami
+ConanOBrien,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,ConanOBrien,,2026-06-25T05:32:42.672916+00:00,,@ConanOBrien - Conan O'Brien
+conductor_build,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@conductor_build - Conductor
+conway,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@conway - Conway Chen
+copyconstruct,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@copyconstruct - Cindy Sridharan
+corememory,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@corememory - Core Memory
+CountBinface,review_drop_leaning,drop_candidate,0,57,0,0,yes,no,CountBinface,,2026-06-25T05:32:43.834642+00:00,,@CountBinface - Count Binface
+cpak,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@cpak - Christina Pak
+crafty,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@crafty - Nick Butcher
+CraigWeekend,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@CraigWeekend - ladies and gentlemen, the weekend 😌"
+CrimeADay,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@CrimeADay - A Crime a Day
+crits4cats,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@crits4cats - Crits For Cats lnc. Cat Rescue
+crucially,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@crucially - Artur Bergman (山男)
+CrystalKnowsMe,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@CrystalKnowsMe - Crystal
+crystalsssup,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@crystalsssup - Crystal
+cshirky,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@cshirky - Clay Shirky
+csvoss,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@csvoss - Chelsea Sierra Voss
+CubicleApril,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@CubicleApril - April King 🌀
+cuesta,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@cuesta - Carlos Cuesta
+CuriousZelda,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@CuriousZelda - Curious Zelda
+Dadsaysjokes,review_drop_leaning,drop_candidate,0,33,0,0,yes,no,Dadsaysjokes,,2026-06-25T05:32:46.066570+00:00,,@Dadsaysjokes - Dad Jokes
+dalmaer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dalmaer - Dion Almaer
+DamienKempf,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DamienKempf - Damien Kempf
+dan_aykroyd,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dan_aykroyd - Dan Aykroyd
+DanaSchwartzzz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DanaSchwartzzz - Dana Schwartz - on hiatus
+danidonovan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@danidonovan - Dani Donovan 👩🏻‍🎨 ADHD Comics
+danielgraf,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@danielgraf - Daniel Graf
+danielraffel,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@danielraffel - Daniel Raffel
+DanRather,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DanRather - Dan Rather
+darkmembo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@darkmembo - Mark Dembo
+DarrenNorfolk,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DarrenNorfolk - Darren Norfolk
+darth,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@darth - darth™
+davegirouard,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@davegirouard - Dave Girouard
+davehoover,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@davehoover - Dave Hoover
+davejorgenson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@davejorgenson - Dave Jorgenson
+daveman692,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@daveman692 - David Recordon
+davemorin,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@davemorin - Dave Morin 🦞
+david_harvey,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@david_harvey - David Harvey
+davidbyttow,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@davidbyttow - David Byttow
+davidcontrerasm,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@davidcontrerasm - David Contreras M.
+davidgelberg,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@davidgelberg - David Gelberg
+DavidLaneDesign,review_drop_leaning,drop_candidate,0,31,0,0,yes,no,DavidLaneDesign,,2026-06-25T05:32:48.374229+00:00,,@DavidLaneDesign - David Lane Design
+DavidScreative,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DavidScreative - David Smith
+DavidTiczon,review_drop_leaning,drop_candidate,0,13,0,0,yes,no,DavidTiczon,,2026-06-25T05:32:49.040297+00:00,,@DavidTiczon - David Ticzon | Sui💧Chief Degen
+dctanner,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dctanner - Damien C. Tanner
+DeepBookonSui,review_drop_leaning,drop_candidate,0,6,0,0,yes,no,DeepBookonSui,,2026-06-25T05:32:49.358742+00:00,,@DeepBookonSui - DeepBook Protocol on Sui
+DeezerDevs,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,DeezerDevs,,2026-06-25T05:32:49.602867+00:00,,@DeezerDevs - DeezerDevs
+delaneytarr,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@delaneytarr - Delaney Tarr
+DelilahSDawson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DelilahSDawson - Delilah S. Dawson isn't here right now
+denndomingo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@denndomingo - Denn Domingo
+depthsofwiki,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@depthsofwiki - depths of wikipedia!
+Design,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Design - Design
+devdevcharlie,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@devdevcharlie - Charlie Gerard
+devonbl,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@devonbl - 🖤devon🖤
+devopsjacquie,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@devopsjacquie - jacquie capur
+devwithzachary,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@devwithzachary - Zachary Powell 🥑
+dewitt,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dewitt - DeWitt Clinton
+dffrnt_anna,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dffrnt_anna - Pénzes Anna
+DHAhole,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DHAhole - wirefall (AKA Pwn Spice)
+Dialogflow,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Dialogflow - Dialogflow
+dianasoyster,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dianasoyster - Diana 🦪
+Dictionarycom,review_drop_leaning,drop_candidate,0,17,0,0,yes,no,Dictionarycom,,2026-06-25T05:32:50.991647+00:00,,@Dictionarycom - Dictionary.com
+digbyj,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@digbyj - James Digby
+digitalbyte_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@digitalbyte_ - alexis
+digitalrev,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@digitalrev - DigitalRev
+digits,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@digits - Digits
+DilumSanjaya,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DilumSanjaya - Dilum Sanjaya
+dinosaurcouch,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dinosaurcouch - dinosaur
+DiploMog,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DiploMog - Palmerston
+DivineOps,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DivineOps - Sasha Czarkowski 🇺🇦
+Dixie3Flatline,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Dixie3Flatline - Kat Cosgrove
+dlpeters,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dlpeters - Dan Peterson
+dmitry140,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dmitry140 - Dmitry Shevelenko
+DmitryOpines,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DmitryOpines - Dmitry Grozoubinski
+dmwlff,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dmwlff - Adam Wolff
+dnlytras,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dnlytras - DNL
+dodo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dodo - The Dodo
+dog_feelings,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dog_feelings - Thoughts of Dog
+dogfather,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dogfather - matt
+dogsocialclub,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dogsocialclub - Dog Social Club
+dok2001,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dok2001 - Dane Knecht 🦭
+DomesticMouse,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DomesticMouse - Brett @domesticmouse@aus.social
+DonDodge,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DonDodge - Don Dodge
+DonMacAskill,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DonMacAskill - Don MacAskill
+donttrythis,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@donttrythis - Adam Savage
+doomscroll_bot,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@doomscroll_bot - Doomscrolling Reminder Bot
+doshkim,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@doshkim - John
+dotta,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dotta - dotta 📎
+DownIoadBot,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DownIoadBot - DownloadBot
+Dr_Inna,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Dr_Inna - Inna Kanevsky
+drakes_diary,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@drakes_diary - Drake's Diary
+DrBiden,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DrBiden - Dr. Jill Biden
+DrGotts,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DrGotts - Andy Gotts
+dril,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dril - wint
+dsmcl,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dsmcl - David McLaughlin
+dtomicevic,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dtomicevic - Dominik Tomicevic
+dubstep4dads,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dubstep4dads - eric curtin
+DuncanWeldon,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@DuncanWeldon - Duncan Weldon
+dustychipura,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@dustychipura - Dusty Chipura
+Earendil,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Earendil - Earendil
+ebona,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ebona - Ebona 🇯🇲🇧🇧
+Ed_Miliband,review_drop_leaning,drop_candidate,0,4,0,0,yes,no,Ed_Miliband,,2026-06-25T05:32:55.871009+00:00,,@Ed_Miliband - Ed Miliband
+edd,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@edd - Edd Wilder-James
+eddybuild,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@eddybuild - Eddy Xu
+eden,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@eden - Eden Shochat
+editingemily,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@editingemily - emily freeman
+edzitron,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@edzitron - Ed Zitron
+Ehmee,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Ehmee - Emily Graslie 📺🦕🦖
+eileentso,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@eileentso - Eileen Burbidge
+elatable,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@elatable - Bradley Horowitz
+eldercactus,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@eldercactus - eldercactus
+EleanorMorton,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@EleanorMorton - Eleanor Morton ($8)
+elevenbg,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@elevenbg - Eleven Ventures
+ElfaFloria,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,ElfaFloria,,2026-06-25T05:32:56.889292+00:00,,@ElfaFloria - Elfa Floria
+EliaLocardi,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@EliaLocardi - Elia Locardi
+Ell_o_Punk,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Ell_o_Punk - Ellopunk
+elle91,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@elle91 - Ꮍᴀᴇʟ
+ElleArmageddon,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ElleArmageddon - not here; find me elsewhere.
+ellerhymes,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ellerhymes - Elle Cordova
+elysiaJS,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@elysiaJS - elysiaJS
+emilychangtv,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@emilychangtv - Emily Chang
+emmysteuer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@emmysteuer - Emma Steuer 🧚🤖
+emzraline,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@emzraline - emzra
+endingwithali,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@endingwithali - ali
+enjojoyy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@enjojoyy - albina
+episod,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@episod - Taylor Singletary
+ericantonow,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ericantonow - eric antonow
+EricHolthaus,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@EricHolthaus - Eric Holthaus
+ericschmidt,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ericschmidt - Eric Schmidt
+EricSteinb,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@EricSteinb - Eric Steinberger
+eriktranberg,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@eriktranberg - eriktranberg
+ev,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ev - Ev
+evacide,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@evacide - Eva
+evanjconrad,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@evanjconrad - evan conrad
+EvanWeb3,review_drop_leaning,drop_candidate,0,6,0,0,yes,no,EvanWeb3,,2026-06-25T05:32:59.208330+00:00,,@EvanWeb3 - evan.sui
+evavictor,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@evavictor - Eva Victor
+eve_rebecca,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@eve_rebecca - Eve Livingston
+everywhereist,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@everywhereist - Geraldine Just Follow TheEverywhereist on Threads
+ewither,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ewither - Emily Wither
+expo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@expo - Expo
+EyeEm,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@EyeEm - EyeEm
+FALLINGinRED,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@FALLINGinRED - Anna Lowry
+Fallout,review_drop_leaning,drop_candidate,0,29,0,0,yes,no,Fallout,,2026-06-25T05:33:01.083570+00:00,,@Fallout - Fallout
+falloutonprime,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@falloutonprime - FALLOUT⚡️
+feederofcats,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@feederofcats - Friends of Bear Cat Rescue
+feedly,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@feedly - Feedly
+feliciaday,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@feliciaday - Felicia Day🇺🇸
+felixmeissner,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@felixmeissner - Felix Meißner
+feministabulous,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@feministabulous - Liz Plank
+fforres,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@fforres - fforres
+fidjissimo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@fidjissimo - Fidji Simo
+filearts,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@filearts - Geoff Goodman
+film_girl,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@film_girl - Christina Warren
+finkd,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@finkd - Mark Zuckerberg
+FionaBowler,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@FionaBowler - Dr Fi Bowler (fibowler.bsky.social)
+firstdrafthell,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@firstdrafthell - Patrik Svensson (@patriksvensson@mstdn.social)
+fleek,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@fleek - Fleek
+fmanjoo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@fmanjoo - farhad manjoo (former bluecheck)
+fmssnr,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@fmssnr - Florian Meissner
+FoodConnectsUs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@FoodConnectsUs - Jia Guo
+Foone,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Foone - foone🏳️‍⚧️
+former_googler,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@former_googler - Former Googler
+forrestbrazeal,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@forrestbrazeal - Forrest Brazeal
+Fox0x01,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Fox0x01 - Azeria
+foxes_in_love,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@foxes_in_love - Foxes in Love
+francesc,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@francesc - francesc
+fredwilson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@fredwilson - Fred Wilson
+froginthevalley,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@froginthevalley - Sylvain Carle
+gabrielstricker,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@gabrielstricker - Gabriel Stricker
+gameofkittens,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@gameofkittens - Exploding Kittens
+garyseconomics,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@garyseconomics - Gary Stevenson
+gattaca,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@gattaca - Dave Lewis
+gavindoughtie,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@gavindoughtie - Gavin Doughtie
+Gavriel_Cohen,review_drop_leaning,drop_candidate,0,2,0,0,yes,no,Gavriel_Cohen,,2026-06-25T05:33:04.488547+00:00,,@Gavriel_Cohen - Gavriel Cohen
+geekyouup,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@geekyouup - Rich Hyndman
+Geeria,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Geeria - Michael Geer
+GeneralCattis,review_drop_leaning,drop_candidate,0,64,0,0,yes,no,GeneralCattis,,2026-06-25T05:33:06.317924+00:00,,"@GeneralCattis - ""Mad Cat"" Cattis"
+geoffreycross,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@geoffreycross - geoffreycross
+GeorgePointon_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@GeorgePointon_ - George Pointon
+getstream_io,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@getstream_io - Stream
+GetXOO,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@GetXOO - XOO
+git_pull_union,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@git_pull_union - git pull union
+Gone2theSnowDog,review_drop_leaning,drop_candidate,0,13,0,0,yes,no,Gone2theSnowDog,,2026-06-25T05:33:08.125027+00:00,,@Gone2theSnowDog - Gone to the Snow Dogs
+Goodable,review_drop_leaning,drop_candidate,0,15,0,0,yes,no,Goodable,,2026-06-25T05:33:08.668304+00:00,,@Goodable - Goodable
+goodreads,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@goodreads - Goodreads
+googlephotos,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@googlephotos - Google Photos
+gordonATortoise,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@gordonATortoise - Gordon THE Tortoise
+GorgonzolaTDog,review_drop_leaning,drop_candidate,0,2,0,0,yes,no,GorgonzolaTDog,,2026-06-25T05:33:11.416714+00:00,,@GorgonzolaTDog - Gorgonzola the Fluff
+gpj,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@gpj - Gareth Paul Jones 💙
+graceblakeley,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@graceblakeley - Grace Blakeley
+GraceSpelman,review_drop_leaning,drop_candidate,0,8,0,0,yes,no,GraceSpelman,,2026-06-25T05:33:11.896658+00:00,,@GraceSpelman - grace spelman
+Grady_Booch,review_drop_leaning,drop_candidate,0,13,0,0,yes,no,Grady_Booch,,2026-06-25T05:33:12.359415+00:00,,@Grady_Booch - Grady Booch
+GreatDismal,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@GreatDismal - William Gibson
+greensock,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@greensock - GSAP
+gregmarra,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@gregmarra - Greg Marra 🐼
+GretaThunberg,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@GretaThunberg - Greta Thunberg
+grutzik_petra,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@grutzik_petra - Petra Grutzik
+guardiantech,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@guardiantech - Guardian Tech
+GuerraNatasha,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@GuerraNatasha - Natasha Guerra
+Gus_ODonnell,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,Gus_ODonnell,,2026-06-25T05:33:13.454744+00:00,,@Gus_ODonnell - Gus O'Donnell
+gvanrossum,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@gvanrossum - Guido van Rossum
+gwern,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@gwern - 𝔊𝔴𝔢𝔯𝔫
+hankgreen,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hankgreen - Hank Green
+HankTikTok,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@HankTikTok - Hank Green’s TikToks
+HannahVera_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@HannahVera_ - Hannah Vera
+harlanhaskins,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@harlanhaskins - Harlan Haskins
+harrisuz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@harrisuz - Harriet May
+haveigotnews,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@haveigotnews - Have I Got News For You
+hayfestival,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hayfestival - Hay Festival
+HeatherDeLand,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@HeatherDeLand - Heather DeLand Left This Dumpster Fire for Bluesky
+heliaebrahimi,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@heliaebrahimi - Helia Ebrahimi
+hey_amandam,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hey_amandam - Amanda
+hhthacker,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hhthacker - Heather Thacker
+hikingshawty,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hikingshawty - rly cool girl
+HillaryClinton,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,HillaryClinton,,2026-06-25T05:33:18.302955+00:00,,@HillaryClinton - Hillary Clinton
+hipsterhacker,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hipsterhacker - Hipster Hacker
+history_alice,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@history_alice - Alice Loxton
+hlp,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hlp - Helen Prowse
+hoaxeye,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hoaxeye - HoaxEye
+HodgeTheCat,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@HodgeTheCat - Hodge
+holly,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@holly - Holly Brockwell
+HomeworldGame,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@HomeworldGame - Homeworld
+hopper_dog,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hopper_dog - Hopper Dog
+how_to_web,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@how_to_web - How to Web
+HowtoADHD,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@HowtoADHD - Jessica McCabe
+hunterwalk,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hunterwalk - 👨🏻‍💻☕️
+hwinkler4real,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hwinkler4real - Henry Winkler
+HydeNS33k,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@HydeNS33k - Jek Hyde
+hzboyadzhiev,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@hzboyadzhiev - Hristo Boyadzhiev
+iamaliceophelia,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@iamaliceophelia - Alice Ophelia
+iamdevloper,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@iamdevloper - I Am Devloper
+iamrecruitr,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@iamrecruitr - I Am Recruitr
+ianbarber,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ianbarber - Ian Barber
+iandouglas736,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@iandouglas736 - w. ian douglas 🇨🇦🇺🇸🥑🎙️
+iashutoshmeher,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@iashutoshmeher - Ashutosh Meher
+iBrews,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@iBrews - Alex Coulombe
+IgnyteSeries,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@IgnyteSeries - Ignyte Events London
+ikai,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ikai - Ikai Lan 😐
+ilyasut,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ilyasut - Ilya Sutskever
+imgur,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@imgur - Imgur
+immunoglobulin,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@immunoglobulin - Gloria Lin
+Improbableio,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Improbableio - Improbable
+ImSh4yy,review_drop_leaning,drop_candidate,0,3,0,0,yes,no,ImSh4yy,,2026-06-25T05:33:24.211032+00:00,,@ImSh4yy - Shayan
+inachabot,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@inachabot - ina chabot
+inerati,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@inerati - liz
+internetsociety,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@internetsociety - Internet Society
+irvinxyz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@irvinxyz - Irvin (in Japan 🇯🇵)
+isacatinthesink,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@isacatinthesink - Cat in the Sink?
+ishabytes,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ishabytes - Isha Ghodgaonkar
+itauthor,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@itauthor - Alistair Christie
+itsjackcohen,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@itsjackcohen - Jack Cohen
+ivanfioravanti,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ivanfioravanti - Ivan Fioravanti ᯅ
+IvePetThatCat1,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@IvePetThatCat1 - I’ve Pet That Cat
+IvePetThatDog,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@IvePetThatDog - I’ve Pet That Dog
+jaakkosf,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jaakkosf - jacob petrie
+jacasiegel,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@jacasiegel - Jaclyn A. Siegel, PhD"
+JackPhan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@JackPhan - Jack Phan
+jacquitaylorfb,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jacquitaylorfb - Dr Jacqui Taylor | Empathy Economy Founder
+jakesteadman,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jakesteadman - Jake Steadman
+jakewoolf,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jakewoolf - Jake Woolf
+jameellionaire,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jameellionaire - Jameel.sui
+james_a_rob,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@james_a_rob - James Robertson
+JamesMikrut,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@JamesMikrut - James Mikrut
+jamielliottg,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jamielliottg - Jamie G
+jamisafari,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jamisafari - Jami Safari
+janamal,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@janamal - Jana Messerschmidt
+janeyellene,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@janeyellene - Historygirl
+jankleinert,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jankleinert - Jan Kleinert
+janleike,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@janleike - Jan Leike
+jaredpalmer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jaredpalmer - Jared Palmer
+jarvie,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jarvie - Scott Jarvie
+Jasminihilist,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Jasminihilist - Jasmine 💀
+jasoncosta,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jasoncosta - Jason Costa
+jasonh,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jasonh - Jason Hoffman
+jasonkwon,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jasonkwon - Jason Kwon
+jawache,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jawache - Asim Hussain
+jayair,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jayair - Jay
+jbulava,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jbulava - Jon Bulava // BlueLava
+jeddings,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jeddings - Jeff Eddings
+JeffBezos,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@JeffBezos - Jeff Bezos
+JeffDean,review_drop_leaning,drop_candidate,0,6,0,0,yes,no,JeffDean,,2026-06-25T05:33:32.036912+00:00,,@JeffDean - Jeff Dean
+jellyfin,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jellyfin - Jellyfin
+jengolbeck,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jengolbeck - Dr. Jen Golbeck
+JenniferMerode,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@JenniferMerode - Jennifer Rankin
+jenrunswithdogs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jenrunswithdogs - jen runs with dogs
+jeremeholiman,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jeremeholiman - Jereme Holiman
+jeresig,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jeresig - John Resig
+jerhadf,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jerhadf - jeremy
+jesawyer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jesawyer - Josh Sawyer
+jess,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jess - Jessica Verrilli
+Jess_Wade,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Jess_Wade - Jessica Wade
+jessbrammar,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jessbrammar - Jess Brammar
+jessfraz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jessfraz - Jessie Frazelle
+jessicaelgot,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jessicaelgot - Jessica Elgot
+jessphillips,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jessphillips - Jess Phillips
+JetsetHeather,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@JetsetHeather - Heather Leisman
+jewl,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jewl - Julia Shalet
+jhuber,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jhuber - Jeff Huber 🇺🇸
+JillWetzler,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@JillWetzler - Jill Wetzler
+JimmySecUK,review_drop_leaning,drop_candidate,0,48,0,0,yes,no,JimmySecUK,,2026-06-25T05:33:34.543574+00:00,,@JimmySecUK - Jimmy Rushton
+jkeatn,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jkeatn - Jake Eaton
+jlager,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jlager - 👾John Lagerling
+jlengstorf,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jlengstorf - Jason Lengstorf
+jnack,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jnack - John Nack
+Joe_Mayes,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Joe_Mayes - Joe Mayes
+JoeBiden,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@JoeBiden - Joe Biden
+joelgascoigne,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@joelgascoigne - Joel Gascoigne
+joelhooks,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@joelhooks - joel ⛈️
+joeyhinson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@joeyhinson - Joey Hinson
+johnmaeda,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@johnmaeda - John Maeda
+johnmccrea,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@johnmccrea - John McCrea
+JohnONolan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@JohnONolan - John O'Nolan
+Jonahlobe,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Jonahlobe - Jonah Lobe - now on 🦋
+JonathanPieNews,review_drop_leaning,drop_candidate,0,17,0,0,yes,no,JonathanPieNews,,2026-06-25T05:33:36.063753+00:00,,@JonathanPieNews - Jonathan Pie
+jonnysun,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jonnysun - jonny sun
+jonsnowC4,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jonsnowC4 - Jon Snow
+JortsTheCat,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@JortsTheCat - Jorts (and Jean)
+JoshWComeau,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@JoshWComeau - Josh W. Comeau
+JoyceCarolOates,review_drop_leaning,drop_candidate,0,100,0,0,yes,no,JoyceCarolOates,,2026-06-25T05:33:38.640589+00:00,,@JoyceCarolOates - Joyce Carol Oates
+jscud,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jscud - Jeff Scudder
+jsmarr,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jsmarr - Joseph Smarr
+jsmonthlylondon,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jsmonthlylondon - JS Monthly London & Online
+juicebox_xyz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@juicebox_xyz - Juicebox Protocol
+Jul_Vernier,review_drop_leaning,drop_candidate,0,19,0,0,yes,no,Jul_Vernier,,2026-06-25T05:33:39.319493+00:00,,@Jul_Vernier - Julia Vernier
+juliaferraioli,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@juliaferraioli - julia ferraioli
+Julian_Amieva,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Julian_Amieva - Julian Amieva
+juliareinstein,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@juliareinstein - julia reinstein 🚡
+juliettekayyem,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@juliettekayyem - Juliette Kayyem
+justsisyphus,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@justsisyphus - Sisyphus Labs
+juzybits,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@juzybits - juzy
+jyonn,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@jyonn - Jenn Yonemitsu
+kahdrew,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kahdrew - Andy Codner
+KamalaHarris,review_drop_leaning,drop_candidate,0,4,0,0,yes,no,KamalaHarris,,2026-06-25T05:33:40.379840+00:00,,@KamalaHarris - Kamala Harris
+kapehe_ok,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kapehe_ok - Kap
+karamoji,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@karamoji - Karamoji
+karaswisher,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@karaswisher - Kara Swisher
+karenxcheng,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@karenxcheng - Karen X. Cheng
+KariByron,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,KariByron,,2026-06-25T05:33:40.613581+00:00,,@KariByron - Kari Byron
+karoliskosas,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@karoliskosas - Karolis
+kaslinfields,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kaslinfields - Kaslin Fields
+kathrice_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kathrice_ - Kath Rice
+KathrynTewson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@KathrynTewson - Kathryn Tewson
+kathygriffin,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kathygriffin - Kathy Griffin
+kellyshalk,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kellyshalk - Kelly 👩🏻‍💻
+kelseymwhelan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kelseymwhelan - Kelsey Rosenblum
+kennwhite,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kennwhite - Kenn White
+kenny_io,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kenny_io - Ekene Eze
+kenyanpundit,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kenyanpundit - Ory Okolloh-Mwangi
+KenzieMac_Dev,review_drop_leaning,drop_candidate,0,5,0,0,yes,no,KenzieMac_Dev,,2026-06-23T08:52:34.633464+00:00,,@KenzieMac_Dev - Kenzie Macdonald
+kevin_backhouse,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kevin_backhouse - Kev
+kevin_scott,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kevin_scott - Kevin Scott
+kevinkern,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kevinkern - Kevin Kern
+kevinmarks,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kevinmarks - Kevin Marks 🏠kevinmarks.com xoxo.zone/@KevinMarks
+KiraKiraCosmo,review_drop_leaning,drop_candidate,0,9,0,0,yes,no,KiraKiraCosmo,,2026-06-25T05:33:43.765578+00:00,,@KiraKiraCosmo - Kira 🌸 Producer @ Larian
+kittenxlady,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kittenxlady - Kitten Lady
+kleinerperkins,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kleinerperkins - Kleiner Perkins
+knowyourmeme,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@knowyourmeme - Know Your Meme
+krissyxkd,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@krissyxkd - Kristina Dimitrova
+kristinec,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kristinec - kristine pinner
+kroscoo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kroscoo - Kris Cao
+kurrik,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kurrik - Arne Roomann-Kurrik
+kylemcginn,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kylemcginn - kylemcginn
+kyliebytes,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kyliebytes - Kylie Robison
+kyliestew,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@kyliestew - Kylie
+ladyhaja,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ladyhaja - Hannah Jane Parkinson
+Lana,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Lana - Lana Berry
+Lanooba,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Lanooba - Niv has left this hellsite🖤
+LarAtLarian,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@LarAtLarian - Swen Vincke @where?
+larianstudios,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@larianstudios - Larian Studios
+LaurenJBuchman,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@LaurenJBuchman - Lauren Buchman
+laurenschutte,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@laurenschutte - Lauren Schutte
+laurieontech,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@laurieontech - Laurie
+lauriewired,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lauriewired - LaurieWired
+LDN,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@LDN - Radar London
+LDN_gov,review_drop_leaning,drop_candidate,0,5,0,0,yes,no,LDN_gov,,2026-06-25T05:33:44.343333+00:00,,@LDN_gov - London Gov
+leahculver,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@leahculver - Leah Culver
+leahebae,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@leahebae - Leah Bae
+LeaKissner,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@LeaKissner - Lea Kissner
+LeeshaHannigan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@LeeshaHannigan - Leesha Hannigan
+leolaporte,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@leolaporte - Leo Laporte (twit.social/@leo)
+lfcipriani,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lfcipriani - Luis Cipriani
+LGTM,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@LGTM - LGTM
+liamcbride,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@liamcbride - Lia McBride
+libby_meren,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@libby_meren - libby (she/her) 🥑
+liberachat,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@liberachat - Libera Chat
+lilaineurope,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lilaineurope - Lisa Lang
+lilianweng,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lilianweng - Lilian Weng
+lindner,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lindner - Moved to https://bsky.app/profile/1500wordmtu.com
+Linisha,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Linisha - Linisha Palm
+LinusTech,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@LinusTech - Linus Tech Tips
+lisadonchak,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lisadonchak - Lisa Donchak
+lisaphillips,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lisaphillips - Lisa Phillips 💉 💉 💉 💉 💉 💉
+littleidea,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@littleidea - Andrew Clay Shafer 雷启理
+livelovegeek,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@livelovegeek - Morgan Mitchell
+lizasperling,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lizasperling - Liza Sperling
+lizemopetey,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lizemopetey - eliza petersen
+lizthegrey,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lizthegrey - Liz Fong-Jones (方禮真) 🦋
+LizzParody,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@LizzParody - Lizz Parody
+lmanul,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lmanul - Manu Cornet
+loesjeINT,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@loesjeINT - Loesje International
+lokcheung,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lokcheung - Lok Cheung
+LolaOye,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@LolaOye - Lola Oyelayo-Pearson
+Londonist,review_drop_leaning,drop_candidate,0,24,0,0,yes,no,Londonist,,2026-06-25T05:33:47.442028+00:00,,@Londonist - Londonist
+longlivekcx,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@longlivekcx - Kyra Parrow 🦋
+LordGrimdark,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,LordGrimdark,,2026-06-25T05:33:47.656356+00:00,,@LordGrimdark - Joe Abercrombie
+lorengrush,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lorengrush - Loren Grush
+loudmouthjulia,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@loudmouthjulia - julia alexander
+lougirlie,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lougirlie - Louise Chow
+louisgray,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@louisgray - Louis Gray
+louistheroux,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@louistheroux - Louis Theroux
+lpeterduke,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lpeterduke - Peter L
+lthlnkso,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,lthlnkso,,2026-06-23T08:57:09.679910+00:00,,@lthlnkso - Quick Thoughts
+LucasTurnbloom,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@LucasTurnbloom - Lucas Turnbloom 💀
+luciemontel,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@luciemontel - Lucie Montel
+lucyleid,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lucyleid - Lucy Small
+lucymchenry,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lucymchenry - Lucy McHenry
+lukecartey,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lukecartey - Luke Cartey
+lxbrun,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@lxbrun - Alex LeBrun
+Lyndsey360,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Lyndsey360 - Lyndsey Scott
+m_k,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@m_k - Manu
+mabb0tt,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mabb0tt - michael abbott
+madebygoogle,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@madebygoogle - Made by Google
+MadeOfTeeth,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MadeOfTeeth - Richard Roberts
+madewithARKit,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@madewithARKit - Made With ARKit
+maggieNYT,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@maggieNYT - Maggie Haberman
+maggiepint,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@maggiepint - Maggie Johnson-Pint
+magicailabs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@magicailabs - Magic
+magicleap,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@magicleap - Magic Leap
+mahemoff,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mahemoff - Algorithms R Us
+maitlis,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@maitlis - emily m
+marinamaral2,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@marinamaral2 - Marina Amaral
+marissamayer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@marissamayer - marissamayer
+Mark__Lawrence,review_drop_leaning,drop_candidate,0,11,0,0,yes,no,Mark__Lawrence,,2026-06-25T05:33:56.573728+00:00,,@Mark__Lawrence - Mark Lawrence
+markgurman,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@markgurman - Mark Gurman
+MarkHamill,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MarkHamill - Mark Hamill
+markhneedham,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@markhneedham - Mark Needham
+MarsCuriosity,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MarsCuriosity - ARCHIVED - Curiosity Rover
+martin_casado,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@martin_casado - martin_casado
+martunalong,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@martunalong - Martina Long
+mary_grace,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mary_grace - Mary Thengvall (she/her); mary-grace.bsky.social
+maryGrove,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@maryGrove - Mary Grove
+materialdesign,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@materialdesign - Material Design
+mathewi,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mathewi - Mathew Ingram
+mathowie,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@mathowie - Gone, never coming back | @mathowie@xoxo.zone"
+Matt_heyqq,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Matt_heyqq - Matt
+matt_levine,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@matt_levine - Matt Levine
+mattcolville,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mattcolville - Matt Colville?
+mattcutts,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mattcutts - Matt Cutts
+mattgreencomedy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mattgreencomedy - Matt Green
+matthewmercer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@matthewmercer - Matthew Mercer
+matvelloso,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@matvelloso - Mat Velloso
+maureenjohnson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@maureenjohnson - Maureen Johnson
+max_a_schwarzer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@max_a_schwarzer - Max Schwarzer
+maxcell,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@maxcell - Prince Wilson
+maxengel,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@maxengel - Max Engel
+maxseddon,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@maxseddon - max seddon
+MaybeCatSmores,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MaybeCatSmores - Smores
+mbudiselicbuda,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mbudiselicbuda - Marko Budiselić
+mdhananii,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mdhananii - Meenakshi Dhanani
+mdomsch,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mdomsch - Matt Domsch
+medriscoll,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@medriscoll - Michael E. Driscoll
+Megatronic13,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Megatronic13 - Sassparilla
+MeredithFrost,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MeredithFrost - Meredith Frost
+merettm,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@merettm - Jakub Pachocki
+MerriamWebster,review_drop_leaning,drop_candidate,0,55,0,0,yes,no,MerriamWebster,,2026-06-25T05:33:59.292381+00:00,,@MerriamWebster - Merriam-Webster
+meshtimes_,review_drop_leaning,drop_candidate,0,8,0,0,yes,no,meshtimes_,,2026-06-23T08:57:12.186837+00:00,,@meshtimes_ - marisa
+meteatamel,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@meteatamel - Mete Atamel
+mgsiegler,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mgsiegler - M.G. Siegler
+mgupta,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mgupta - Mike Gupta
+MichaelaOkla,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MichaelaOkla - michaela okland
+MichaelLoeffler,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MichaelLoeffler - Michael J. Loeffler
+MichelBarnier,review_drop_leaning,drop_candidate,0,9,0,0,yes,no,MichelBarnier,,2026-06-25T05:34:00.781771+00:00,,@MichelBarnier - Michel Barnier
+MichelleBakels,review_drop_leaning,drop_candidate,0,14,0,0,yes,no,MichelleBakels,,2026-06-25T05:34:01.106208+00:00,,@MichelleBakels - Michelle Bakels
+michelleefang,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@michelleefang - Michelle Fang 🌁
+MichelleGlauser,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MichelleGlauser - Michelle Glauser
+michelleisawolf,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@michelleisawolf - Michelle Wolf
+michiokaku,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@michiokaku - Dr. Michio Kaku
+Miexriir,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Miexriir - Michal Shafrir
+migueldeicaza,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@migueldeicaza - Miguel de Icaza ᯅ🍉
+mikeindustries,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mikeindustries - Mike Davidson 📴
+MikeMcQuaid,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MikeMcQuaid - Mike McQuaid
+mikemearls,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mikemearls - Mike Mearls
+MikeWiacek,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MikeWiacek - Mike Wiacek
+MilksandMatcha,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MilksandMatcha - Sarah Chieng
+millieratnerdog,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@millieratnerdog - Millie Ratner
+MillionInt,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MillionInt - Jerry Tworek
+mintlify,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mintlify - Mintlify
+miramurati,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@miramurati - Mira Murati
+miss_marriage,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@miss_marriage - Madison Marriage
+MissAHaddow,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MissAHaddow - Alexandra Haddow
+MisterABK,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MisterABK - Alasdair Beckett-King
+MisterRogersSay,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MisterRogersSay - MisterRogersQuotes
+mistymadonna,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mistymadonna - Misty Miller ☻
+mixedtogrey,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mixedtogrey - .
+MKBHD,review_drop_leaning,drop_candidate,0,7,0,0,yes,no,MKBHD,,2026-06-25T05:33:51.678255+00:00,,@MKBHD - Marques Brownlee
+mlejva,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mlejva - Vasek Mlejnsky
+mlevchin,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mlevchin - Max Levchin
+mmasnick,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mmasnick - Mike Masnick
+mmccue,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mmccue - Mike McCue
+modal,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@modal - Modal
+modsiwW,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@modsiwW - Wisdom Kaye
+molly_knight,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@molly_knight - @mollyknight.bsky.social
+mollyfmielke,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mollyfmielke - Molly Mielke McCarthy
+MomentProCamera,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MomentProCamera - Moment Pro Camera
+momo_obrien,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@momo_obrien - Mo Mo O’Brien
+moncefoo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@moncefoo - ❄️ Moncef ❄️
+MonicaLewinsky,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MonicaLewinsky - Monica Lewinsky (she/her)
+monzo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@monzo - Monzo 🏦
+mooncat_is,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mooncat_is - julia
+MoonPie,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@MoonPie - MoonPie
+morgan_sung,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@morgan_sung - morgan sung
+mountain_ghosts,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mountain_ghosts - gone
+mrncst,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mrncst - Mariana Castilho
+Mrsth,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Mrsth - Mrsth
+msmaya,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@msmaya - Maya Moufarek
+msrsan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@msrsan - Marko Srsan
+mstepka,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@mstepka - Matthew Stepka
+Mysten_Labs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Mysten_Labs - MystenLabs.sui
+NafeezAhmed,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NafeezAhmed - Dr Nafeez Ahmed
+Nandi_Bushell,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Nandi_Bushell - Nandi Bushell
+NanoClaw_AI,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NanoClaw_AI - NanoClaw
+NASA,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NASA - NASA
+NASAInSight,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NASAInSight - NASA InSight
+NASAJPL,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NASAJPL - NASA JPL
+NASAPersevere,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NASAPersevere - ARCHIVED - NASA's Perseverance Mars Rover
+NASASolarSystem,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NASASolarSystem - NASA Solar System
+NASAWebb,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NASAWebb - NASA Webb Telescope
+natfriedman,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@natfriedman - Nat Friedman
+nathanclement,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@nathanclement - Nathan Clement
+NeelieKroesEU,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NeelieKroesEU - Neelie Kroes
+neilaglet,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@neilaglet - lee gatlin
+neilhimself,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@neilhimself - Neil Gaiman
+NellieBowles,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NellieBowles - Nellie Bowles
+Netflix_Sandman,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Netflix_Sandman - The Sandman
+neuranne,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@neuranne - Anne-Laure Le Cunff
+NHC_Atlantic,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NHC_Atlantic - National Hurricane Center
+Nick_Carmody,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@Nick_Carmody - Nick Carmody JD, MS Psych"
+nickbilton,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@nickbilton - Nick Bilton
+nickevanjoseph,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,nickevanjoseph,,2026-06-23T08:57:14.584948+00:00,,@nickevanjoseph - Nicholas Joseph
+NicolasLPhoto,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NicolasLPhoto - NicolasL Photography
+nicolesy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@nicolesy - Nicole S. Young
+NiemanLab,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NiemanLab - Nieman Lab
+nihilist_arbys,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@nihilist_arbys - Nihilist Arby's
+NischalShetty,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NischalShetty - Nischal Shetty
+nisselson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@nisselson - Evan Nisselson
+nmasc_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@nmasc_ - Natasha Mascarenhas
+Nnedi,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@Nnedi - Nnedi Okorafor, PhD🕷️"
+Noctua_at,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Noctua_at - Noctua
+nodejs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@nodejs - Node.js
+noonisms,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@noonisms - Andrew Noonan
+noopkat,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@noopkat - noopkat
+norafawn,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@norafawn - nora 🌱
+NOS,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@NOS - NOS
+notquiteold,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@notquiteold - Theo-sophy
+nottecore,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@nottecore - Notte
+novaramedia,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@novaramedia - Novara Media
+novaspivack,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@novaspivack - Nova Spivack
+npm_i_shaders,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@npm_i_shaders - shaders
+Number10cat,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Number10cat - Larry the Cat
+Oatmeal,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Oatmeal - The Oatmeal
+observablehq,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@observablehq - Observable
+officialSUIG,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@officialSUIG - Sui Group Holdings (SUIG)
+olgakrynska_art,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@olgakrynska_art - Olga Kryńska /Wiewióra/
+OlgaSkipper,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@OlgaSkipper - Olga Skipper (Steidl)
+oliverhamrin,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,oliverhamrin,,2026-06-23T08:57:15.586584+00:00,,@oliverhamrin - Oliver ೫
+oliviaLbecker,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@oliviaLbecker - Olivia Becker
+ollama,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ollama - ollama
+onecowaday,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@onecowaday - Cow Lover
+OneNerdyOpinion,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@OneNerdyOpinion - Matt Ramsey
+oneunderscore__,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@oneunderscore__ - follow @bencollins on bluesky
+OptimumTechYT,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@OptimumTechYT - optimum
+orbeezgod,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@orbeezgod - orbeez god
+OregonZoo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@OregonZoo - Oregon Zoo
+orenmeetsworld,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,orenmeetsworld,,2026-06-23T08:57:16.056553+00:00,,@orenmeetsworld - Oren John
+ornerine,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ornerine - ari 🥀 @ HIATUS
+Otto_English,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Otto_English - Otto English
+owickstrom,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@owickstrom - Oskar Wickström
+Owl__Kitty,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Owl__Kitty - OwlKitty
+oxygenaccel,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@oxygenaccel - Oxygen Accelerator
+OxygenStartups,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@OxygenStartups - Oxygen Startups
+Padday,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Padday - Paul Adams
+pants,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pants - mr. joshua
+papercliping,review_drop_leaning,drop_candidate,0,1,0,0,yes,no,papercliping,,2026-06-23T08:57:16.292299+00:00,,@papercliping - Paperclip
+parns,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@parns - Georgina Parnell 🐾
+partytimeHXLNT,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@partytimeHXLNT - @HXLNT@merveilles.town
+pascalefung,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pascalefung - Pascale Fung
+passioncapital,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@passioncapital - Passion Capital
+PatelVarina,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PatelVarina - Varina Patel
+patio11,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@patio11 - Patrick McKenzie
+patloeber,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@patloeber - Patrick Loeber
+patrickc,review_drop_leaning,drop_candidate,0,7,0,0,yes,no,patrickc,,2026-06-23T08:57:17.002325+00:00,,@patrickc - Patrick Collison
+pattonoswalt,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pattonoswalt - Patton Oswalt
+paul_irish,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@paul_irish - Paul Irish
+Paul_Kinlan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Paul_Kinlan - Paul Kinlan
+PaulaMarttila,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PaulaMarttila - Paula Marttila
+PaulCutsinger,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PaulCutsinger - PaulCutsinger
+PAVGOD,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PAVGOD - ᴘᴀᴠʟᴏᴠ ᴛʜᴇ ᴄᴏʀɢɪ
+paw_lean,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@paw_lean - Pauline P. Narvas
+Percival,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Percival - Sean Percival
+Peston,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Peston - Robert Peston
+PeterAdamsPhoto,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PeterAdamsPhoto - Peter Adams
+peterbourgon,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@peterbourgon - ✕✕✕✕✕
+PeterMcCrory,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PeterMcCrory - Peter McCrory
+PeterSMagnusson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PeterSMagnusson - Peter
+peterthiel,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@peterthiel - Peter Thiel
+ph,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ph - Paul Hammond
+Phantom_TheGame,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Phantom_TheGame - Fear the Phantom (game in bio)
+pheuter,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pheuter - Mark Fayngersh
+PhpCfps,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PhpCfps - PHP CFPs
+PicardTips,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PicardTips - Picard Tips
+pierrecomputer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pierrecomputer - Pierre
+pierrevalade,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pierrevalade - Pierre Valade
+pietergreyling,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pietergreyling - Pieter Greyling
+pimterry,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pimterry - Tim Perry (now mostly on 🦋 + 🦣)
+PizzaMyke,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PizzaMyke - Pizza Myke
+PlanetScale,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PlanetScale - PlanetScale
+platformer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@platformer - Platformer
+playfaircapital,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@playfaircapital - Playfair
+PleaseBeGneiss,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PleaseBeGneiss - slate
+polar_sh,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@polar_sh - Polar
+PoliticsAndEd,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PoliticsAndEd - Politics & Education
+PolitlcsUK,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PolitlcsUK - Politics UK
+pollysmythe,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pollysmythe - Polly Smythe
+polynoamial,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@polynoamial - Noam Brown
+ponystasia,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ponystasia - Anastasia Leng
+poorlycatdraw,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@poorlycatdraw - poorly drawn cats
+Popehat,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Popehat - DoneHat
+Possum_Daily,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Possum_Daily - Possum_Daily
+poteto,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@poteto - lauren
+POTUS44,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@POTUS44 - President Obama
+PouchPolice,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PouchPolice - Pouch Police
+PremiumBusiness,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PremiumBusiness - Premium Business
+prep_propaganda,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@prep_propaganda - Prep Propaganda 👔
+PressSec46,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PressSec46 - Karine Jean-Pierre Archived
+primnimproper_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@primnimproper_ - Mallory Eeeeeeee
+prisharma25,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@prisharma25 - Priyanka Sharma
+prisma,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@prisma - Prisma
+Pro,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Pro - Pro
+ProductHunt,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ProductHunt - Product Hunt 😸
+ProgressBar202_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ProgressBar202_ - Progress Bar 2026
+ProperCloth,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ProperCloth - Proper Cloth
+pt,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pt - parker
+ptr,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ptr - *tess
+PulpLibrarian,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PulpLibrarian - Pulp Librarian
+PVBrett,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@PVBrett - Peter V. Brett
+pvergadia,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pvergadia - Priyanka Vergadia
+pvncher,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pvncher - eric provencher
+pwnallthethings,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@pwnallthethings - Pwnallthethings
+Q3w3e3,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Q3w3e3 - xXx_FELL4U_xXx
+qikipedia,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@qikipedia - Quite Interesting
+QueryShark,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@QueryShark - QueryShark
+quesoFaceo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@quesoFaceo - Queso (formerly The Golden Ratio backup account)
+QuinceMountain,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@QuinceMountain - Quince Mountain
+QuinnyPig,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@QuinnyPig - Corey Quinn
+quxiaoyin,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@quxiaoyin - Xiaoyin Qu
+r00t0wns,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@r00t0wns - r00t
+rachdele,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rachdele - ra¢hel
+rachelc00k,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rachelc00k - Rachel Cook
+RachQuitGoogle,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RachQuitGoogle - Rachel Collins
+RachyMills,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RachyMills - Rachel Delphin
+raffi,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@raffi - uɐᴉɹoʞᴉɹʞ ᴉɟɟɐɹ👨🏼‍🚀
+Railway,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Railway - Railway
+raizamrtn,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@raizamrtn - Raiza Martin
+Rakhee,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Rakhee - Rax
+rakyll,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rakyll - Jaana Dogan ヤナ ドガン
+ramz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ramz - Ramzi Rizk
+randfish,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@randfish - Rand Fishkin (follow @randderuiter on Threads)
+random_walker,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@random_walker - Arvind Narayanan
+ravi_mohan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ravi_mohan - Ravi Mohan
+rchoi,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rchoi - Ryan Choi 🐢💵
+rcosterr,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rcosterr - rachel coster
+reactjs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@reactjs - React
+ReactJSNews,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ReactJSNews - ReactJS News
+RealKiefer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RealKiefer - Kiefer Sutherland
+RealLyndaCarter,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RealLyndaCarter - Lynda Carter
+realmcore_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@realmcore_ - akira
+realoverheardla,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@realoverheardla - Overheard
+RealSexyCyborg,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RealSexyCyborg - Naomi Wu 机械妖姬
+redgirlsays,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@redgirlsays - Christina Bonnington
+rehana_makes,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rehana_makes - Rehana👩🏻‍💻⚡
+reinink,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@reinink - Jonathan Reinink
+reneeshah123,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@reneeshah123 - Renee Shah
+retomeier,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@retomeier - Reto Meier
+rgay,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rgay - roxane gay
+Rich_Harris,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Rich_Harris - Rich Harris
+richardallenhay,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@richardallenhay - Richard Hay 💙
+RichardSSutton,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RichardSSutton - Richard Sutton
+RikerGoogling,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RikerGoogling - Riker Googling
+RJ_Simmonds,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RJ_Simmonds - rebecca simmonds 🦭/acc
+RMTunion,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RMTunion - RMT
+robinhobb,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@robinhobb - Robin Hobb
+robmccauley,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@robmccauley - robmccauley
+robpalmer2,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@robpalmer2 - Rob Palmer
+robross,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@robross - RobRoss
+RockstarGames,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RockstarGames - Rockstar Games
+RogueNASA,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RogueNASA - Rogue NASA
+RoguePOTUSStaff,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RoguePOTUSStaff - Rogue POTUS Staff
+RolfatWarwick,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RolfatWarwick - Rolf the University of Warwick Campus Cat
+romannurik,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@romannurik - Roman Nurik
+romeosilviu,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@romeosilviu - Romeo Ganescu
+romero,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@romero - John Romero 🤘🏽
+RonaldKlain,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RonaldKlain - Ronald Klain
+RonConway,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RonConway - Ron Conway
+ropiku,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ropiku - Mihai
+RoryTheExplorey,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RoryTheExplorey - Rory
+rosa,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rosa - Rosa
+RosieisaHolt,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RosieisaHolt - Rosie Holt
+ROWGHANI,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ROWGHANI - Ali Rowghani
+rsms,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rsms - Rasmus Andersson
+rsohoni,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rsohoni - Reshma Sohoni
+rspack_dev,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rspack_dev - Rspack
+rubydwarf,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@rubydwarf - Marion Schleifer
+ruchowdh,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ruchowdh - ruchowdh.bsky.social
+RunwayEast,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RunwayEast - Runway East
+RushMuseum,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RushMuseum - Rush Museum
+RyanBrack,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@RyanBrack - Ryan Brack
+ryanvogel,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ryanvogel - vogel
+ryguyrg,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ryguyrg - ryan boyd
+rynsrchive,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,rynsrchive,,2026-06-23T08:57:19.780575+00:00,,@rynsrchive - ryn (& apple) ‧₊ 🍒 ᵎᵎ
+sabrinaesaquino,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sabrinaesaquino - Sabrina
+sacca,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sacca - Chris Sacca 🇺🇸
+SadiqKhan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SadiqKhan - Sadiq Khan
+sainingxie,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sainingxie - Saining Xie
+salgar,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@salgar - Satyajeet Salgar
+sallyannw,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sallyannw - Sally-Ann Williams
+SallyJavadi,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,SallyJavadi,,2026-06-23T08:52:39.912403+00:00,,@SallyJavadi - Sally Javadi
+samcates,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@samcates - Sam Cates
+samjulien,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@samjulien - Sam Julien
+sammcallister,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sammcallister - sam mcallister
+SamuelLJackson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SamuelLJackson - Samuel L. Jackson
+SandipanKundu42,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SandipanKundu42 - Sandipan Kundu 🛠
+saradefrancesco,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@saradefrancesco - Sara de Francesco
+saradietschy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@saradietschy - Sara Dietschy 🍑y
+SaraEleta,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SaraEleta - Ｓａｒａ Ｅｌｅｔａ
+SarahCAndersen,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SarahCAndersen - Sarah Andersen
+Sarahchadwickk,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Sarahchadwickk - Sarah Chadwick
+sarahclazarus,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sarahclazarus - Sarah Lazarus
+sarahcpr,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sarahcpr - Sarah Cooper
+sarahcuda,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sarahcuda - Sarah Lacy
+SarahPerezTC,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SarahPerezTC - Sarah Perez
+sarawrencomedy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sarawrencomedy - Sara Wren
+SartorialNotes,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SartorialNotes - Torsten
+saucedopen,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@saucedopen - OpenSauced
+saysthefox,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@saysthefox - kelly victoria 🪐
+sc_seedhack,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sc_seedhack - sc_seedhack
+scamperbeasts,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@scamperbeasts - The Scamperbeasts
+schmiegschmieg,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@schmiegschmieg - Maggie
+Scobleizer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Scobleizer - Robert Scoble
+scottlynch78,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@scottlynch78 - Scott Lynch
+scottsigler,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@scottsigler - Scott Sigler
+ScribblingOn,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ScribblingOn - Shubheksha ✨
+ScriptedAlchemy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ScriptedAlchemy - Zack Jackson
+se1,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,se1,,2026-06-23T08:57:21.015911+00:00,,@se1 - SE1 - @se1.news on Bluesky
+sean_lynch,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sean_lynch - Sean Lynch
+seanhn,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@seanhn - Sean Heelan
+seanlinmt,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@seanlinmt - Sean Lin
+sebastiansalek,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sebastiansalek - Sebastian Salek
+seedcamp,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@seedcamp - seedcamp
+Seinfeld2000,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Seinfeld2000 - Seinfeld Current Day
+selen_klara,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@selen_klara - Klara 🤠 London/Sweden
+selop,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@selop - Stephen Elop
+Semmle,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Semmle - Semmle
+SenBooker,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SenBooker - Sen. Cory Booker
+SendBird,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SendBird - Sendbird
+SeraAndroid,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SeraAndroid - Tim Messerschmidt
+SeriousTweepGuy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SeriousTweepGuy - Serious Tweep Guy
+SethRing,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SethRing - Seth Ring
+sgantchev,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sgantchev - Stephane Gantchev
+shanselman,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@shanselman - Scott Hanselman 🌮
+shantinix,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@shantinix - Shantini
+shardeum,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@shardeum - Shardeum
+shardeumtimes,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@shardeumtimes - Shardeum Times | Community
+ShardusLedger,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ShardusLedger - Shardus $ULT
+sharonstrands,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sharonstrands - sharon
+ShellyAsquith,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ShellyAsquith - Shelly M
+shenetworks,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@shenetworks - shenetworks
+sherwinwu,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sherwinwu - Sherwin Wu
+shimon8282,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@shimon8282 - Shimon Whiteson
+shivmalik,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,shivmalik,,2026-06-23T08:57:22.320800+00:00,,@shivmalik - Shiv Malik
+shockproofbeats,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@shockproofbeats - The author, Séamas O'Reilly"
+ShouldHaveCat,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ShouldHaveCat - Why you should have a cat
+shuding,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@shuding - Shu
+ShuwamRana,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ShuwamRana - Shuwam (Shardeum)
+SiaGeorgieva,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SiaGeorgieva - Sia Georgieva
+SICKOFWOLVES,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SICKOFWOLVES - NOT A WOLF
+SideroLabs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@SideroLabs - Sidero Labs, Inc."
+SierraPlatform,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SierraPlatform - Sierra
+signulll,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@signulll - signüll
+silentcrooner,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@silentcrooner - Ulrik Bo Larsen
+SiliconLondon,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SiliconLondon - Silicon Roundabout
+siliconmania,review_drop_leaning,drop_candidate,0,8,0,0,yes,no,siliconmania,,2026-06-23T08:57:23.140868+00:00,,@siliconmania - Silicon Mania
+SimoneGiertz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SimoneGiertz - Simone Giertz
+simonjenner,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@simonjenner - Simon Jenner🇺🇦
+simonlu,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@simonlu - Simon Lu
+SimonsCat,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SimonsCat - Simon's Cat 🐾
+sipaa,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sipaa - Sabīne Supernova
+SirPatStew,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SirPatStew - Patrick Stewart
+skim,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@skim - 👋
+skllcrn,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@skllcrn - Christopher Skillicorn
+SlackHQ,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SlackHQ - Slack
+slackmistress,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@slackmistress - Nina Bargiel, probably"
+SlexAxton,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SlexAxton - Alex Sexton
+slicervm,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@slicervm - slicer
+SMBCComics,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SMBCComics - SMBC Comics
+SmugMug,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SmugMug - SmugMug
+soFISHtication,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@soFISHtication - 🦈Shark Lady🦈
+somegoodnews,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@somegoodnews - Some Good News
+soniasinglas,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@soniasinglas - Sonia Singla
+soulthesea_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@soulthesea_ - lilly
+soundwave,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@soundwave - Soundwave.com
+sourhoestarter,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sourhoestarter - ce n'est pas erica
+southpolesteve,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@southpolesteve - Steve Faulkner
+Southwark_News,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Southwark_News - Southwark News
+SoVeryBritish,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SoVeryBritish - VeryBritishProblems
+sparker,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sparker - Sean Parker
+speakerconf,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@speakerconf - AIT Workshops
+spotfoss,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@spotfoss - Tom 'spot' Callaway
+squarecog,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@squarecog - Dmitriy Ryaboy 🇺🇸🇮🇱
+sschillace,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sschillace - Sam Schillace
+stack_tracy_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@stack_tracy_ - Tracy King
+StanfordHAI,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@StanfordHAI - Stanford HAI
+StarfieldGame,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@StarfieldGame - Starfield
+starstrickenSF,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,"@starstrickenSF - Sarafina El-Badry Nance, PhD"
+StarTrekOnPPlus,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@StarTrekOnPPlus - Star Trek on Paramount+
+StartUpBritain,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@StartUpBritain - StartUp Britain
+StartupLJackson,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@StartupLJackson - Startup L. Jackson
+startupstowers,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@startupstowers - Startups.co.uk
+StartupUK,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@StartupUK - GlobalTechConnect
+steak_umm,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@steak_umm - Steak-umm
+StefanGlaenzer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@StefanGlaenzer - Stefan Glänzer
+steffiwu,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@steffiwu - Steffi Wu 吳昀
+steffroehlich,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@steffroehlich - Stefan Fröhlich 🕊️
+steph_palazzolo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@steph_palazzolo - Stephanie Palazzolo
+stephanierieger,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@stephanierieger - StephanieRieger@mastodon.scot🏴󠁧󠁢󠁳󠁣󠁴󠁿🇨🇦
+stephliu,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@stephliu - Stephanie Liu
+stephr_wong,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@stephr_wong - Stephanie Wong
+stevendunston,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@stevendunston - Steven Dunston
+stevenheidel,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@stevenheidel - Steven Heidel
+steveschoger,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@steveschoger - Steve Schoger
+stevibe,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@stevibe - stevibe
+stewart,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@stewart - Stewart Butterfield
+stewartrussell,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@stewartrussell - Stew
+StPatrickDog,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@StPatrickDog - St. Patrick☘️
+stratechery,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@stratechery - Stratechery
+stripe,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@stripe - Stripe
+SubwayTakes,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SubwayTakes - SubwayTakes with Kareem Rahma
+suchnerve,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@suchnerve - Vivian
+sudobunni,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@sudobunni - bashbunni
+SUEtheTrex,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SUEtheTrex - SUE the T. rex
+Suhail,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Suhail - Suhail
+supe_katarina,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@supe_katarina - Katarina Šupe
+supersat,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@supersat - Karl (RIP )
+supertanskiii,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@supertanskiii - Supertanskiii
+SusanWojcicki,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SusanWojcicki - Susan Wojcicki
+SuzHaggerty,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SuzHaggerty - Suzanne Haggerty
+swagitda_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@swagitda_ - Kelly Shortridge
+SWatercolour,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SWatercolour - shitty watercolour
+swear_trek,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@swear_trek - Swear Trek
+SweetTweetIdeas,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SweetTweetIdeas - SweetTweetIdeas
+swizzleodog,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@swizzleodog - Swizzle O’Dog☘️
+synthwavedd,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@synthwavedd - leo 🐾
+SysQuotes,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@SysQuotes - Systemantics Quotes
+tanay1337,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tanay1337 - Tanay Pant
+tanner_stanley,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tanner_stanley - Tanner Messerschmidt
+tarah,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tarah - Tarah M. Wheeler
+TartanLlama,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TartanLlama - Sy Brand
+TatianaTMac,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TatianaTMac - Tatiana Mac
+taviso,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@taviso - Tavis Ormandy
+TaylorLorenz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TaylorLorenz - Taylor Lorenz
+tconnellyRTE,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tconnellyRTE - Tony Connelly
+Techmeme,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Techmeme - Techmeme
+TEDTalks,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TEDTalks - TED Talks
+teej_dv,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@teej_dv - teej dv 🔭
+Teknium,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,Teknium,,2026-06-23T08:52:41.279090+00:00,,@Teknium - Teknium 🪽
+thatadamguy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@thatadamguy - Adam Lasnik
+the_rosenrot,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@the_rosenrot - Gracia Ventus
+the_thagomizer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@the_thagomizer - Aja Hammerly
+TheAmolAvasare,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TheAmolAvasare - Amol Avasare
+TheAndrewNadeau,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TheAndrewNadeau - Andrew Nadeau
+theavalkyrie,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@theavalkyrie - Stargirl 🌠
+TheDailyShow,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TheDailyShow - The Daily Show
+thedungeoncast,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@thedungeoncast - The Dungeoncast
+TheGoldenRatio4,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TheGoldenRatio4 - The Golden Ratio
+TheGreenParty,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TheGreenParty - The Green Party
+theharmonyguy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@theharmonyguy - Joey Tyson
+theinformation,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@theinformation - The Information
+TheMason,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TheMason - Alex Mason
+themattharris,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@themattharris - Matt Harris
+thenerve_news,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@thenerve_news - THE NERVE
+theonejvo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@theonejvo - Jamieson O'Reilly
+thephysicsgirl,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@thephysicsgirl - Dianna Cowern
+theprophetpizza,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@theprophetpizza - Rachel Tashjian Wise
+therealfitz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@therealfitz - Brian Fitzpatrick @therealfitz@wandering.shop
+Thereisnocat_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Thereisnocat_ - There is no cat in this image
+theresaneil,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@theresaneil - Theresa Neil
+theSeanCook,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@theSeanCook - Sean Cook
+thesheetztweetz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@thesheetztweetz - Michael Sheetz
+theSiliconSiren,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@theSiliconSiren - Silicon Siren
+thesmith,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@thesmith - Ben Smith
+thestorygraph,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@thestorygraph - The StoryGraph
+TheTorontoZoo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TheTorontoZoo - The Toronto Zoo
+TheTweetOfGod,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TheTweetOfGod - God
+this_is_mallory,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@this_is_mallory - mallory (she/her)💬
+thomas_ankcorn,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@thomas_ankcorn - Thomas Ankcorn
+thomasdegry,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@thomasdegry - Thomas Degry
+tim_cook,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tim_cook - Tim Cook
+timberners_lee,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@timberners_lee - Tim Berners-Lee
+timbray,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@timbray - Tim Bray
+timoarnall,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@timoarnall - Timo Arnall
+timoreilly,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@timoreilly - Tim O'Reilly
+timothyjordan,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@timothyjordan - Timothy Jordan
+tjack,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tjack - Todd Jackson
+tmorello,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tmorello - Tom Morello
+tnwevents,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tnwevents - TNW Events
+tobias_rees,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tobias_rees - Tobias Rees
+tokyocyb0rg,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tokyocyb0rg - tokyo cyborg
+tomayac,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tomayac - Thomas Steiner
+tomwoolway,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tomwoolway - Tom Woolway
+Tomycardy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Tomycardy - Tom Cardy
+tonyhawk,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tonyhawk - Tony Hawk
+tonyschwartz,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tonyschwartz - Tony Schwartz
+tonysphere,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tonysphere - Tony Conrad
+TonyW,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TonyW - Tony Wang
+toolotheday,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@toolotheday - Tool Of The Day
+TorDotComPub,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TorDotComPub - Tordotcom Publishing
+tototheminidox,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tototheminidox - Toto
+TracketPacer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TracketPacer - TracketPacer
+TreasuryMog,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TreasuryMog - Gladstone 🇺🇦
+troyhunt,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@troyhunt - Troy Hunt
+trueadm,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@trueadm - Dominic Gannaway
+trunarla,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@trunarla - ˗ˏˋmewtru´ˎ˗
+TTomTToro,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@TTomTToro - Tom Toro
+tweethue,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tweethue - Philips Hue
+tweetsoutloud,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@tweetsoutloud - Bobak Ferdowsi
+twerske,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@twerske - Emma Twersky
+twofficejukebox,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@twofficejukebox - Twoffice Jukebox
+Twoglodyte,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Twoglodyte - Kate Russell Bailey
+Ubiquiti,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Ubiquiti - Ubiquiti Inc
+uhoelzle,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@uhoelzle - Urs Hölzle
+UKEUchallenge,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@UKEUchallenge - UK in EU Challenge
+ulander,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ulander - Peder Ulander
+Una,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Una - Una 🇺🇦
+urban_comp,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@urban_comp - Urban Composition
+v0,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@v0 - v0
+vadiamit,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@vadiamit - Amit Vadi
+varcharr,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@varcharr - casey
+vcstarterkit,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@vcstarterkit - let me know how i can be helpful
+VenkmanDog,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@VenkmanDog - Venkman Dog
+vicgundotra,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@vicgundotra - vicgundotra
+ViktorBenei,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ViktorBenei - Viktor Benei
+vincent_koc,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@vincent_koc - Vincent Koc
+Vinogradov_art,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Vinogradov_art - Alexander Vinogradov
+vitt2tsnoc,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@vitt2tsnoc - Vittoria
+viv,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@viv - Viv Bowdler-Thomas 🍉
+viviancromwell,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@viviancromwell - Vivian Cromwell
+voidzerodev,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@voidzerodev - VoidZero
+VP46Archive,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@VP46Archive - Vice President Kamala Harris Archived
+vxunderground,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@vxunderground - vx-underground
+Warcraft3,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Warcraft3 - Warcraft III: Reforged
+WarhorseStudios,review_drop_leaning,drop_candidate,0,10,0,0,yes,no,WarhorseStudios,,2026-06-23T08:52:43.159031+00:00,,@WarhorseStudios - Warhorse Studios
+Waymo,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Waymo - Waymo
+Wayne,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Wayne - wayne chang
+wbm312,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@wbm312 - Whitney Merrill
+we_are_cordite,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@we_are_cordite - Cordite
+we_love_art_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@we_love_art_ - WeLoveArt
+web3crusadr,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@web3crusadr - Christian Thompson
+web3isgreat,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@web3isgreat - web3 is going just great
+webtaskio,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@webtaskio - webtask.io
+weirdlilguys,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@weirdlilguys - cats being weird little guys 👅
+wes_chu,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@wes_chu - Wesley Chu
+WhoresofYore,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@WhoresofYore - Whores of Yore
+willccbb,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@willccbb - will brown
+willnorris,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@willnorris - will@willnorris.com
+wilw,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@wilw - Wil Wheaton
+womensart1,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@womensart1 - #WOMENSART
+WorkerInfoX,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@WorkerInfoX - Worker Info Exchange
+worrydream,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@worrydream - Bret Victor
+writerlynds,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@writerlynds - Lyndsey Croal
+writethedocs,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@writethedocs - Write the Docs
+wyatt_earp_,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@wyatt_earp_ - Wyatt Jenkins
+X,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@X - X
+XBusiness,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@XBusiness - Business
+XComms,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@XComms - Twitter Comms
+xgigglypuff,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@xgigglypuff - giggly ♡
+xkcd,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@xkcd - Randall Munroe
+xkcdComic,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@xkcdComic - XKCD Comic
+XNews,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@XNews - News
+XUK,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@XUK - X UK
+xyflowdev,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@xyflowdev - xyflow · React Flow · Svelte Flow
+yaekyumlee,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@yaekyumlee - Yaekyum (YK) Lee
+yaempiricist,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@yaempiricist - Jiten Vaidya
+yanatornoe,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@yanatornoe - Yana Tornoe
+yashvi3r,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@yashvi3r - Yashvier Kosaraju
+yayalexisgay,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@yayalexisgay - Alexis Gay
+ylecun,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ylecun - Yann LeCun
+yonatanzunger,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@yonatanzunger - Yonatan Zunger 🔥
+YouHitYourHead,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@YouHitYourHead - Kahlinja (He/Him)
+your_FAV_pisces,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@your_FAV_pisces - • LouhLah •
+YousefED,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@YousefED - Yousef El-Dardiry
+yusukebe,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@yusukebe - Yusuke Wada
+zabseb,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@zabseb - seb
+zacharynado,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@zacharynado - Zachary Nado
+zackbloom,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@zackbloom - Zack Bloom
+ZackPolanski,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ZackPolanski - Zack Polanski
+zackwhittaker,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@zackwhittaker - Zack Whittaker
+Zahra,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@Zahra - Natalia Ree
+ZedScience,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ZedScience - Jason Zackowski
+zendadddy,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@zendadddy - Frank ☼ Bach
+zephoria,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@zephoria - danah boyd
+zeynep,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@zeynep - zeynep tufekci
+ZoeSchiffer,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ZoeSchiffer - Zoë Schiffer
+ZohranKMamdani,needs_profile_enrichment,drop_candidate,0,0,0,0,no,no,,,,,@ZohranKMamdani - Zohran Kwame Mamdani

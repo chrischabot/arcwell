@@ -57,6 +57,30 @@ pub struct WikiSyncReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WikiDecisionLedgerEntry {
+    pub page_id: String,
+    pub page_title: String,
+    pub decision: String,
+    pub reviewed_source_card_ids: Vec<String>,
+    pub source_count: usize,
+    pub rationale: String,
+    pub follow_up: String,
+    pub reviewed_at: String,
+    pub first_seen_at: String,
+    pub updated_at: String,
+    pub source_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WikiDecisionLedgerSummary {
+    pub rows: usize,
+    pub pages: usize,
+    pub decision_counts: BTreeMap<String, usize>,
+    pub newest_reviewed_at: Option<String>,
+    pub oldest_reviewed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceClaim {
     pub claim: String,
     pub kind: String,

@@ -1074,8 +1074,13 @@ impl Store {
                 x_search_response_to_import_items(&value, "recent_search", Some(query))?;
             let report = self.import_x_json_value_without_sync_run(&import_value)?;
             if report.rejected > 0 {
+                let first_error = report
+                    .rejected_errors
+                    .first()
+                    .map(|error| format!("; first rejection: {error}"))
+                    .unwrap_or_default();
                 bail!(
-                    "X recent search returned {rejected} malformed item(s); cursor was not advanced",
+                    "X recent search returned {rejected} malformed item(s){first_error}; cursor was not advanced",
                     rejected = report.rejected
                 );
             }
@@ -1219,6 +1224,7 @@ impl Store {
             let mut imported = 0;
             let mut skipped_duplicates = 0;
             let mut rejected = 0;
+            let mut rejected_errors = Vec::new();
             let mut imported_items = Vec::new();
             let mut pagination_token: Option<String> = None;
             let mut pages_fetched = 0;
@@ -1271,10 +1277,26 @@ impl Store {
                                 imported_items.push(item);
                             }
                             Ok(None) => skipped_duplicates += 1,
-                            Err(_) => rejected += 1,
+                            Err(error) => {
+                                rejected += 1;
+                                if rejected_errors.len() < 10 {
+                                    rejected_errors.push(excerpt(
+                                        &redact_secret_like_text(&error.to_string()),
+                                        500,
+                                    ));
+                                }
+                            }
                         },
                         Ok(None) => {}
-                        Err(_) => rejected += 1,
+                        Err(error) => {
+                            rejected += 1;
+                            if rejected_errors.len() < 10 {
+                                rejected_errors.push(excerpt(
+                                    &redact_secret_like_text(&error.to_string()),
+                                    500,
+                                ));
+                            }
+                        }
                     }
                 }
                 pagination_token = value
@@ -1311,6 +1333,7 @@ impl Store {
                 imported,
                 skipped_duplicates,
                 rejected,
+                rejected_errors,
                 pages_fetched: Some(pages_fetched),
                 requested_limit: Some(max_bookmarks),
                 exhausted: Some(exhausted),

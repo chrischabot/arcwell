@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Refresh Arcwell wiki DB metadata and FTS rows from existing page files."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import sqlite3
+from datetime import UTC, datetime
+from pathlib import Path
+
+
+def default_db_path() -> Path:
+    home = Path(os.environ.get("ARCWELL_HOME", Path.home() / ".arcwell"))
+    return home / "arcwell.sqlite3"
+
+
+def refresh_page(conn: sqlite3.Connection, page_path: Path, timestamp: str) -> str:
+    resolved = page_path.expanduser().resolve()
+    content = resolved.read_text(encoding="utf-8")
+    content_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    row = conn.execute(
+        """
+        SELECT id, title
+        FROM wiki_pages
+        WHERE path = ?1
+          AND status = 'active'
+        """,
+        (str(resolved),),
+    ).fetchone()
+    if row is None:
+        raise SystemExit(f"no active wiki_pages row for {resolved}")
+
+    page_id, title = row
+    conn.execute(
+        """
+        UPDATE wiki_pages
+        SET content_sha256 = ?2,
+            updated_at = ?3
+        WHERE id = ?1
+        """,
+        (page_id, content_sha256, timestamp),
+    )
+    conn.execute("DELETE FROM wiki_pages_fts WHERE id = ?1", (page_id,))
+    conn.execute(
+        "INSERT INTO wiki_pages_fts (id, title, content) VALUES (?1, ?2, ?3)",
+        (page_id, title, content),
+    )
+    return page_id
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Refresh existing Arcwell wiki page metadata and FTS rows."
+    )
+    parser.add_argument("paths", nargs="+", type=Path)
+    parser.add_argument("--db", type=Path, default=default_db_path())
+    args = parser.parse_args()
+
+    timestamp = datetime.now(UTC).isoformat()
+    with sqlite3.connect(args.db) as conn:
+        refreshed = [refresh_page(conn, path, timestamp) for path in args.paths]
+
+    for page_id in refreshed:
+        print(page_id)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -350,10 +350,54 @@ pub(crate) fn x_command(store: Store, args: XCommand) -> Result<()> {
             max_bookmarks,
             max_recent_follows,
         )?),
+        XSubcommand::CurateWatchSources {
+            dry_run: _,
+            apply,
+            mode,
+        } => {
+            let mode = if apply { mode.as_str() } else { "dry-run" };
+            print_json(&store.x_curate_watch_sources(mode)?)
+        }
+        XSubcommand::RestoreWatchCuration { run_id } => {
+            print_json(&store.restore_x_watch_curation_run(&run_id)?)
+        }
+        XSubcommand::WatchCurationReport { run_id } => {
+            let report = if let Some(run_id) = run_id {
+                Some(store.x_watch_curation_report(&run_id)?)
+            } else {
+                store.latest_x_watch_curation_report()?
+            };
+            print_json(&report)
+        }
+        XSubcommand::ImportWatchManualRules {
+            path,
+            rules_json,
+            reviewed_by,
+            dry_run: _,
+            apply,
+        } => {
+            let raw = if let Some(path) = path {
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?
+            } else {
+                rules_json
+            };
+            let rules: Vec<XWatchManualRuleInput> =
+                serde_json::from_str(&raw).context("parsing X watch manual rules JSON")?;
+            print_json(&store.import_x_watch_manual_rules(rules, &reviewed_by, !apply)?)
+        }
+        XSubcommand::EnrichWatchProfiles {
+            run_id,
+            handles,
+            limit,
+        } => print_json(&store.x_enrich_watch_profiles(run_id.as_deref(), &handles, limit)?),
         XSubcommand::MonitorWatchSources {
             max_sources,
             max_results_per_source,
         } => print_json(&store.x_monitor_watch_sources(max_sources, max_results_per_source)?),
+        XSubcommand::MonitorWatchSource {
+            handle,
+            max_results_per_source,
+        } => print_json(&store.x_monitor_watch_source(&handle, max_results_per_source)?),
         XSubcommand::RepairHealth {
             defer_rate_limited_hours,
             limit,

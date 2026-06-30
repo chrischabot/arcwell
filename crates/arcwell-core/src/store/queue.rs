@@ -1,6 +1,57 @@
 use super::*;
 
 impl Store {
+    pub(crate) fn active_blog_watch_source_for_url(
+        &self,
+        url: &str,
+    ) -> Result<Option<(WatchSource, String)>> {
+        let target = canonical_source_url(url)?;
+        for source in self.list_watch_sources()? {
+            if source.source_kind != "blog" || source.status != "active" {
+                continue;
+            }
+            if canonical_source_url(&source.locator)? == target {
+                let key = watch_source_health_key(&source)?;
+                return Ok(Some((source, key)));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn record_blog_watch_source_success_for_url_ingest(
+        &self,
+        url: &str,
+        page_id: &str,
+    ) -> Result<Option<String>> {
+        let Some((source, source_key)) = self.active_blog_watch_source_for_url(url)? else {
+            return Ok(None);
+        };
+        let next_run_at = watch_source_cadence_seconds(&source.cadence).map(now_plus_seconds);
+        self.record_source_success(SourceHealthUpdate {
+            key: &source_key,
+            provider: "blog",
+            source_kind: "blog",
+            locator: &source.locator,
+            last_item_id: Some(page_id),
+            last_item_date: None,
+            cursor_key: None,
+            cursor_value: None,
+            next_run_at: next_run_at.as_deref(),
+        })?;
+        Ok(Some(source_key))
+    }
+
+    pub(crate) fn record_blog_watch_source_failure_for_url_ingest(
+        &self,
+        url: &str,
+        error: &str,
+    ) -> Result<()> {
+        if let Some((source, source_key)) = self.active_blog_watch_source_for_url(url)? {
+            self.record_source_failure(&source_key, "blog", "blog", &source.locator, error)?;
+        }
+        Ok(())
+    }
+
     pub fn run_wiki_ingest_file_job(&self, path: &Path) -> Result<WikiJob> {
         let input = json!({ "path": path });
         let job = self.insert_wiki_job("ingest_file", input)?;
@@ -34,17 +85,24 @@ impl Store {
             let doc = fetch_url_ingest_document(url.clone())?;
             let markdown = render_url_ingest_page(&doc);
             let page_id = self.add_wiki_page(&doc.title, &markdown, &doc.canonical_url)?;
+            let source_health_key =
+                self.record_blog_watch_source_success_for_url_ingest(url.as_str(), &page_id)?;
             Ok(json!({
                 "page_id": page_id,
                 "bytes": doc.byte_len,
                 "canonical_url": doc.canonical_url,
                 "final_url": doc.final_url,
-                "content_type": doc.content_type
+                "content_type": doc.content_type,
+                "source_health_key": source_health_key
             }))
         })();
         match result {
             Ok(result) => self.complete_wiki_job(&job.id, result),
-            Err(error) => self.fail_wiki_job(&job.id, &error.to_string()),
+            Err(error) => {
+                let error = error.to_string();
+                let _ = self.record_blog_watch_source_failure_for_url_ingest(url.as_str(), &error);
+                self.fail_wiki_job(&job.id, &error)
+            }
         }
     }
 
@@ -2395,6 +2453,28 @@ impl Store {
         let job = self.insert_wiki_job(
             "arxiv_search",
             json!({ "query": query, "limit": limit.clamp(1, 30) }),
+        )?;
+        self.execute_wiki_job(job)
+    }
+
+    pub fn run_knowledge_cluster_model_proposal_job(
+        &self,
+        query: &str,
+        model_provider: &str,
+        model_name: Option<&str>,
+        endpoint: Option<&str>,
+        timeout_seconds: Option<u64>,
+        max_source_cards: usize,
+        max_clusters: usize,
+    ) -> Result<WikiJob> {
+        let job = self.enqueue_knowledge_cluster_model_proposal_job(
+            query,
+            model_provider,
+            model_name,
+            endpoint,
+            timeout_seconds,
+            max_source_cards,
+            max_clusters,
         )?;
         self.execute_wiki_job(job)
     }

@@ -20,7 +20,6 @@ fn severe_job_privacy_blocks_private_terms_in_packet() {
             replacement_guidance: Some("Use public project phrasing instead.".to_string()),
         })
         .unwrap();
-
     let check = store
         .check_job_privacy_text(
             "outreach",
@@ -361,9 +360,10 @@ fn severe_job_application_requires_approved_packet_for_applied_status() {
     let profile = job_fixture_profile(&store);
     let evidence = job_fixture_evidence(&store, &profile.id);
     let role = job_fixture_role(&store, &evidence.id, "canonical_confirmed");
+    let role_id = role.id.clone();
     let packet = store
         .create_job_application_packet(JobApplicationPacketInput {
-            role_id: role.id.clone(),
+            role_id: role_id.clone(),
             profile_id: profile.id.clone(),
             evidence_card_ids: vec![evidence.id.clone()],
             resume_emphasis: "Lead with public developer tooling and agents.".to_string(),
@@ -445,9 +445,10 @@ fn severe_job_packet_export_requires_approved_packet_without_recording_applicati
     let profile = job_fixture_profile(&store);
     let evidence = job_fixture_evidence(&store, &profile.id);
     let role = job_fixture_role(&store, &evidence.id, "canonical_confirmed");
+    let role_id = role.id.clone();
     let packet = store
         .create_job_application_packet(JobApplicationPacketInput {
-            role_id: role.id.clone(),
+            role_id: role_id.clone(),
             profile_id: profile.id.clone(),
             evidence_card_ids: vec![evidence.id.clone()],
             resume_emphasis: "Lead with public developer tooling and agents.".to_string(),
@@ -566,6 +567,295 @@ fn severe_job_packet_export_rechecks_privacy_before_writing_file() {
 }
 
 #[test]
+fn severe_job_packet_export_set_is_local_only_and_preflighted() {
+    // CLAIM: batch packet export is a first-class local proof surface, not
+    // a shell loop that can partially write stale or unsafe application
+    // artifacts.
+    // ORACLE: draft, wrong-profile, and export-time privacy failures create
+    // no output directory; a passing set writes Markdown plus a manifest,
+    // records export privacy checks, and records no applications.
+    // SEVERITY: Severe because packet-set export is easy to mistake for
+    // approved sending or application submission if the boundaries drift.
+    let store = test_store("job-packet-export-set-preflighted");
+    let profile = job_fixture_profile(&store);
+    let evidence = job_fixture_evidence(&store, &profile.id);
+    let role_a = job_fixture_role(&store, &evidence.id, "canonical_confirmed");
+    let role_b = store
+        .record_job_role_card(JobRoleCardInput {
+            company: "Example Infra".to_string(),
+            role_title: "Principal Developer Experience Engineer".to_string(),
+            canonical_url: Some("https://infra.example/jobs/principal-devex".to_string()),
+            source_family: "company".to_string(),
+            source_url: "https://infra.example/jobs/principal-devex".to_string(),
+            source_confidence: "canonical_confirmed".to_string(),
+            date_accessed: Some("2026-06-28T11:00:00Z".to_string()),
+            posting_freshness: "same_day".to_string(),
+            location: Some("London or remote Europe".to_string()),
+            work_mode: Some("hybrid_or_remote".to_string()),
+            company_stage_or_size: Some("startup".to_string()),
+            role_seniority: Some("principal".to_string()),
+            core_requirements: vec!["developer experience".to_string(), "agents".to_string()],
+            implied_business_problem: Some(
+                "The company needs senior product-minded developer tooling.".to_string(),
+            ),
+            why_they_might_need_user: Some(
+                "Public work maps to developer workflows and agent systems.".to_string(),
+            ),
+            evidence_card_ids: vec![evidence.id.clone()],
+            gaps_or_blockers: vec![],
+            cluster: Some("developer-tools".to_string()),
+            current_status: "live".to_string(),
+            metadata: json!({}),
+        })
+        .unwrap();
+    let role_blocked = store
+        .record_job_role_card(JobRoleCardInput {
+            company: "Blocked AI".to_string(),
+            role_title: "Staff Agent Systems Engineer".to_string(),
+            canonical_url: Some("https://blocked.example/jobs/staff-agent".to_string()),
+            source_family: "company".to_string(),
+            source_url: "https://blocked.example/jobs/staff-agent".to_string(),
+            source_confidence: "canonical_confirmed".to_string(),
+            date_accessed: Some("2026-06-28T12:00:00Z".to_string()),
+            posting_freshness: "same_day".to_string(),
+            location: Some("London".to_string()),
+            work_mode: Some("hybrid".to_string()),
+            company_stage_or_size: Some("startup".to_string()),
+            role_seniority: Some("staff".to_string()),
+            core_requirements: vec!["agent systems".to_string()],
+            implied_business_problem: Some("Build developer-facing agent systems.".to_string()),
+            why_they_might_need_user: Some(
+                "Public agent tooling evidence maps to the role.".to_string(),
+            ),
+            evidence_card_ids: vec![evidence.id.clone()],
+            gaps_or_blockers: vec![],
+            cluster: Some("agent-platform".to_string()),
+            current_status: "live".to_string(),
+            metadata: json!({}),
+        })
+        .unwrap();
+    let make_packet = |role: &JobRoleCard, emphasis: &str| {
+        store
+            .create_job_application_packet(JobApplicationPacketInput {
+                role_id: role.id.clone(),
+                profile_id: profile.id.clone(),
+                evidence_card_ids: vec![evidence.id.clone()],
+                resume_emphasis: emphasis.to_string(),
+                tailored_bullets: vec!["Built public cloud developer tooling.".to_string()],
+                outreach_note: format!(
+                    "{} appears to need reliable developer tooling discipline.",
+                    role.company
+                ),
+                proof_links: json!(["https://github.com/chrischabot/opencloud"]),
+                likely_objections: vec!["No direct company-specific evidence yet.".to_string()],
+                interview_stories: vec!["Public project technical story.".to_string()],
+                questions_to_ask: vec!["Where do developer workflows fail today?".to_string()],
+                reviewer_note: None,
+            })
+            .unwrap()
+    };
+
+    let packet_a = make_packet(&role_a, "Lead with public agent and cloud tooling work.");
+    let packet_b = make_packet(&role_b, "Lead with developer experience and agents.");
+    let draft_packet = make_packet(&role_a, "Draft packet should not export in a set.");
+    let packet_blocked = make_packet(&role_blocked, "Packet later blocked by export policy.");
+    for packet_id in [&packet_a.id, &packet_b.id, &packet_blocked.id] {
+        store
+            .update_job_application_packet_status(JobApplicationPacketStatusInput {
+                packet_id: packet_id.clone(),
+                status: "approved".to_string(),
+                reviewer_note: Some("Reviewed by user for local export only.".to_string()),
+            })
+            .unwrap();
+    }
+
+    let draft_dir = std::env::temp_dir().join(format!(
+        "arcwell-job-packet-export-set-draft-{}",
+        Uuid::new_v4()
+    ));
+    let draft_export = store.export_job_application_packet_set(
+        &profile.id,
+        vec![packet_a.id.clone(), draft_packet.id.clone()],
+        &draft_dir,
+    );
+    assert!(
+        draft_export
+            .unwrap_err()
+            .to_string()
+            .contains("requires approved status")
+    );
+    assert!(!draft_dir.exists());
+
+    let other_profile = store
+        .record_job_candidate_profile(JobCandidateProfileInput {
+            label: "Other Candidate".to_string(),
+            current_resume_source: Some("resume:other".to_string()),
+            linkedin_source: None,
+            github_profile: None,
+            blog_url: None,
+            metadata: json!({}),
+        })
+        .unwrap();
+    let other_evidence = job_fixture_evidence(&store, &other_profile.id);
+    let other_role = store
+        .record_job_role_card(JobRoleCardInput {
+            company: "Other AI".to_string(),
+            role_title: "Staff Platform Engineer".to_string(),
+            canonical_url: Some("https://other.example/jobs/staff-platform".to_string()),
+            source_family: "company".to_string(),
+            source_url: "https://other.example/jobs/staff-platform".to_string(),
+            source_confidence: "canonical_confirmed".to_string(),
+            date_accessed: Some("2026-06-28T13:00:00Z".to_string()),
+            posting_freshness: "same_day".to_string(),
+            location: Some("London".to_string()),
+            work_mode: Some("hybrid".to_string()),
+            company_stage_or_size: Some("startup".to_string()),
+            role_seniority: Some("staff".to_string()),
+            core_requirements: vec!["platform engineering".to_string()],
+            implied_business_problem: Some("Build developer-facing systems.".to_string()),
+            why_they_might_need_user: Some("Other profile evidence maps here.".to_string()),
+            evidence_card_ids: vec![other_evidence.id.clone()],
+            gaps_or_blockers: vec![],
+            cluster: Some("platform".to_string()),
+            current_status: "live".to_string(),
+            metadata: json!({}),
+        })
+        .unwrap();
+    let other_packet = store
+        .create_job_application_packet(JobApplicationPacketInput {
+            role_id: other_role.id,
+            profile_id: other_profile.id.clone(),
+            evidence_card_ids: vec![other_evidence.id],
+            resume_emphasis: "Other profile packet.".to_string(),
+            tailored_bullets: vec!["Other profile evidence.".to_string()],
+            outreach_note: "Other AI appears to need platform engineering help.".to_string(),
+            proof_links: json!(["https://example.com/other"]),
+            likely_objections: vec![],
+            interview_stories: vec!["Other story.".to_string()],
+            questions_to_ask: vec!["Other question?".to_string()],
+            reviewer_note: None,
+        })
+        .unwrap();
+    store
+        .update_job_application_packet_status(JobApplicationPacketStatusInput {
+            packet_id: other_packet.id.clone(),
+            status: "approved".to_string(),
+            reviewer_note: Some("Reviewed by other user.".to_string()),
+        })
+        .unwrap();
+    let wrong_profile_dir = std::env::temp_dir().join(format!(
+        "arcwell-job-packet-export-set-wrong-profile-{}",
+        Uuid::new_v4()
+    ));
+    let wrong_profile_export = store.export_job_application_packet_set(
+        &profile.id,
+        vec![packet_a.id.clone(), other_packet.id.clone()],
+        &wrong_profile_dir,
+    );
+    assert!(
+        wrong_profile_export
+            .unwrap_err()
+            .to_string()
+            .contains("belongs to profile")
+    );
+    assert!(!wrong_profile_dir.exists());
+
+    let export_dir =
+        std::env::temp_dir().join(format!("arcwell-job-packet-export-set-{}", Uuid::new_v4()));
+    let report = store
+        .export_job_application_packet_set(
+            &profile.id,
+            vec![packet_a.id.clone(), packet_b.id.clone()],
+            &export_dir,
+        )
+        .unwrap();
+    assert_eq!(report.profile_id, profile.id);
+    assert_eq!(report.exported_count, 2);
+    assert_eq!(report.exports.len(), 2);
+    assert_eq!(report.proof_level, "local_proof");
+    assert_eq!(report.delivery_status, "not_sent");
+    assert!(!report.application_status_changed);
+    assert!(report.total_byte_len > 0);
+    assert_eq!(report.export_set_sha256.len(), 64);
+    assert!(
+        report
+            .non_claims
+            .iter()
+            .any(|non_claim| non_claim.contains("not Google Docs"))
+    );
+    assert!(
+        report
+            .non_claims
+            .iter()
+            .any(|non_claim| non_claim.contains("not email"))
+    );
+    assert!(
+        report
+            .non_claims
+            .iter()
+            .any(|non_claim| non_claim.contains("not application submission"))
+    );
+    let manifest_path = std::path::PathBuf::from(&report.manifest_path);
+    assert!(manifest_path.exists());
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["exported_count"], json!(2));
+    for export in &report.exports {
+        let body = fs::read_to_string(&export.path).unwrap();
+        assert!(body.contains("Delivery status: not_sent"), "{body}");
+        assert!(
+            body.contains("not proof that an application was sent"),
+            "{body}"
+        );
+    }
+    assert!(store.list_job_applications().unwrap().is_empty());
+    let packet_export_check_count = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM job_privacy_checks WHERE artifact_type = 'packet_export'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+    assert_eq!(packet_export_check_count, 2);
+
+    store
+        .record_job_privacy_rule(JobPrivacyRuleInput {
+            pattern: "Blocked AI".to_string(),
+            rule_type: "blocked_term".to_string(),
+            severity: "block".to_string(),
+            replacement_guidance: Some("Do not export blocked company artifacts.".to_string()),
+        })
+        .unwrap();
+    let blocked_dir = std::env::temp_dir().join(format!(
+        "arcwell-job-packet-export-set-privacy-{}",
+        Uuid::new_v4()
+    ));
+    let blocked_export = store.export_job_application_packet_set(
+        &profile.id,
+        vec![packet_a.id, packet_blocked.id],
+        &blocked_dir,
+    );
+    assert!(
+        blocked_export
+            .unwrap_err()
+            .to_string()
+            .contains("failed privacy check")
+    );
+    assert!(!blocked_dir.exists());
+    let packet_export_check_count_after_block = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM job_privacy_checks WHERE artifact_type = 'packet_export'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+    assert_eq!(packet_export_check_count_after_block, 2);
+    assert!(store.list_job_applications().unwrap().is_empty());
+}
+
+#[test]
 fn severe_job_intro_public_profile_is_not_warm_intro() {
     // CLAIM: public contact discovery is not mislabeled as a warm intro.
     // ORACLE: a public-only contact cannot become a confirmed mutual path;
@@ -585,7 +875,10 @@ fn severe_job_intro_public_profile_is_not_warm_intro() {
             source_url: "https://example.com/team".to_string(),
             relationship_status: "public_only".to_string(),
             relevance: "hiring_manager".to_string(),
-            note: Some("Public profile only; no relationship path.".to_string()),
+            note: Some(
+                "Source evidence: public team page lists this person as engineering manager; no relationship path."
+                    .to_string(),
+            ),
         })
         .unwrap();
 
@@ -616,6 +909,289 @@ fn severe_job_intro_public_profile_is_not_warm_intro() {
 }
 
 #[test]
+fn severe_job_contact_relevance_requires_source_evidence_or_user_confirmation() {
+    // CLAIM: contact relevance is evidence-scoped, not a guessed label.
+    // ORACLE: a hiring-manager contact inferred from title alone is rejected,
+    // while a note naming public source evidence is accepted as public-only.
+    // SEVERITY: Severe because guessed hiring-manager labels can turn public
+    // profile discovery into fake warm-intro or outreach readiness.
+    let store = test_store("job-contact-relevance-evidence");
+    let guessed = store.record_job_contact(JobContactInput {
+        name: "Guessed Manager".to_string(),
+        company_id: None,
+        role_title: Some("Engineering Manager".to_string()),
+        public_profile_url: "https://example.com/people/guessed-manager".to_string(),
+        source_url: "https://example.com/team".to_string(),
+        relationship_status: "public_only".to_string(),
+        relevance: "hiring_manager".to_string(),
+        note: Some("Inferred from title only.".to_string()),
+    });
+    assert!(
+        guessed
+            .unwrap_err()
+            .to_string()
+            .contains("requires a note naming source evidence"),
+    );
+
+    let sourced = store
+        .record_job_contact(JobContactInput {
+            name: "Sourced Manager".to_string(),
+            company_id: None,
+            role_title: Some("Engineering Manager".to_string()),
+            public_profile_url: "https://example.com/people/sourced-manager".to_string(),
+            source_url: "https://example.com/team".to_string(),
+            relationship_status: "public_only".to_string(),
+            relevance: "hiring_manager".to_string(),
+            note: Some(
+                "Source evidence: public team page lists this person as engineering manager; no relationship path."
+                    .to_string(),
+            ),
+        })
+        .unwrap();
+    assert_eq!(sourced.relationship_status, "public_only");
+    assert_eq!(sourced.relevance, "hiring_manager");
+}
+
+#[test]
+fn severe_job_outreach_readiness_requires_approved_packet_privacy_and_warm_route() {
+    // CLAIM: outreach readiness is a local gate over approved packet, fresh
+    // outreach-note privacy check, and a real warm/user-confirmed route.
+    // ORACLE: no-packet, draft-packet, public-only route, and later privacy
+    // rule changes all block readiness; only an approved packet plus known
+    // warm path passes, and the report never writes channel delivery state.
+    // SEVERITY: Severe because this is the boundary between useful prep and
+    // pretending a public profile or draft packet is actionable outreach.
+    let store = test_store("job-outreach-readiness-gates");
+    let profile = job_fixture_profile(&store);
+    let evidence = job_fixture_evidence(&store, &profile.id);
+    let role = job_fixture_role(&store, &evidence.id, "canonical_confirmed");
+    store
+        .record_job_fit_score(job_fixture_score_input(&role.id, &profile.id, &evidence.id))
+        .unwrap();
+
+    let empty = store
+        .compile_job_outreach_readiness_report(&profile.id, 10)
+        .unwrap();
+    assert_eq!(empty.ready_count, 0);
+    assert_eq!(empty.blocked_count, 1);
+    assert_eq!(empty.entries[0].decision, "blocked");
+    assert!(empty.entries[0].packet_id.is_none());
+    assert!(
+        empty.entries[0]
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("no application packet"))
+    );
+    assert!(
+        empty.entries[0]
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("no intro or outreach path"))
+    );
+
+    let packet = store
+        .create_job_application_packet(JobApplicationPacketInput {
+            role_id: role.id.clone(),
+            profile_id: profile.id.clone(),
+            evidence_card_ids: vec![evidence.id.clone()],
+            resume_emphasis: "Lead with public developer tooling and agents.".to_string(),
+            tailored_bullets: vec!["Built public cloud developer tooling.".to_string()],
+            outreach_note: "Example AI appears to need reliable agent tooling discipline."
+                .to_string(),
+            proof_links: json!(["https://github.com/chrischabot/opencloud"]),
+            likely_objections: vec!["No direct company-specific evidence yet.".to_string()],
+            interview_stories: vec!["Public project technical story.".to_string()],
+            questions_to_ask: vec!["Where do agent workflows fail today?".to_string()],
+            reviewer_note: None,
+        })
+        .unwrap();
+    let public_contact = store
+        .record_job_contact(JobContactInput {
+            name: "Public Manager".to_string(),
+            company_id: None,
+            role_title: Some("Engineering Manager".to_string()),
+            public_profile_url: "https://example.com/team/public-manager".to_string(),
+            source_url: "https://example.com/team".to_string(),
+            relationship_status: "public_only".to_string(),
+            relevance: "hiring_manager".to_string(),
+            note: Some(
+                "Source evidence: public team page lists this person as engineering manager; no relationship path."
+                    .to_string(),
+            ),
+        })
+        .unwrap();
+    store
+        .record_job_intro_path(JobIntroPathInput {
+            role_id: role.id.clone(),
+            contact_id: public_contact.id,
+            path_type: "unknown".to_string(),
+            confidence: "weak".to_string(),
+            next_action: Some("Find a real route before outreach.".to_string()),
+            status: "identify".to_string(),
+        })
+        .unwrap();
+
+    let draft = store
+        .compile_job_outreach_readiness_report(&profile.id, 10)
+        .unwrap();
+    assert_eq!(draft.ready_count, 0);
+    assert_eq!(draft.entries[0].packet_status.as_deref(), Some("draft"));
+    assert_eq!(draft.entries[0].public_only_count, 1);
+    assert_eq!(draft.entries[0].warm_intro_ready_count, 0);
+    assert!(
+        draft.entries[0]
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("approved packet required"))
+    );
+    assert!(
+        draft.entries[0]
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("no user-confirmed warm intro"))
+    );
+
+    store
+        .update_job_application_packet_status(JobApplicationPacketStatusInput {
+            packet_id: packet.id.clone(),
+            status: "approved".to_string(),
+            reviewer_note: Some("Reviewed by user for local outreach readiness.".to_string()),
+        })
+        .unwrap();
+    let public_only = store
+        .compile_job_outreach_readiness_report(&profile.id, 10)
+        .unwrap();
+    assert_eq!(public_only.ready_count, 0);
+    assert!(public_only.entries[0].privacy_check_id.is_some());
+    assert_eq!(
+        public_only.entries[0].packet_status.as_deref(),
+        Some("approved")
+    );
+    assert!(
+        public_only.entries[0]
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("public-only paths remain identify"))
+    );
+
+    let known_contact = store
+        .record_job_contact(JobContactInput {
+            name: "Known Staff Engineer".to_string(),
+            company_id: None,
+            role_title: Some("Staff Engineer".to_string()),
+            public_profile_url: "https://example.com/team/known-staff-engineer".to_string(),
+            source_url: "https://example.com/team".to_string(),
+            relationship_status: "known".to_string(),
+            relevance: "engineer".to_string(),
+            note: Some("User confirmed this contact can route a relevant intro.".to_string()),
+        })
+        .unwrap();
+    store
+        .record_job_intro_path(JobIntroPathInput {
+            role_id: role.id.clone(),
+            contact_id: known_contact.id,
+            path_type: "mutual".to_string(),
+            confidence: "confirmed".to_string(),
+            next_action: Some("Ask for an intro using the approved packet.".to_string()),
+            status: "ask".to_string(),
+        })
+        .unwrap();
+
+    let ready = store
+        .compile_job_outreach_readiness_report(&profile.id, 10)
+        .unwrap();
+    assert_eq!(ready.ready_count, 1);
+    assert_eq!(ready.blocked_count, 0);
+    assert_eq!(ready.entries[0].decision, "ready");
+    assert_eq!(ready.entries[0].warm_intro_ready_count, 1);
+    assert!(
+        ready
+            .non_claims
+            .iter()
+            .any(|non_claim| non_claim.contains("does not send"))
+    );
+
+    let revised_packet = store
+        .create_job_application_packet(JobApplicationPacketInput {
+            role_id: role.id.clone(),
+            profile_id: profile.id.clone(),
+            evidence_card_ids: vec![evidence.id.clone()],
+            resume_emphasis: "Revise toward a fresher agent tooling story.".to_string(),
+            tailored_bullets: vec!["Built public cloud developer tooling.".to_string()],
+            outreach_note: "Example AI appears to need reliable agent tooling discipline, with a revised emphasis."
+                .to_string(),
+            proof_links: json!(["https://github.com/chrischabot/opencloud"]),
+            likely_objections: vec!["Revised note still needs review.".to_string()],
+            interview_stories: vec!["Public project technical story.".to_string()],
+            questions_to_ask: vec!["Where do agent workflows fail today?".to_string()],
+            reviewer_note: None,
+        })
+        .unwrap();
+    store
+        .conn
+        .execute(
+            "UPDATE job_application_packets SET generated_at = ?1 WHERE id = ?2",
+            params!["2999-01-01T00:00:00Z", revised_packet.id],
+        )
+        .unwrap();
+    let newer_draft_blocks_stale_approval = store
+        .compile_job_outreach_readiness_report(&profile.id, 10)
+        .unwrap();
+    assert_eq!(newer_draft_blocks_stale_approval.ready_count, 0);
+    assert_eq!(
+        newer_draft_blocks_stale_approval.entries[0]
+            .packet_status
+            .as_deref(),
+        Some("draft")
+    );
+    assert!(
+        newer_draft_blocks_stale_approval.entries[0]
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("approved packet required"))
+    );
+    store
+        .update_job_application_packet_status(JobApplicationPacketStatusInput {
+            packet_id: revised_packet.id,
+            status: "approved".to_string(),
+            reviewer_note: Some("Reviewed updated outreach note.".to_string()),
+        })
+        .unwrap();
+    let ready_after_revision_approval = store
+        .compile_job_outreach_readiness_report(&profile.id, 10)
+        .unwrap();
+    assert_eq!(ready_after_revision_approval.ready_count, 1);
+    assert_eq!(ready_after_revision_approval.entries[0].decision, "ready");
+
+    store
+        .record_job_privacy_rule(JobPrivacyRuleInput {
+            pattern: "reliable agent tooling".to_string(),
+            rule_type: "blocked_term".to_string(),
+            severity: "block".to_string(),
+            replacement_guidance: Some("Rewrite outreach before use.".to_string()),
+        })
+        .unwrap();
+    let blocked_after_policy_change = store
+        .compile_job_outreach_readiness_report(&profile.id, 10)
+        .unwrap();
+    assert_eq!(blocked_after_policy_change.ready_count, 0);
+    assert_eq!(blocked_after_policy_change.entries[0].decision, "blocked");
+    assert!(
+        blocked_after_policy_change.entries[0]
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("privacy decision is `block`"))
+    );
+    assert!(store.list_channel_messages().unwrap().is_empty());
+    assert!(
+        store
+            .list_channel_delivery_attempts(None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn severe_job_weekly_report_preserves_application_status_and_source_health() {
     // CLAIM: weekly reporting is driven by durable role/application/source
     // state, not a fresh prose snapshot that forgets failures.
@@ -627,9 +1203,10 @@ fn severe_job_weekly_report_preserves_application_status_and_source_health() {
     let profile = job_fixture_profile(&store);
     let evidence = job_fixture_evidence(&store, &profile.id);
     let role = job_fixture_role(&store, &evidence.id, "canonical_confirmed");
+    let role_id = role.id.clone();
     let packet = store
         .create_job_application_packet(JobApplicationPacketInput {
-            role_id: role.id.clone(),
+            role_id: role_id.clone(),
             profile_id: profile.id.clone(),
             evidence_card_ids: vec![evidence.id.clone()],
             resume_emphasis: "Lead with public developer tooling and agents.".to_string(),
@@ -645,16 +1222,41 @@ fn severe_job_weekly_report_preserves_application_status_and_source_health() {
     store
         .record_job_fit_score(job_fixture_score_input(&role.id, &profile.id, &evidence.id))
         .unwrap();
+    let unscored_role = store
+        .record_job_role_card(JobRoleCardInput {
+            company: "Example AI".to_string(),
+            role_title: "Unscored Parser Noise".to_string(),
+            canonical_url: Some("https://example.com/careers/noise".to_string()),
+            source_family: "company".to_string(),
+            source_url: "https://example.com/careers/noise".to_string(),
+            source_confidence: "canonical_confirmed".to_string(),
+            date_accessed: Some("2026-06-28T10:00:00Z".to_string()),
+            posting_freshness: "same_day".to_string(),
+            location: Some("London".to_string()),
+            work_mode: Some("hybrid".to_string()),
+            company_stage_or_size: Some("startup".to_string()),
+            role_seniority: None,
+            core_requirements: vec!["noise".to_string()],
+            implied_business_problem: None,
+            why_they_might_need_user: None,
+            evidence_card_ids: vec![evidence.id.clone()],
+            gaps_or_blockers: vec![],
+            cluster: Some("noise".to_string()),
+            current_status: "live".to_string(),
+            metadata: json!({ "fixture": "unscored weekly report noise" }),
+        })
+        .unwrap();
+    let unscored_role_id = unscored_role.id.clone();
     let packet = store
         .update_job_application_packet_status(JobApplicationPacketStatusInput {
-            packet_id: packet.id,
+            packet_id: packet.id.clone(),
             status: "approved".to_string(),
             reviewer_note: Some("Reviewed by user for weekly-report fixture.".to_string()),
         })
         .unwrap();
     store
         .record_job_application(JobApplicationInput {
-            role_id: role.id,
+            role_id: role_id.clone(),
             packet_id: Some(packet.id),
             status: "applied".to_string(),
             applied_at: Some("2026-06-28".to_string()),
@@ -662,6 +1264,105 @@ fn severe_job_weekly_report_preserves_application_status_and_source_health() {
             outcome_note: Some("Submitted manually by user.".to_string()),
         })
         .unwrap();
+    let contact = store
+        .record_job_contact(JobContactInput {
+            name: "Hiring Manager".to_string(),
+            company_id: None,
+            role_title: Some("Engineering Manager".to_string()),
+            public_profile_url: "https://example.com/people/hiring-manager".to_string(),
+            source_url: "https://example.com/team".to_string(),
+            relationship_status: "public_only".to_string(),
+            relevance: "hiring_manager".to_string(),
+            note: Some(
+                "Source evidence: public team page lists this person as engineering manager; no relationship path."
+                    .to_string(),
+            ),
+        })
+        .unwrap();
+    store
+        .record_job_intro_path(JobIntroPathInput {
+            role_id: role_id.clone(),
+            contact_id: contact.id.clone(),
+            path_type: "unknown".to_string(),
+            confidence: "weak".to_string(),
+            next_action: Some("Look for a real mutual path before asking.".to_string()),
+            status: "identify".to_string(),
+        })
+        .unwrap();
+    store
+        .record_job_application(JobApplicationInput {
+            role_id: unscored_role_id.clone(),
+            packet_id: None,
+            status: "planned".to_string(),
+            applied_at: None,
+            follow_up_at: Some("2026-07-20".to_string()),
+            outcome_note: Some(
+                "This unscored role should not become a profile action.".to_string(),
+            ),
+        })
+        .unwrap();
+    store
+        .record_job_intro_path(JobIntroPathInput {
+            role_id: unscored_role_id.clone(),
+            contact_id: contact.id,
+            path_type: "unknown".to_string(),
+            confidence: "weak".to_string(),
+            next_action: Some("Ignore this unscored parser-noise path.".to_string()),
+            status: "identify".to_string(),
+        })
+        .unwrap();
+    let run = store
+        .record_job_search_run(JobSearchRunInput {
+            profile_id: profile.id.clone(),
+            scope: "London agent platform roles".to_string(),
+            proof_level: "local_proof".to_string(),
+            source_count: 1,
+            role_count: 2,
+            new_role_count: 0,
+            stale_role_count: 1,
+            error_count: 0,
+            report_artifact_id: None,
+            completed_at: Some("2026-06-28T12:00:00Z".to_string()),
+        })
+        .unwrap();
+    let relevant_event = store
+        .record_job_role_status_event(JobRoleStatusEventInput {
+            role_id: role_id.clone(),
+            run_id: Some(run.id.clone()),
+            status: "stale".to_string(),
+            previous_tier: Some("tier_1".to_string()),
+            current_tier: Some("blocked".to_string()),
+            note: Some(
+                "Manual refresh marked this role stale; it cannot remain apply-now.".to_string(),
+            ),
+        })
+        .unwrap();
+    store
+        .conn
+        .execute(
+            "UPDATE job_role_status_events SET created_at = ?1 WHERE id = ?2",
+            params!["2026-06-28T00:00:00Z", relevant_event.id],
+        )
+        .unwrap();
+    for index in 0..60 {
+        let noise = store
+            .record_job_role_status_event(JobRoleStatusEventInput {
+                role_id: unscored_role_id.clone(),
+                run_id: Some(run.id.clone()),
+                status: "new".to_string(),
+                previous_tier: None,
+                current_tier: None,
+                note: Some(format!("Ignore this unscored parser-noise event {index}.")),
+            })
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE job_role_status_events SET created_at = ?1 WHERE id = ?2",
+                params!["2026-06-29T12:00:00Z", noise.id],
+            )
+            .unwrap();
+    }
     let source = store
         .record_job_source(JobSourceInput {
             source_family: "company".to_string(),
@@ -689,9 +1390,678 @@ fn severe_job_weekly_report_preserves_application_status_and_source_health() {
         .compile_job_weekly_report(&profile.id, "London agent platform roles")
         .unwrap();
     assert!(report.body.contains("applied: 1"), "{}", report.body);
+    assert!(report.body.contains("unscored: 1"), "{}", report.body);
+    assert!(!report.body.contains("planned: 1"), "{}", report.body);
+    assert!(report.body.contains("## Role Changes"), "{}", report.body);
+    assert!(report.body.contains("stale: 1"), "{}", report.body);
+    assert!(report.body.contains("tier_1 -> blocked"), "{}", report.body);
+    assert!(
+        report.body.contains("cannot remain apply-now"),
+        "{}",
+        report.body
+    );
+    assert!(
+        !report.body.contains("Unscored Parser Noise"),
+        "{}",
+        report.body
+    );
+    assert!(
+        report.body.contains("warm_intro_ready: 0"),
+        "{}",
+        report.body
+    );
+    assert!(report.body.contains("identify: 1"), "{}", report.body);
+    assert!(
+        report
+            .body
+            .contains("Look for a real mutual path before asking."),
+        "{}",
+        report.body
+    );
+    assert!(report.body.contains("Hiring Manager"), "{}", report.body);
+    assert!(
+        report.body.contains("follow up by 2026-07-05"),
+        "{}",
+        report.body
+    );
+    assert!(
+        !report
+            .body
+            .contains("Ignore this unscored parser-noise path."),
+        "{}",
+        report.body
+    );
+    assert!(
+        !report
+            .body
+            .contains("Ignore this unscored parser-noise event."),
+        "{}",
+        report.body
+    );
+    assert!(!report.body.contains("2026-07-20"), "{}", report.body);
     assert!(report.body.contains("failed: 1"), "{}", report.body);
     assert_eq!(report.metadata["application_count"], 1);
+    assert_eq!(report.metadata["intro_path_count"], 1);
+    assert_eq!(report.metadata["role_status_event_count"], 1);
     assert_eq!(report.metadata["source_health_count"], 1);
+}
+
+#[test]
+fn severe_job_weekly_report_delivery_requires_authorization_and_privacy_pass() {
+    // CLAIM: weekly job reports can be prepared for an outbound channel only
+    // after channel-send authorization and report privacy checks pass.
+    // ORACLE: unauthorized and privacy-blocked attempts write blocked ledger
+    // rows with no prepared channel message or delivery attempt; authorized
+    // clean attempts write one prepared channel message and replay idempotently.
+    // SEVERITY: Severe because job material delivery is where private names
+    // and fake "sent" claims would become externally visible.
+    let store = test_store("job-weekly-delivery-gates");
+    let profile = job_fixture_profile(&store);
+    let evidence = job_fixture_evidence(&store, &profile.id);
+    let role = job_fixture_role(&store, &evidence.id, "canonical_confirmed");
+    store
+        .record_job_fit_score(job_fixture_score_input(&role.id, &profile.id, &evidence.id))
+        .unwrap();
+    let report = store
+        .compile_job_weekly_report(&profile.id, "London agent platform roles")
+        .unwrap();
+
+    let unauthorized = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: report.id.clone(),
+            channel: "email".to_string(),
+            subject: "job-proof@example.com".to_string(),
+            target: "job-proof@example.com".to_string(),
+            idempotency_key: Some("job-weekly-delivery-unauthorized".to_string()),
+        })
+        .unwrap();
+    assert_eq!(unauthorized.delivery.status, "blocked");
+    assert!(unauthorized.delivery.privacy_check_id.is_none());
+    assert!(unauthorized.delivery.channel_message_id.is_none());
+    assert!(unauthorized.channel_message.is_none());
+    assert!(
+        unauthorized
+            .delivery
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("not authorized to send")
+    );
+    assert!(store.list_channel_messages().unwrap().is_empty());
+    assert!(
+        store
+            .list_channel_delivery_attempts(None)
+            .unwrap()
+            .is_empty()
+    );
+
+    store
+        .authorize_channel_subject("email", "email:job-proof@example.com", false, false, true)
+        .unwrap();
+    let prepared = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: report.id.clone(),
+            channel: "email".to_string(),
+            subject: "job-proof@example.com".to_string(),
+            target: "job-proof@example.com".to_string(),
+            idempotency_key: Some("job-weekly-delivery-prepared".to_string()),
+        })
+        .unwrap();
+    assert_eq!(prepared.delivery.status, "prepared");
+    assert_eq!(
+        prepared.privacy_check.as_ref().unwrap().decision,
+        "pass",
+        "{:?}",
+        prepared.privacy_check
+    );
+    let message = prepared.channel_message.as_ref().unwrap();
+    assert_eq!(message.channel, "email");
+    assert_eq!(message.direction, "outgoing");
+    assert_eq!(message.status, "prepared");
+    assert_eq!(message.sender, "email:job-proof@example.com");
+    assert_eq!(message.source_event_id.as_deref(), Some(report.id.as_str()));
+    assert!(message.body.contains("# Job Weekly Report"));
+    assert_eq!(store.list_channel_messages().unwrap().len(), 1);
+    assert!(
+        store
+            .list_channel_delivery_attempts(None)
+            .unwrap()
+            .is_empty()
+    );
+
+    let replay = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: report.id.clone(),
+            channel: "email".to_string(),
+            subject: "email:job-proof@example.com".to_string(),
+            target: "email:job-proof@example.com".to_string(),
+            idempotency_key: Some("job-weekly-delivery-prepared".to_string()),
+        })
+        .unwrap();
+    assert!(replay.idempotent_replay);
+    assert_eq!(replay.delivery.id, prepared.delivery.id);
+    assert_eq!(
+        replay.delivery.channel_message_id,
+        prepared.delivery.channel_message_id
+    );
+    assert_eq!(store.list_channel_messages().unwrap().len(), 1);
+
+    store
+        .record_job_privacy_rule(JobPrivacyRuleInput {
+            pattern: "# Job Weekly Report".to_string(),
+            rule_type: "blocked_term".to_string(),
+            severity: "block".to_string(),
+            replacement_guidance: Some("Do not deliver weekly reports from this home.".to_string()),
+        })
+        .unwrap();
+    let privacy_blocked = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: report.id.clone(),
+            channel: "email".to_string(),
+            subject: "job-proof@example.com".to_string(),
+            target: "job-proof@example.com".to_string(),
+            idempotency_key: Some("job-weekly-delivery-privacy-block".to_string()),
+        })
+        .unwrap();
+    assert_eq!(privacy_blocked.delivery.status, "blocked");
+    assert_eq!(
+        privacy_blocked.privacy_check.as_ref().unwrap().decision,
+        "block"
+    );
+    assert!(privacy_blocked.delivery.channel_message_id.is_none());
+    assert!(privacy_blocked.channel_message.is_none());
+    assert_eq!(store.list_channel_messages().unwrap().len(), 1);
+    assert!(
+        store
+            .list_channel_delivery_attempts(None)
+            .unwrap()
+            .is_empty()
+    );
+
+    let deliveries = store
+        .list_job_weekly_report_deliveries(Some(&report.id))
+        .unwrap();
+    assert_eq!(deliveries.len(), 3);
+    assert_eq!(
+        deliveries
+            .iter()
+            .filter(|delivery| delivery.status == "prepared")
+            .count(),
+        1
+    );
+    assert_eq!(
+        deliveries
+            .iter()
+            .filter(|delivery| delivery.status == "blocked")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn severe_job_weekly_report_delivery_replay_rechecks_current_gates() {
+    // CLAIM: delivery-preparation idempotency prevents duplicate messages, but
+    // it does not permanently bless a prepared body after authorization or
+    // privacy policy changes.
+    // ORACLE: replaying the same idempotency key after a new blocking privacy
+    // rule downgrades the delivery row and does not write a second message or
+    // provider attempt.
+    // SEVERITY: Severe because a future provider-send path must not be able
+    // to send stale prepared job material after the public-safety gate changes.
+    let store = test_store("job-weekly-delivery-replay-rechecks-gates");
+    let profile = job_fixture_profile(&store);
+    let evidence = job_fixture_evidence(&store, &profile.id);
+    let role = job_fixture_role(&store, &evidence.id, "canonical_confirmed");
+    store
+        .record_job_fit_score(job_fixture_score_input(&role.id, &profile.id, &evidence.id))
+        .unwrap();
+    let report = store
+        .compile_job_weekly_report(&profile.id, "London agent platform roles")
+        .unwrap();
+    store
+        .authorize_channel_subject("email", "email:job-proof@example.com", false, false, true)
+        .unwrap();
+    let prepared = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: report.id.clone(),
+            channel: "email".to_string(),
+            subject: "job-proof@example.com".to_string(),
+            target: "job-proof@example.com".to_string(),
+            idempotency_key: Some("same-key-recheck".to_string()),
+        })
+        .unwrap();
+    assert_eq!(prepared.delivery.status, "prepared");
+    let message_id = prepared.delivery.channel_message_id.clone().unwrap();
+
+    let replay = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: report.id.clone(),
+            channel: "email".to_string(),
+            subject: "email:job-proof@example.com".to_string(),
+            target: "email:job-proof@example.com".to_string(),
+            idempotency_key: Some("same-key-recheck".to_string()),
+        })
+        .unwrap();
+    assert!(replay.idempotent_replay);
+    assert_eq!(replay.delivery.status, "prepared");
+    assert_eq!(
+        replay.delivery.channel_message_id.as_deref(),
+        Some(message_id.as_str())
+    );
+    assert_eq!(store.list_channel_messages().unwrap().len(), 1);
+
+    store
+        .record_job_privacy_rule(JobPrivacyRuleInput {
+            pattern: "# Job Weekly Report".to_string(),
+            rule_type: "blocked_term".to_string(),
+            severity: "block".to_string(),
+            replacement_guidance: Some("Do not deliver weekly reports from this home.".to_string()),
+        })
+        .unwrap();
+    let blocked_replay = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: report.id.clone(),
+            channel: "email".to_string(),
+            subject: "job-proof@example.com".to_string(),
+            target: "job-proof@example.com".to_string(),
+            idempotency_key: Some("same-key-recheck".to_string()),
+        })
+        .unwrap();
+    assert_eq!(blocked_replay.delivery.id, prepared.delivery.id);
+    assert_eq!(blocked_replay.delivery.status, "blocked");
+    assert_eq!(
+        blocked_replay.privacy_check.as_ref().unwrap().decision,
+        "block"
+    );
+    assert!(blocked_replay.delivery.channel_message_id.is_none());
+    assert!(blocked_replay.channel_message.is_none());
+    assert_eq!(store.list_channel_messages().unwrap().len(), 1);
+    assert_eq!(
+        store
+            .get_channel_message(&message_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "blocked"
+    );
+    assert!(
+        store
+            .list_channel_delivery_attempts(None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn severe_job_weekly_report_delivery_send_reaches_provider_and_replays() {
+    // CLAIM: a prepared weekly job report can be sent through the controlled
+    // provider bridge once channel authorization and privacy gates still pass.
+    // ORACLE: a loopback Cloudflare Email response creates exactly one
+    // successful provider attempt, marks the weekly delivery sent, and replay
+    // returns that attempt without a second provider call.
+    // SEVERITY: Severe because "prepared" and "sent" must not collapse into
+    // the same state in job-hunting operational reports.
+    let store = test_store("job-weekly-delivery-send-ok");
+    let profile = job_fixture_profile(&store);
+    let evidence = job_fixture_evidence(&store, &profile.id);
+    let role = job_fixture_role(&store, &evidence.id, "canonical_confirmed");
+    store
+        .record_job_fit_score(job_fixture_score_input(&role.id, &profile.id, &evidence.id))
+        .unwrap();
+    let scope = "London agent platform roles";
+    let report = store.compile_job_weekly_report(&profile.id, scope).unwrap();
+    store
+        .authorize_channel_subject("email", "email:job-proof@example.com", false, false, true)
+        .unwrap();
+    write_policy(
+        &store,
+        r#"
+[[rules]]
+id = "allow-job-weekly-report-email-send"
+effect = "allow"
+action = "channel.send"
+package = "arcwell-email"
+provider = "cloudflare_email"
+source = "job_weekly_report_delivery"
+channel = "email"
+subject = "email:job-proof@example.com"
+target = "job-proof@example.com"
+reason = "allow controlled weekly job report email send"
+priority = 10
+"#,
+    );
+    let prepared = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: report.id.clone(),
+            channel: "email".to_string(),
+            subject: "job-proof@example.com".to_string(),
+            target: "job-proof@example.com".to_string(),
+            idempotency_key: Some("job-weekly-delivery-send-ok".to_string()),
+        })
+        .unwrap();
+    assert_eq!(prepared.delivery.status, "prepared");
+
+    let api = mock_status_server(
+        "200 OK",
+        "",
+        r#"{"success":true,"result":{"id":"job_weekly_email_ok"}}"#,
+        "application/json",
+    );
+    let sent = store
+        .send_job_weekly_report_delivery(JobWeeklyReportDeliverySendInput {
+            delivery_id: prepared.delivery.id.clone(),
+            telegram_bot_token: None,
+            email_account_id: Some("acct123".to_string()),
+            email_api_token: Some("TOKEN".to_string()),
+            email_from: Some("agent@example.com".to_string()),
+            api_base: Some(api),
+        })
+        .unwrap();
+    assert_eq!(sent.delivery.status, "sent");
+    assert_eq!(sent.proof_level, "controlled_provider_delivery");
+    assert!(!sent.idempotent_replay);
+    assert_eq!(
+        sent.channel_message.as_ref().unwrap().status,
+        "sent",
+        "{:?}",
+        sent.channel_message
+    );
+    let attempt = sent
+        .channel_delivery_attempt
+        .as_ref()
+        .expect("provider attempt");
+    assert!(attempt.ok, "{attempt:?}");
+    assert_eq!(attempt.channel, "email");
+    assert_eq!(attempt.provider_status, 200);
+    assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
+
+    let replay = store
+        .send_job_weekly_report_delivery(JobWeeklyReportDeliverySendInput {
+            delivery_id: prepared.delivery.id.clone(),
+            telegram_bot_token: None,
+            email_account_id: Some("acct123".to_string()),
+            email_api_token: Some("TOKEN".to_string()),
+            email_from: Some("agent@example.com".to_string()),
+            api_base: Some("http://127.0.0.1:9".to_string()),
+        })
+        .unwrap();
+    assert!(replay.idempotent_replay);
+    assert_eq!(
+        replay.channel_delivery_attempt.as_ref().unwrap().id,
+        attempt.id
+    );
+    assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
+
+    let audit = store
+        .audit_job_operational_readiness(&profile.id, scope, Some(0))
+        .unwrap();
+    let gate = |name: &str| audit.gates.iter().find(|gate| gate.name == name).unwrap();
+    assert_eq!(gate("delivery_preparation").decision, "pass");
+    assert_eq!(gate("provider_delivery").decision, "pass");
+    assert_eq!(audit.weekly_report_delivery_attempt_count, 1);
+}
+
+#[test]
+fn severe_job_weekly_report_delivery_send_records_provider_failure_not_success() {
+    // CLAIM: provider errors are recorded as failed delivery attempts, never
+    // as operationally successful weekly report delivery.
+    // ORACLE: a loopback 503 creates a failed attempt, marks the delivery and
+    // channel message failed, and provider_delivery remains blocked in the
+    // operational audit.
+    // SEVERITY: Severe because failed outbound delivery must not promote a
+    // job-hunting radar to ready.
+    let store = test_store("job-weekly-delivery-send-failed");
+    let profile = job_fixture_profile(&store);
+    let evidence = job_fixture_evidence(&store, &profile.id);
+    let role = job_fixture_role(&store, &evidence.id, "canonical_confirmed");
+    store
+        .record_job_fit_score(job_fixture_score_input(&role.id, &profile.id, &evidence.id))
+        .unwrap();
+    let scope = "London agent platform roles";
+    let report = store.compile_job_weekly_report(&profile.id, scope).unwrap();
+    store
+        .authorize_channel_subject("email", "email:job-proof@example.com", false, false, true)
+        .unwrap();
+    write_policy(
+        &store,
+        r#"
+[[rules]]
+id = "allow-job-weekly-report-email-failure"
+effect = "allow"
+action = "channel.send"
+package = "arcwell-email"
+provider = "cloudflare_email"
+source = "job_weekly_report_delivery"
+channel = "email"
+subject = "email:job-proof@example.com"
+target = "job-proof@example.com"
+reason = "allow controlled weekly job report email failure"
+priority = 10
+"#,
+    );
+    let prepared = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: report.id.clone(),
+            channel: "email".to_string(),
+            subject: "job-proof@example.com".to_string(),
+            target: "job-proof@example.com".to_string(),
+            idempotency_key: Some("job-weekly-delivery-send-failed".to_string()),
+        })
+        .unwrap();
+    let api = mock_status_server(
+        "503 Service Unavailable",
+        "",
+        r#"{"success":false,"errors":[{"message":"unavailable"}]}"#,
+        "application/json",
+    );
+
+    let failed = store
+        .send_job_weekly_report_delivery(JobWeeklyReportDeliverySendInput {
+            delivery_id: prepared.delivery.id.clone(),
+            telegram_bot_token: None,
+            email_account_id: Some("acct123".to_string()),
+            email_api_token: Some("TOKEN".to_string()),
+            email_from: Some("agent@example.com".to_string()),
+            api_base: Some(api),
+        })
+        .unwrap();
+    assert_eq!(failed.delivery.status, "failed");
+    assert!(
+        failed
+            .delivery
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("provider send failed")
+    );
+    assert_eq!(failed.channel_message.as_ref().unwrap().status, "failed");
+    let attempt = failed
+        .channel_delivery_attempt
+        .as_ref()
+        .expect("failed provider attempt");
+    assert!(!attempt.ok, "{attempt:?}");
+    assert_eq!(attempt.provider_status, 503);
+    assert_eq!(store.list_channel_delivery_attempts(None).unwrap().len(), 1);
+
+    let audit = store
+        .audit_job_operational_readiness(&profile.id, scope, Some(0))
+        .unwrap();
+    let gate = |name: &str| audit.gates.iter().find(|gate| gate.name == name).unwrap();
+    assert_eq!(gate("provider_delivery").decision, "block");
+    assert_eq!(audit.weekly_report_delivery_attempt_count, 0);
+}
+
+#[test]
+fn severe_job_weekly_report_delivery_send_cost_denial_blocks_before_provider() {
+    // CLAIM: weekly job report provider delivery must pass cost policy before
+    // any provider request is attempted.
+    // ORACLE: a provider kill switch records a denied cost decision, marks the
+    // prepared delivery blocked, marks the channel message blocked, and writes
+    // no channel delivery attempt even with provider credentials present.
+    // SEVERITY: Severe because scheduled job reports are exactly the kind of
+    // low-friction delivery path that can quietly bypass operator budgets.
+    let store = test_store("job-weekly-delivery-send-cost-deny");
+    let profile = job_fixture_profile(&store);
+    let evidence = job_fixture_evidence(&store, &profile.id);
+    let role = job_fixture_role(&store, &evidence.id, "canonical_confirmed");
+    store
+        .record_job_fit_score(job_fixture_score_input(&role.id, &profile.id, &evidence.id))
+        .unwrap();
+    let report = store
+        .compile_job_weekly_report(&profile.id, "London agent platform roles")
+        .unwrap();
+    store
+        .authorize_channel_subject("email", "email:job-proof@example.com", false, false, true)
+        .unwrap();
+    write_policy(
+        &store,
+        r#"
+[[rules]]
+id = "allow-job-weekly-report-email-cost-denial"
+effect = "allow"
+action = "channel.send"
+package = "arcwell-email"
+provider = "cloudflare_email"
+source = "job_weekly_report_delivery"
+channel = "email"
+subject = "email:job-proof@example.com"
+target = "job-proof@example.com"
+reason = "allow policy while cost policy denies"
+priority = 10
+"#,
+    );
+    store
+        .set_cost_policy("provider", "cloudflare_email", None, true, None)
+        .unwrap();
+    let prepared = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: report.id.clone(),
+            channel: "email".to_string(),
+            subject: "job-proof@example.com".to_string(),
+            target: "job-proof@example.com".to_string(),
+            idempotency_key: Some("job-weekly-delivery-send-cost-deny".to_string()),
+        })
+        .unwrap();
+    let message_id = prepared.delivery.channel_message_id.clone().unwrap();
+
+    let blocked = store
+        .send_job_weekly_report_delivery(JobWeeklyReportDeliverySendInput {
+            delivery_id: prepared.delivery.id.clone(),
+            telegram_bot_token: None,
+            email_account_id: Some("acct123".to_string()),
+            email_api_token: Some("TOKEN".to_string()),
+            email_from: Some("agent@example.com".to_string()),
+            api_base: Some("http://127.0.0.1:9".to_string()),
+        })
+        .unwrap();
+    assert_eq!(blocked.delivery.status, "blocked");
+    assert!(
+        blocked
+            .delivery
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("budget blocked Job weekly report email delivery"),
+        "{:?}",
+        blocked.delivery.error
+    );
+    assert_eq!(blocked.privacy_check.as_ref().unwrap().decision, "pass");
+    assert!(blocked.channel_delivery_attempt.is_none());
+    assert_eq!(
+        store
+            .get_channel_message(&message_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "blocked"
+    );
+    assert!(
+        store
+            .list_channel_delivery_attempts(None)
+            .unwrap()
+            .is_empty()
+    );
+    let decisions = store.list_cost_decisions(5).unwrap();
+    assert!(decisions.iter().any(|decision| {
+        !decision.allowed
+            && decision.provider == "cloudflare_email"
+            && decision.source.as_deref() == Some("job_weekly_report_delivery")
+            && decision.reason == "cost policy provider:cloudflare_email kill switch is enabled"
+    }));
+}
+
+#[test]
+fn severe_job_weekly_report_delivery_send_rechecks_gates_before_provider() {
+    // CLAIM: provider send does not inherit stale authorization/privacy from
+    // preparation time.
+    // ORACLE: adding a blocking privacy rule after preparation marks the
+    // existing channel message blocked and records no provider attempt.
+    // SEVERITY: Severe because delayed job report delivery may cross policy
+    // changes, and stale prepared content cannot bypass the current gate.
+    let store = test_store("job-weekly-delivery-send-regates");
+    let profile = job_fixture_profile(&store);
+    let evidence = job_fixture_evidence(&store, &profile.id);
+    let role = job_fixture_role(&store, &evidence.id, "canonical_confirmed");
+    store
+        .record_job_fit_score(job_fixture_score_input(&role.id, &profile.id, &evidence.id))
+        .unwrap();
+    let report = store
+        .compile_job_weekly_report(&profile.id, "London agent platform roles")
+        .unwrap();
+    store
+        .authorize_channel_subject("email", "email:job-proof@example.com", false, false, true)
+        .unwrap();
+    let prepared = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: report.id.clone(),
+            channel: "email".to_string(),
+            subject: "job-proof@example.com".to_string(),
+            target: "job-proof@example.com".to_string(),
+            idempotency_key: Some("job-weekly-delivery-send-regates".to_string()),
+        })
+        .unwrap();
+    let message_id = prepared.delivery.channel_message_id.clone().unwrap();
+    store
+        .record_job_privacy_rule(JobPrivacyRuleInput {
+            pattern: "# Job Weekly Report".to_string(),
+            rule_type: "blocked_term".to_string(),
+            severity: "block".to_string(),
+            replacement_guidance: Some("Do not deliver weekly reports from this home.".to_string()),
+        })
+        .unwrap();
+
+    let blocked = store
+        .send_job_weekly_report_delivery(JobWeeklyReportDeliverySendInput {
+            delivery_id: prepared.delivery.id.clone(),
+            telegram_bot_token: None,
+            email_account_id: Some("acct123".to_string()),
+            email_api_token: Some("TOKEN".to_string()),
+            email_from: Some("agent@example.com".to_string()),
+            api_base: Some("http://127.0.0.1:9".to_string()),
+        })
+        .unwrap();
+    assert_eq!(blocked.delivery.status, "blocked");
+    assert_eq!(
+        blocked.privacy_check.as_ref().unwrap().decision,
+        "block",
+        "{:?}",
+        blocked.privacy_check
+    );
+    assert!(blocked.channel_delivery_attempt.is_none());
+    assert_eq!(
+        store
+            .get_channel_message(&message_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "blocked"
+    );
+    assert!(
+        store
+            .list_channel_delivery_attempts(None)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -849,6 +2219,422 @@ fn severe_job_refresh_audit_passes_transition_logic_only_with_lowered_elapsed_ga
         "{:?}",
         audit.warnings
     );
+}
+
+#[test]
+fn severe_job_operational_audit_blocks_fake_promotion_despite_local_slices() {
+    // CLAIM: the operational audit is a blocker report over the real gates,
+    // not a flattering summary of whatever local slices happen to exist.
+    // ORACLE: after evidence, source health, Tier 1 score, approved packet,
+    // warm route, application row, weekly report, and delivery-preparation
+    // rows exist, the audit still blocks because the one-day refresh,
+    // provider-delivery, and repeated scheduled-radar gates are unproven.
+    // SEVERITY: Severe because this is the anti-mirage boundary before
+    // calling job hunting operational.
+    let store = test_store("job-operational-audit-blocks-fake-promotion");
+    let (profile, scope) = seed_job_refresh_audit_fixture(&store);
+    let evidence = store.list_job_evidence_cards(&profile.id).unwrap()[0].clone();
+    let role = store
+        .list_job_role_cards()
+        .unwrap()
+        .into_iter()
+        .find(|role| role.company == "Example AI")
+        .unwrap();
+    let application_history_role = store
+        .list_job_role_cards()
+        .unwrap()
+        .into_iter()
+        .find(|role| role.company == "Closed AI")
+        .unwrap();
+    store
+        .record_job_fit_score(job_fixture_score_input(
+            &application_history_role.id,
+            &profile.id,
+            &evidence.id,
+        ))
+        .unwrap();
+    let packet = store
+        .create_job_application_packet(JobApplicationPacketInput {
+            role_id: role.id.clone(),
+            profile_id: profile.id.clone(),
+            evidence_card_ids: vec![evidence.id.clone()],
+            resume_emphasis: "Lead with public developer tooling and agent systems.".to_string(),
+            tailored_bullets: vec!["Built public cloud developer tooling.".to_string()],
+            outreach_note: "Example AI appears to need reliable agent tooling discipline."
+                .to_string(),
+            proof_links: json!(["https://github.com/chrischabot/opencloud"]),
+            likely_objections: vec!["No direct company-specific evidence yet.".to_string()],
+            interview_stories: vec!["Public project technical story.".to_string()],
+            questions_to_ask: vec!["Where do agent workflows fail today?".to_string()],
+            reviewer_note: None,
+        })
+        .unwrap();
+    let _packet = store
+        .update_job_application_packet_status(JobApplicationPacketStatusInput {
+            packet_id: packet.id,
+            status: "approved".to_string(),
+            reviewer_note: Some("Reviewed for local operational audit fixture.".to_string()),
+        })
+        .unwrap();
+    let contact = store
+        .record_job_contact(JobContactInput {
+            name: "Known Staff Engineer".to_string(),
+            company_id: None,
+            role_title: Some("Staff Engineer".to_string()),
+            public_profile_url: "https://example.com/team/known-staff-engineer".to_string(),
+            source_url: "https://example.com/team".to_string(),
+            relationship_status: "known".to_string(),
+            relevance: "engineer".to_string(),
+            note: Some("User confirmed this contact can route a relevant intro.".to_string()),
+        })
+        .unwrap();
+    store
+        .record_job_intro_path(JobIntroPathInput {
+            role_id: role.id.clone(),
+            contact_id: contact.id,
+            path_type: "mutual".to_string(),
+            confidence: "confirmed".to_string(),
+            next_action: Some("Ask for an intro using the approved packet.".to_string()),
+            status: "ask".to_string(),
+        })
+        .unwrap();
+    store
+        .record_job_application(JobApplicationInput {
+            role_id: application_history_role.id,
+            packet_id: None,
+            status: "rejected".to_string(),
+            applied_at: Some("2026-06-20".to_string()),
+            follow_up_at: None,
+            outcome_note: Some("Controlled local operational audit fixture.".to_string()),
+        })
+        .unwrap();
+    let weekly = store
+        .compile_job_weekly_report(&profile.id, &scope)
+        .unwrap();
+    store
+        .authorize_channel_subject("email", "email:jobs@example.com", false, false, true)
+        .unwrap();
+    let prepared = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: weekly.id,
+            channel: "email".to_string(),
+            subject: "jobs@example.com".to_string(),
+            target: "jobs@example.com".to_string(),
+            idempotency_key: Some("operational-audit-fixture".to_string()),
+        })
+        .unwrap();
+    assert_eq!(prepared.delivery.status, "prepared");
+
+    let audit = store
+        .audit_job_operational_readiness(&profile.id, &scope, Some(0))
+        .unwrap();
+    assert_eq!(audit.decision, "block");
+    assert_eq!(audit.proof_level, "local_operational_audit");
+    assert_eq!(audit.refresh_audit.minimum_elapsed_hours, 24);
+    assert_eq!(audit.weekly_report_count, 1);
+    assert_eq!(
+        audit.weekly_delivery_status_counts.get("prepared").copied(),
+        Some(1)
+    );
+    assert_eq!(audit.weekly_report_delivery_attempt_count, 0);
+    assert_eq!(audit.outreach_readiness.ready_count, 1);
+    assert_eq!(audit.packet_status_counts.get("approved").copied(), Some(1));
+    let gate = |name: &str| audit.gates.iter().find(|gate| gate.name == name).unwrap();
+    assert_eq!(gate("outreach_readiness").decision, "pass");
+    assert_eq!(gate("delivery_preparation").decision, "pass");
+    assert_eq!(gate("application_tracking").decision, "pass");
+    assert_eq!(gate("weekly_refresh").decision, "block");
+    assert_eq!(gate("provider_delivery").decision, "block");
+    assert_eq!(gate("scheduled_radar").decision, "block");
+    assert!(
+        audit
+            .operational_blockers
+            .iter()
+            .any(|blocker| blocker.contains("not at least 24 hours apart")),
+        "{:?}",
+        audit.operational_blockers
+    );
+    assert!(
+        audit
+            .operational_blockers
+            .iter()
+            .any(|blocker| blocker.contains("No successful provider delivery attempt")),
+        "{:?}",
+        audit.operational_blockers
+    );
+    assert!(
+        audit
+            .operational_blockers
+            .iter()
+            .any(|blocker| blocker.contains("repeated completed job_radar_refresh")),
+        "{:?}",
+        audit.operational_blockers
+    );
+    assert!(
+        audit
+            .non_claims
+            .iter()
+            .any(|non_claim| non_claim.contains("not wall-clock recurrence proof")),
+        "{:?}",
+        audit.non_claims
+    );
+    assert!(
+        store
+            .list_channel_delivery_attempts(None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn severe_job_operational_audit_ignores_other_profile_scope_and_failed_delivery() {
+    // CLAIM: operational audit gates are scoped to the requested profile and
+    // scope, and provider delivery means a successful provider attempt.
+    // ORACLE: unrelated applications, privacy blocks, completed radar jobs in
+    // another scope, and failed delivery attempts cannot satisfy or poison the
+    // target operational audit gates.
+    // SEVERITY: Severe because global counts can make a narrowly scoped job
+    // radar look operational when the target profile has not actually reached
+    // the gate.
+    let store = test_store("job-operational-audit-scoped-gates");
+    let (profile, scope) = seed_job_refresh_audit_fixture(&store);
+    let evidence = store.list_job_evidence_cards(&profile.id).unwrap()[0].clone();
+    let role = store
+        .list_job_role_cards()
+        .unwrap()
+        .into_iter()
+        .find(|role| role.company == "Example AI")
+        .unwrap();
+    let packet = store
+        .create_job_application_packet(JobApplicationPacketInput {
+            role_id: role.id.clone(),
+            profile_id: profile.id.clone(),
+            evidence_card_ids: vec![evidence.id.clone()],
+            resume_emphasis: "Lead with public developer tooling and agent systems.".to_string(),
+            tailored_bullets: vec!["Built public cloud developer tooling.".to_string()],
+            outreach_note: "Example AI appears to need reliable agent tooling discipline."
+                .to_string(),
+            proof_links: json!(["https://github.com/chrischabot/opencloud"]),
+            likely_objections: vec!["No direct company-specific evidence yet.".to_string()],
+            interview_stories: vec!["Public project technical story.".to_string()],
+            questions_to_ask: vec!["Where do agent workflows fail today?".to_string()],
+            reviewer_note: None,
+        })
+        .unwrap();
+    let packet = store
+        .update_job_application_packet_status(JobApplicationPacketStatusInput {
+            packet_id: packet.id,
+            status: "approved".to_string(),
+            reviewer_note: Some("Reviewed for scoped operational audit fixture.".to_string()),
+        })
+        .unwrap();
+    let contact = store
+        .record_job_contact(JobContactInput {
+            name: "Known Staff Engineer".to_string(),
+            company_id: None,
+            role_title: Some("Staff Engineer".to_string()),
+            public_profile_url: "https://example.com/team/known-staff-engineer".to_string(),
+            source_url: "https://example.com/team".to_string(),
+            relationship_status: "known".to_string(),
+            relevance: "engineer".to_string(),
+            note: Some("User confirmed this contact can route a relevant intro.".to_string()),
+        })
+        .unwrap();
+    store
+        .record_job_intro_path(JobIntroPathInput {
+            role_id: role.id.clone(),
+            contact_id: contact.id,
+            path_type: "mutual".to_string(),
+            confidence: "confirmed".to_string(),
+            next_action: Some("Ask for an intro using the approved packet.".to_string()),
+            status: "ask".to_string(),
+        })
+        .unwrap();
+    let weekly = store
+        .compile_job_weekly_report(&profile.id, &scope)
+        .unwrap();
+    store
+        .authorize_channel_subject("email", "email:jobs@example.com", false, false, true)
+        .unwrap();
+    let prepared = store
+        .prepare_job_weekly_report_delivery(JobWeeklyReportDeliveryInput {
+            report_id: weekly.id.clone(),
+            channel: "email".to_string(),
+            subject: "jobs@example.com".to_string(),
+            target: "jobs@example.com".to_string(),
+            idempotency_key: Some("scoped-operational-audit-prepared".to_string()),
+        })
+        .unwrap();
+    assert_eq!(prepared.delivery.status, "prepared");
+    let message_id = prepared.delivery.channel_message_id.clone().unwrap();
+    store
+        .record_channel_delivery_attempt(
+            &message_id,
+            "email",
+            "jobs@example.com",
+            false,
+            500,
+            &json!({ "fixture": "failed provider attempt" }),
+            Some("controlled failed provider attempt"),
+            None,
+        )
+        .unwrap();
+
+    let other_profile = store
+        .record_job_candidate_profile(JobCandidateProfileInput {
+            label: "Other Candidate".to_string(),
+            current_resume_source: Some("fixture:other".to_string()),
+            linkedin_source: None,
+            github_profile: None,
+            blog_url: None,
+            metadata: json!({ "fixture": "other-profile-scope-audit" }),
+        })
+        .unwrap();
+    let other_evidence = store
+        .record_job_evidence_card(JobEvidenceCardInput {
+            profile_id: other_profile.id.clone(),
+            title: "Other Evidence".to_string(),
+            evidence_type: "github".to_string(),
+            visibility: "public".to_string(),
+            summary: "Other public evidence.".to_string(),
+            proof_url: Some("https://example.com/other".to_string()),
+            local_path: None,
+            source_date: Some("2026-06-29".to_string()),
+            confidence: "verified".to_string(),
+            tags: vec!["other".to_string()],
+            safe_application_text: "Other safe text.".to_string(),
+            unsafe_terms: vec![],
+            metadata: json!({}),
+        })
+        .unwrap();
+    let other_role = store
+        .record_job_role_card(JobRoleCardInput {
+            company: "Other AI".to_string(),
+            role_title: "Developer Tools Engineer".to_string(),
+            canonical_url: Some("https://other.example/jobs/devtools".to_string()),
+            source_family: "company".to_string(),
+            source_url: "https://other.example/jobs/devtools".to_string(),
+            source_confidence: "canonical_confirmed".to_string(),
+            date_accessed: Some("2026-06-29T08:00:00Z".to_string()),
+            posting_freshness: "same_day".to_string(),
+            location: Some("London".to_string()),
+            work_mode: Some("hybrid".to_string()),
+            company_stage_or_size: Some("startup".to_string()),
+            role_seniority: Some("senior".to_string()),
+            core_requirements: vec!["developer tools".to_string()],
+            implied_business_problem: None,
+            why_they_might_need_user: None,
+            evidence_card_ids: vec![other_evidence.id.clone()],
+            gaps_or_blockers: vec![],
+            cluster: Some("other".to_string()),
+            current_status: "live".to_string(),
+            metadata: json!({}),
+        })
+        .unwrap();
+    store
+        .record_job_application(JobApplicationInput {
+            role_id: other_role.id.clone(),
+            packet_id: None,
+            status: "planned".to_string(),
+            applied_at: None,
+            follow_up_at: Some("2026-07-05".to_string()),
+            outcome_note: Some("Unrelated profile application row.".to_string()),
+        })
+        .unwrap();
+    let other_packet = store
+        .create_job_application_packet(JobApplicationPacketInput {
+            role_id: other_role.id.clone(),
+            profile_id: other_profile.id.clone(),
+            evidence_card_ids: vec![other_evidence.id.clone()],
+            resume_emphasis: "Other profile text.".to_string(),
+            tailored_bullets: vec!["Other bullet.".to_string()],
+            outreach_note:
+                "Other AI needs developer tooling help; other blocked private token is unrelated."
+                    .to_string(),
+            proof_links: json!({}),
+            likely_objections: vec![],
+            interview_stories: vec![],
+            questions_to_ask: vec![],
+            reviewer_note: None,
+        })
+        .unwrap();
+    store
+        .record_job_privacy_rule(JobPrivacyRuleInput {
+            pattern: "other blocked private token".to_string(),
+            rule_type: "blocked_term".to_string(),
+            severity: "block".to_string(),
+            replacement_guidance: Some("Do not use this other-profile text.".to_string()),
+        })
+        .unwrap();
+    let other_privacy = store
+        .check_job_privacy_text(
+            "job_outreach_readiness",
+            Some(&other_packet.id),
+            &other_packet.outreach_note,
+            &[],
+        )
+        .unwrap();
+    assert_eq!(other_privacy.decision, "block");
+
+    let wrong_scope_source = store
+        .record_job_source(JobSourceInput {
+            source_family: "company".to_string(),
+            name: "Wrong scope careers".to_string(),
+            url: "https://wrong-scope.example/careers".to_string(),
+            market_scope: "wrong-scope".to_string(),
+            refresh_policy: "manual".to_string(),
+            metadata: json!({}),
+        })
+        .unwrap();
+    let job_one = store
+        .enqueue_job_radar_refresh_job(
+            &profile.id,
+            "Wrong scope",
+            vec![wrong_scope_source.id.clone()],
+            false,
+            json!({}),
+        )
+        .unwrap();
+    let job_two = store
+        .enqueue_job_radar_refresh_job(
+            &profile.id,
+            "Wrong scope",
+            vec![wrong_scope_source.id.clone()],
+            false,
+            json!({}),
+        )
+        .unwrap();
+    store
+        .conn
+        .execute(
+            "UPDATE wiki_jobs SET status = 'completed' WHERE id IN (?1, ?2)",
+            params![job_one.id, job_two.id],
+        )
+        .unwrap();
+
+    let audit = store
+        .audit_job_operational_readiness(&profile.id, &scope, Some(0))
+        .unwrap();
+    let gate = |name: &str| audit.gates.iter().find(|gate| gate.name == name).unwrap();
+    assert_eq!(gate("privacy").decision, "pass", "{:?}", audit.gates);
+    assert_eq!(gate("application_tracking").decision, "block");
+    assert_eq!(gate("provider_delivery").decision, "block");
+    assert_eq!(gate("scheduled_radar").decision, "block");
+    assert_eq!(audit.weekly_report_delivery_attempt_count, 0);
+    assert_eq!(audit.job_radar_completed_count, 0);
+    assert_eq!(
+        gate("application_tracking").evidence["application_status_counts"]
+            .get("planned")
+            .and_then(Value::as_u64),
+        None,
+        "target audit must not count other-profile applications"
+    );
+    assert_eq!(
+        audit.packet_status_counts.get("approved").copied(),
+        Some(1),
+        "target profile packet still counts"
+    );
+    assert_eq!(packet.status, "approved");
 }
 
 #[test]
@@ -1639,6 +3425,54 @@ fn severe_job_source_refresh_keeps_vc_board_roles_secondary_and_company_cards_mo
     score_input.evidence_card_ids = vec![evidence.id];
     let score = store.record_job_fit_score(score_input).unwrap();
     assert_eq!(score.tier, "tier_2");
+}
+
+#[test]
+fn severe_job_source_refresh_rejects_job_board_category_links_as_roles() {
+    // CLAIM: startup/VC board category links are weak leads, not role cards.
+    // ORACLE: generic `/jobs/role/...` links and "X Jobs in Y" anchors are
+    // counted as rejected weak leads, while a company-specific job detail link
+    // remains secondary-confirmed rather than canonical.
+    // SEVERITY: Severe because broad boards often contain category navigation
+    // that looks role-like enough to poison an apply-now shortlist.
+    let store = test_store("job-source-refresh-board-category-links");
+    let source = store
+        .record_job_source(JobSourceInput {
+            source_family: "vc_board".to_string(),
+            name: "YC London Jobs".to_string(),
+            url: "https://www.ycombinator.com/jobs/role/software-engineer/london".to_string(),
+            market_scope: "london".to_string(),
+            refresh_policy: "manual".to_string(),
+            metadata: json!({}),
+        })
+        .unwrap();
+    let refresh = store
+        .run_job_source_refresh(JobSourceRefreshInput {
+            source_id: source.id,
+            fetched_url: Some(
+                "https://www.ycombinator.com/jobs/role/software-engineer/london".to_string(),
+            ),
+            body: Some(
+                r#"
+                <main>
+                  <p>London AI infrastructure startups building APIs for developers.</p>
+                  <a href="/companies/encord/jobs/E9vvz7Y-product-engineer">Product Engineer</a>
+                  <a href="/jobs/role/product-manager">Product Manager</a>
+                  <a href="/jobs/role/product-manager/london">Product Manager Jobs in London</a>
+                  <a href="/jobs/role/software-engineer/remote">Remote Software Engineer Jobs</a>
+                  <a href="/jobs/role/product-manager/new-york">Product Manager Jobs in New York</a>
+                </main>
+                "#
+                .to_string(),
+            ),
+            fetch_live: false,
+        })
+        .unwrap();
+    assert_eq!(refresh.roles.len(), 1);
+    assert_eq!(refresh.roles[0].role_title, "Product Engineer");
+    assert_eq!(refresh.roles[0].source_confidence, "secondary_confirmed");
+    assert_eq!(refresh.rejected_count, 4);
+    assert_eq!(refresh.source_health.status, "partial");
 }
 
 #[test]

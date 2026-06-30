@@ -135,7 +135,14 @@ impl Store {
                     OR (status = 'running' AND leased_until IS NOT NULL AND leased_until <= ?1)
                 )
                 AND attempts < max_attempts
-                ORDER BY created_at ASC
+                ORDER BY
+                    CASE kind
+                        WHEN 'knowledge_daily_briefing' THEN 0
+                        WHEN 'digest_scheduled_alert' THEN 1
+                        WHEN 'radar_scheduled_delivery' THEN 1
+                        ELSE 10
+                    END ASC,
+                    created_at ASC
                 LIMIT 1
                 "#,
                 params![now()],
@@ -246,6 +253,9 @@ impl Store {
                     let _ =
                         self.record_job_radar_refresh_job_failure_health(&job.input_json, &error);
                 }
+                if job.kind == "ingest_url" {
+                    let _ = self.record_ingest_url_job_failure_health(&job.input_json, &error);
+                }
                 Ok(failed)
             }
         }
@@ -301,6 +311,17 @@ impl Store {
             .and_then(Value::as_str)
             .unwrap_or(profile_id);
         self.record_source_failure(&source_key, "arcwell", source_kind, locator, error)
+    }
+
+    pub(crate) fn record_ingest_url_job_failure_health(
+        &self,
+        input: &Value,
+        error: &str,
+    ) -> Result<()> {
+        let Some(url) = input.get("url").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        self.record_blog_watch_source_failure_for_url_ingest(url, error)
     }
 
     pub(crate) fn execute_job_radar_refresh(&self, input: &Value) -> Result<Value> {
@@ -560,6 +581,10 @@ impl Store {
         let doc = fetch_url_ingest_document(url)?;
         let markdown = render_url_ingest_page(&doc);
         let page_id = self.add_wiki_page(&doc.title, &markdown, &doc.canonical_url)?;
+        let source_health_key = self.record_blog_watch_source_success_for_url_ingest(
+            doc.canonical_url.as_str(),
+            &page_id,
+        )?;
         let research_promotion =
             self.promote_research_url_ingest_document(research_context.as_ref(), &doc, &page_id)?;
         Ok(json!({
@@ -568,6 +593,7 @@ impl Store {
             "canonical_url": doc.canonical_url,
             "final_url": doc.final_url,
             "content_type": doc.content_type,
+            "source_health_key": source_health_key,
             "research_promotion": research_promotion
         }))
     }

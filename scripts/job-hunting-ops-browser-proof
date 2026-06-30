@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in agent-browser node curl jq; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the job-hunting ops browser proof." >&2
+    exit 2
+  fi
+done
+
+DEFAULT_SOURCE_HOME="$REPO_ROOT/.arcwell-dev/proofs/job-source-refresh-live-policy-allow-linked-fixed-20260628T215717Z/home"
+SOURCE_HOME="${ARCWELL_JOB_HUNTING_OPS_SOURCE_HOME:-$DEFAULT_SOURCE_HOME}"
+if [ ! -f "$SOURCE_HOME/arcwell.sqlite3" ]; then
+  cat >&2 <<EOF
+BLOCKED: source proof home not found: $SOURCE_HOME
+Set ARCWELL_JOB_HUNTING_OPS_SOURCE_HOME to a controlled home that already contains
+the imported P1 job-hunting data plus source-refresh source-health rows.
+EOF
+  exit 2
+fi
+
+RUN_STAMP="${ARCWELL_JOB_HUNTING_OPS_BROWSER_PROOF_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_HUNTING_OPS_BROWSER_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-hunting-ops-browser-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_JOB_HUNTING_OPS_BROWSER_PROOF_HOME:-$PROOF_ROOT/home}"
+AUTH_TOKEN="${ARCWELL_JOB_HUNTING_OPS_BROWSER_PROOF_TOKEN:-job-hunting-ops-browser-proof-token-$RUN_STAMP}"
+SESSION="arcwell-job-hunting-ops-proof-$RUN_STAMP"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[job-hunting-ops-browser-proof] %s\n' "$*"
+}
+
+cleanup() {
+  if [ -n "${SERVER_PID:-}" ] && kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+    kill "$SERVER_PID" >/dev/null 2>&1 || true
+    wait "$SERVER_PID" >/dev/null 2>&1 || true
+  fi
+  agent-browser --session "$SESSION" close >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+log "proof root: $PROOF_ROOT"
+log "source home: $SOURCE_HOME"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+cp -R "$SOURCE_HOME/." "$ARCWELL_HOME/"
+printf '%s\n' "$SOURCE_HOME" >"$ARTIFACT_DIR/source-home.txt"
+
+"$ARCWELL_BIN" job profiles >"$ARTIFACT_DIR/profiles-before.json"
+"$ARCWELL_BIN" job roles >"$ARTIFACT_DIR/roles-before.json"
+"$ARCWELL_BIN" ops >"$ARTIFACT_DIR/ops-before.json"
+
+PROFILE_ID="$(jq -r '.[0].id // empty' "$ARTIFACT_DIR/profiles-before.json")"
+CLOSED_ROLE_ID="$(jq -r '[.[] | select(.metadata.tier == "tier_1")][0].id // empty' "$ARTIFACT_DIR/roles-before.json")"
+FOLLOWUP_ROLE_ID="$(jq -r '[.[] | select(.metadata.tier == "tier_1")][1].id // empty' "$ARTIFACT_DIR/roles-before.json")"
+CLOSED_COMPANY="$(jq -r --arg id "$CLOSED_ROLE_ID" '.[] | select(.id == $id) | .company' "$ARTIFACT_DIR/roles-before.json")"
+FOLLOWUP_COMPANY="$(jq -r --arg id "$FOLLOWUP_ROLE_ID" '.[] | select(.id == $id) | .company' "$ARTIFACT_DIR/roles-before.json")"
+CLOSED_COMPANY_JSON="$(printf '%s' "$CLOSED_COMPANY" | jq -Rs .)"
+
+if [ -z "$PROFILE_ID" ] || [ -z "$CLOSED_ROLE_ID" ] || [ -z "$FOLLOWUP_ROLE_ID" ]; then
+  echo "BLOCKED: copied proof home does not contain a profile and at least two Tier 1 roles." >&2
+  exit 2
+fi
+
+HEALTH_IDS=()
+while IFS= read -r health_id; do
+  HEALTH_IDS+=(--source-health-id "$health_id")
+done < <(jq -r '.job_hunting.source_health_failures[].id' "$ARTIFACT_DIR/ops-before.json")
+
+if [ "${#HEALTH_IDS[@]}" -eq 0 ]; then
+  echo "BLOCKED: copied proof home has no non-healthy job source-health rows to surface." >&2
+  exit 2
+fi
+
+log "adding controlled operational states to imported job data"
+"$ARCWELL_BIN" job privacy-check \
+  --artifact-type application_packet \
+  --artifact-id "$FOLLOWUP_ROLE_ID" \
+  --text "Controlled ops proof draft for $FOLLOWUP_COMPANY contains integral-secret-proof-marker and must stay blocked." \
+  --blocked-term integral-secret-proof-marker \
+  >"$ARTIFACT_DIR/privacy-block.json"
+
+"$ARCWELL_BIN" job application-record "$FOLLOWUP_ROLE_ID" \
+  --status planned \
+  --follow-up-at 2026-07-05 \
+  --outcome-note "Controlled ops browser proof follow-up row; not a sent application." \
+  >"$ARTIFACT_DIR/application-follow-up.json"
+
+"$ARCWELL_BIN" job refresh "$PROFILE_ID" \
+  --scope "Controlled ops browser proof refresh over imported P1 roles" \
+  --closed-role-id "$CLOSED_ROLE_ID" \
+  "${HEALTH_IDS[@]}" \
+  --proof-level production_data_proof \
+  --report-artifact-id job-hunting-ops-browser-proof \
+  >"$ARTIFACT_DIR/manual-refresh-closed-role.json"
+
+"$ARCWELL_BIN" job weekly-report "$PROFILE_ID" \
+  --scope "Controlled ops browser proof over imported P1 roles" \
+  >"$ARTIFACT_DIR/weekly-report.json"
+
+"$ARCWELL_BIN" job roles >"$ARTIFACT_DIR/roles-after.json"
+"$ARCWELL_BIN" ops >"$ARTIFACT_DIR/ops-after.json"
+
+log "starting authenticated local HTTP server"
+PORT="$(node -e 'const net=require("net"); const server=net.createServer(); server.listen(0,"127.0.0.1",()=>{ const {port}=server.address(); console.log(port); server.close(); });')"
+BASE_URL="http://127.0.0.1:$PORT"
+"$ARCWELL_BIN" serve --addr "127.0.0.1:$PORT" --auth-token "$AUTH_TOKEN" \
+  >"$ARTIFACT_DIR/server.log" 2>&1 &
+SERVER_PID="$!"
+
+for _ in $(seq 1 80); do
+  if curl -fsS -H "x-arcwell-http-token: $AUTH_TOKEN" "$BASE_URL/health" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+    echo "BLOCKED: HTTP server exited before readiness. See $ARTIFACT_DIR/server.log" >&2
+    exit 2
+  fi
+  sleep 0.1
+done
+
+if ! curl -fsS -H "x-arcwell-http-token: $AUTH_TOKEN" "$BASE_URL/health" >/dev/null 2>&1; then
+  echo "BLOCKED: HTTP server did not become ready. See $ARTIFACT_DIR/server.log" >&2
+  exit 2
+fi
+
+agent-browser --session "$SESSION" set headers "{\"x-arcwell-http-token\":\"$AUTH_TOKEN\"}" >/dev/null
+
+log "checking desktop viewport"
+agent-browser --session "$SESSION" set viewport 1440 900 >/dev/null
+agent-browser --session "$SESSION" open "$BASE_URL/ops/ui" >/dev/null
+agent-browser --session "$SESSION" wait --load networkidle >/dev/null
+agent-browser --session "$SESSION" screenshot "$ARTIFACT_DIR/desktop.png" >/dev/null
+agent-browser --session "$SESSION" snapshot -i >"$ARTIFACT_DIR/desktop.snapshot.txt"
+agent-browser --session "$SESSION" eval "$(cat <<JS
+(() => {
+  const expectedClosedCompany = $CLOSED_COMPANY_JSON;
+  const text = document.body.innerText;
+  const metrics = Object.fromEntries(Array.from(document.querySelectorAll(".metric")).map((metric) => {
+    return [
+      metric.querySelector("span")?.innerText.trim(),
+      metric.querySelector("b")?.innerText.trim()
+    ];
+  }));
+  const must = [
+    "Arcwell Ops",
+    "Job roles",
+    "Job source failures",
+    "Job privacy blocks",
+    "Job follow-ups",
+    "Job Hunting Stale Or Closed Roles",
+    "Job Hunting Source Health Failures",
+    expectedClosedCompany,
+    "provider_network_failure"
+  ];
+  for (const needle of must) {
+    if (!text.includes(needle)) throw new Error("missing desktop text: " + needle);
+  }
+  const numericMetric = (name) => Number(metrics[name] || "0");
+  if (numericMetric("Job roles") < 7) throw new Error("too few job roles visible: " + metrics["Job roles"]);
+  if (numericMetric("Job source failures") < 1) throw new Error("missing non-healthy job source count");
+  if (numericMetric("Job privacy blocks") < 1) throw new Error("missing blocked privacy count");
+  if (numericMetric("Job follow-ups") < 1) throw new Error("missing follow-up count");
+  if (!document.querySelector('input[name="q"]')) throw new Error("missing search input");
+  if (!document.querySelector('input[name="status"]')) throw new Error("missing status input");
+  if (document.scripts.length !== 0) throw new Error("unexpected script tags: " + document.scripts.length);
+  if (document.documentElement.scrollWidth > window.innerWidth + 4) {
+    throw new Error("desktop horizontal overflow: " + document.documentElement.scrollWidth + " > " + window.innerWidth);
+  }
+  return {
+    title: document.title,
+    width: window.innerWidth,
+    jobRoles: metrics["Job roles"],
+    jobSourceFailures: metrics["Job source failures"],
+    jobPrivacyBlocks: metrics["Job privacy blocks"],
+    jobFollowUps: metrics["Job follow-ups"],
+    sections: document.querySelectorAll("section").length,
+    tables: document.querySelectorAll("table").length
+  };
+})()
+JS
+)" >"$ARTIFACT_DIR/desktop.assertion.json"
+agent-browser --session "$SESSION" eval '(() => {
+  const heading = Array.from(document.querySelectorAll("h2")).find((node) => node.innerText.includes("Job Hunting Stale Or Closed Roles"));
+  if (!heading) throw new Error("missing job-hunting stale/closed heading before screenshot");
+  heading.scrollIntoView({ block: "start" });
+  return { scrolledTo: heading.innerText };
+})()' >"$ARTIFACT_DIR/desktop-job-section.assertion.json"
+agent-browser --session "$SESSION" screenshot "$ARTIFACT_DIR/desktop-job-hunting.png" >/dev/null
+
+log "checking mobile viewport"
+agent-browser --session "$SESSION" set viewport 390 844 >/dev/null
+agent-browser --session "$SESSION" open "$BASE_URL/ops/ui" >/dev/null
+agent-browser --session "$SESSION" wait --load networkidle >/dev/null
+agent-browser --session "$SESSION" screenshot "$ARTIFACT_DIR/mobile.png" >/dev/null
+agent-browser --session "$SESSION" snapshot -i >"$ARTIFACT_DIR/mobile.snapshot.txt"
+agent-browser --session "$SESSION" eval "$(cat <<JS
+(() => {
+  const expectedClosedCompany = $CLOSED_COMPANY_JSON;
+  const text = document.body.innerText;
+  const must = [
+    "Arcwell Ops",
+    "Job roles",
+    "Job source failures",
+    "Job privacy blocks",
+    "Job follow-ups",
+    "Job Hunting Stale Or Closed Roles",
+    "Job Hunting Source Health Failures",
+    expectedClosedCompany
+  ];
+  for (const needle of must) {
+    if (!text.includes(needle)) throw new Error("missing mobile text: " + needle);
+  }
+  if (!document.querySelector('form.ops-form')) throw new Error("missing mobile filter form");
+  if (document.scripts.length !== 0) throw new Error("unexpected mobile script tags: " + document.scripts.length);
+  if (document.documentElement.scrollWidth > window.innerWidth + 4) {
+    throw new Error("mobile horizontal overflow: " + document.documentElement.scrollWidth + " > " + window.innerWidth);
+  }
+  return {
+    title: document.title,
+    width: window.innerWidth,
+    sections: document.querySelectorAll("section").length,
+    tables: document.querySelectorAll("table").length
+  };
+})()
+JS
+)" >"$ARTIFACT_DIR/mobile.assertion.json"
+agent-browser --session "$SESSION" eval '(() => {
+  const heading = Array.from(document.querySelectorAll("h2")).find((node) => node.innerText.includes("Job Hunting Stale Or Closed Roles"));
+  if (!heading) throw new Error("missing mobile job-hunting stale/closed heading before screenshot");
+  heading.scrollIntoView({ block: "start" });
+  return { scrolledTo: heading.innerText };
+})()' >"$ARTIFACT_DIR/mobile-job-section.assertion.json"
+agent-browser --session "$SESSION" screenshot "$ARTIFACT_DIR/mobile-job-hunting.png" >/dev/null
+
+agent-browser --session "$SESSION" errors >"$ARTIFACT_DIR/browser-errors.txt" || true
+
+node - "$PROOF_ROOT" "$BASE_URL" "$SOURCE_HOME" "$ARTIFACT_DIR" "$PROFILE_ID" "$CLOSED_ROLE_ID" "$CLOSED_COMPANY" "$FOLLOWUP_ROLE_ID" "$FOLLOWUP_COMPANY" <<'NODE' >"$ARTIFACT_DIR/proof-packet.json"
+const fs = require("fs");
+const [
+  proofRoot,
+  baseUrl,
+  sourceHome,
+  artifactDir,
+  profileId,
+  closedRoleId,
+  closedCompany,
+  followupRoleId,
+  followupCompany
+] = process.argv.slice(2);
+const readJson = (name) => JSON.parse(fs.readFileSync(`${artifactDir}/${name}`, "utf8"));
+const opsBefore = readJson("ops-before.json");
+const opsAfter = readJson("ops-after.json");
+const desktop = readJson("desktop.assertion.json");
+const mobile = readJson("mobile.assertion.json");
+const proof = {
+  proof_name: "job-hunting-ops-browser-proof",
+  proof_level: "Browser-backed controlled production-data proof over imported P1 job-hunting state",
+  proof_root: proofRoot,
+  base_url: baseUrl,
+  arcwell_home: process.env.ARCWELL_HOME,
+  source_home: sourceHome,
+  profile_id: profileId,
+  controlled_state_added: {
+    closed_role_id: closedRoleId,
+    closed_company: closedCompany,
+    followup_role_id: followupRoleId,
+    followup_company: followupCompany,
+    privacy_block_marker: "integral-secret-proof-marker",
+    application_follow_up_at: "2026-07-05"
+  },
+  counts_before: opsBefore.job_hunting,
+  counts_after: opsAfter.job_hunting,
+  desktop,
+  mobile,
+  artifacts: {
+    desktop_screenshot: `${artifactDir}/desktop.png`,
+    desktop_job_hunting_screenshot: `${artifactDir}/desktop-job-hunting.png`,
+    mobile_screenshot: `${artifactDir}/mobile.png`,
+    mobile_job_hunting_screenshot: `${artifactDir}/mobile-job-hunting.png`,
+    desktop_snapshot: `${artifactDir}/desktop.snapshot.txt`,
+    mobile_snapshot: `${artifactDir}/mobile.snapshot.txt`,
+    browser_errors: `${artifactDir}/browser-errors.txt`,
+    ops_before: `${artifactDir}/ops-before.json`,
+    ops_after: `${artifactDir}/ops-after.json`,
+    privacy_block: `${artifactDir}/privacy-block.json`,
+    application_follow_up: `${artifactDir}/application-follow-up.json`,
+    manual_refresh: `${artifactDir}/manual-refresh-closed-role.json`,
+    weekly_report: `${artifactDir}/weekly-report.json`
+  },
+  checked: [
+    "copied controlled P1 imported/live-refresh proof home",
+    "rendered authenticated /ops/ui over imported job-hunting state",
+    "captured desktop and mobile screenshots of the job-hunting ops tables",
+    "desktop ops UI shows job role count, non-healthy source count, blocked privacy count, follow-up count, stale/closed table, and source-health failure table",
+    "mobile ops UI shows the same job-hunting operational sections",
+    "manual refresh closed one imported Tier 1 role and preserved non-healthy source-health rows",
+    "privacy check blocked one controlled unsafe draft marker",
+    "application follow-up row is counted",
+    "desktop and mobile body width do not overflow",
+    "no script tags were present in the rendered ops UI"
+  ],
+  remaining_risk: [
+    "This proves browser-visible ops rendering over a controlled copy of imported P1 data, not a long-running production service.",
+    "The closed-role transition is a controlled manual refresh transition, not a second wall-clock live source refresh one day later.",
+    "It does not prove London startup map coverage, scheduled worker radar, user-approved applications, sent applications, or outcome learning."
+  ]
+};
+process.stdout.write(JSON.stringify(proof, null, 2));
+NODE
+
+cat "$ARTIFACT_DIR/proof-packet.json"
+log "job-hunting ops browser proof passed"
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"

@@ -1,0 +1,390 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DB="${ARCWELL_SOURCE_HEALTH_RETRY_DB:-${ARCWELL_HOME:-$HOME/.arcwell}/arcwell.sqlite3}"
+RUN_STAMP="${ARCWELL_SOURCE_HEALTH_RETRY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_SOURCE_HEALTH_RETRY_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/source-health-stale-policy-retry-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+POLICY_FILE="${ARCWELL_SOURCE_HEALTH_RETRY_POLICY_FILE:-${ARCWELL_HOME:-$HOME/.arcwell}/arcwell-policy.toml}"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+APPLY=0
+MODE="run"
+MAX_SOURCES=20
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/source-health-stale-policy-retry [--apply] [--mode run|enqueue] [--max-sources N] [--db PATH] [--policy-file PATH]
+
+Finds active non-X watch sources whose source_health row still reports
+"policy deferred" even though the current policy file contains the required
+scheduled-ingestion allow rule. By default this is dry-run only.
+
+Modes:
+  run      Execute bounded arcwell wiki run-* commands immediately.
+  enqueue  Enqueue bounded jobs without waiting for execution.
+
+Only non-X source kinds are eligible: rss, github_owner, arxiv_query.
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --apply)
+      APPLY=1
+      shift
+      ;;
+    --mode)
+      MODE="${2:-}"
+      shift 2
+      ;;
+    --max-sources)
+      MAX_SOURCES="${2:-}"
+      shift 2
+      ;;
+    --db)
+      DB="${2:-}"
+      shift 2
+      ;;
+    --policy-file)
+      POLICY_FILE="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "BLOCKED: unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$MODE" in
+  run|enqueue) ;;
+  *)
+    echo "BLOCKED: --mode must be run or enqueue" >&2
+    exit 2
+    ;;
+esac
+
+case "$MAX_SOURCES" in
+  ''|*[!0-9]*)
+    echo "BLOCKED: --max-sources must be a positive integer" >&2
+    exit 2
+    ;;
+esac
+if [ "$MAX_SOURCES" -lt 1 ]; then
+  echo "BLOCKED: --max-sources must be >= 1" >&2
+  exit 2
+fi
+
+for required in python3 sqlite3 jq; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required." >&2
+    exit 2
+  fi
+done
+
+if [ ! -f "$DB" ]; then
+  echo "BLOCKED: Arcwell DB not found: $DB" >&2
+  exit 2
+fi
+
+if [ "$APPLY" -eq 1 ] && { [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; }; then
+  echo "BLOCKED: arcwell binary not available for --apply" >&2
+  exit 2
+fi
+
+mkdir -p "$ARTIFACT_DIR"
+
+python3 - "$DB" "$POLICY_FILE" "$ARTIFACT_DIR/selected-sources.json" "$ARTIFACT_DIR/selected-sources.csv" "$MAX_SOURCES" <<'PY'
+import csv
+import json
+import re
+import sqlite3
+import sys
+from pathlib import Path
+
+db = Path(sys.argv[1])
+policy = Path(sys.argv[2])
+json_out = Path(sys.argv[3])
+csv_out = Path(sys.argv[4])
+max_sources = int(sys.argv[5])
+
+rules = set()
+if policy.exists():
+    rules = set(re.findall(r'^\s*id\s*=\s*"([^"]+)"', policy.read_text(errors="replace"), flags=re.MULTILINE))
+
+required_rules = {
+    "rss": "allow-scheduled-rss-fetch-worker-enqueue",
+    "github_owner": "allow-scheduled-github-owner-worker-enqueue",
+    "arxiv_query": "allow-scheduled-arxiv-search-worker-enqueue",
+}
+job_kind = {
+    "rss": "rss_fetch",
+    "github_owner": "github_owner",
+    "arxiv_query": "arxiv_search",
+}
+
+conn = sqlite3.connect(str(db))
+conn.row_factory = sqlite3.Row
+rows = []
+for row in conn.execute(
+    """
+    SELECT ws.source_kind, ws.locator, ws.label, ws.cadence,
+           sh.key AS source_health_key, sh.status AS health_status,
+           sh.last_success_at, sh.last_failure_at, sh.next_run_at, sh.last_error
+    FROM watch_sources ws
+    JOIN source_health sh
+      ON sh.source_kind = ws.source_kind
+     AND sh.locator = ws.locator
+    WHERE ws.status = 'active'
+      AND ws.source_kind IN ('rss', 'github_owner', 'arxiv_query')
+      AND sh.last_error LIKE '%policy deferred%'
+    ORDER BY
+      CASE ws.source_kind WHEN 'github_owner' THEN 0 WHEN 'rss' THEN 1 ELSE 2 END,
+      COALESCE(sh.last_failure_at, ''),
+      lower(ws.locator)
+    """
+):
+    kind = row["source_kind"]
+    rule_id = required_rules[kind]
+    if rule_id not in rules:
+        continue
+    locator = row["locator"]
+    active_job = None
+    if kind == "rss":
+        active_job = conn.execute(
+            """
+            SELECT id, status FROM wiki_jobs
+            WHERE kind = 'rss_fetch'
+              AND status IN ('pending', 'running', 'deferred', 'failed')
+              AND json_extract(input_json, '$.url') = ?
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (locator,),
+        ).fetchone()
+    elif kind == "github_owner":
+        active_job = conn.execute(
+            """
+            SELECT id, status FROM wiki_jobs
+            WHERE kind = 'github_owner'
+              AND status IN ('pending', 'running', 'deferred', 'failed')
+              AND json_extract(input_json, '$.owner') = ?
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (locator,),
+        ).fetchone()
+    elif kind == "arxiv_query":
+        active_job = conn.execute(
+            """
+            SELECT id, status FROM wiki_jobs
+            WHERE kind = 'arxiv_search'
+              AND status IN ('pending', 'running', 'deferred', 'failed')
+              AND json_extract(input_json, '$.query') = ?
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (locator,),
+        ).fetchone()
+    rows.append({
+        "source_kind": kind,
+        "locator": locator,
+        "label": row["label"],
+        "cadence": row["cadence"],
+        "job_kind": job_kind[kind],
+        "required_policy_rule": rule_id,
+        "current_policy_allows": True,
+        "source_health_key": row["source_health_key"],
+        "health_status": row["health_status"],
+        "last_success_at": row["last_success_at"],
+        "last_failure_at": row["last_failure_at"],
+        "next_run_at": row["next_run_at"],
+        "last_error": row["last_error"],
+        "active_job_id": active_job["id"] if active_job else "",
+        "active_job_status": active_job["status"] if active_job else "",
+        "eligible_for_apply": not bool(active_job),
+    })
+
+selected = [row for row in rows if row["eligible_for_apply"]][:max_sources]
+payload = {
+    "policy_file": str(policy),
+    "policy_rule_ids_loaded": len(rules),
+    "total_matching_stale_policy_rows": len(rows),
+    "eligible_without_active_job": sum(1 for row in rows if row["eligible_for_apply"]),
+    "selected_count": len(selected),
+    "selected": selected,
+    "skipped_active_jobs": [row for row in rows if not row["eligible_for_apply"]],
+}
+json_out.write_text(json.dumps(payload, indent=2))
+
+fields = [
+    "source_kind", "locator", "label", "cadence", "job_kind",
+    "required_policy_rule", "current_policy_allows", "source_health_key",
+    "health_status", "last_success_at", "last_failure_at", "next_run_at",
+    "active_job_id", "active_job_status", "eligible_for_apply", "last_error",
+]
+with csv_out.open("w", newline="") as handle:
+    writer = csv.DictWriter(handle, fieldnames=fields)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+print(json.dumps({
+    "total_matching_stale_policy_rows": len(rows),
+    "eligible_without_active_job": payload["eligible_without_active_job"],
+    "selected_count": len(selected),
+}, indent=2))
+PY
+
+RESULTS_JSONL="$ARTIFACT_DIR/results.jsonl"
+RESULTS_ERR="$ARTIFACT_DIR/results.err"
+: >"$RESULTS_JSONL"
+: >"$RESULTS_ERR"
+
+if [ "$APPLY" -eq 1 ]; then
+  python3 - "$ARTIFACT_DIR/selected-sources.json" "$ARCWELL_BIN" "$MODE" "$RESULTS_JSONL" "$RESULTS_ERR" <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+plan = json.loads(Path(sys.argv[1]).read_text())
+arcwell = sys.argv[2]
+mode = sys.argv[3]
+jsonl = Path(sys.argv[4])
+err = Path(sys.argv[5])
+
+commands = []
+for source in plan["selected"]:
+    kind = source["source_kind"]
+    locator = source["locator"]
+    if mode == "run":
+        if kind == "rss":
+            cmd = [arcwell, "wiki", "run-rss", locator]
+        elif kind == "github_owner":
+            cmd = [arcwell, "wiki", "run-github-owner", "--limit", "10", locator]
+        elif kind == "arxiv_query":
+            cmd = [arcwell, "wiki", "run-arxiv", "--limit", "10", locator]
+        else:
+            continue
+    else:
+        if kind == "rss":
+            cmd = [arcwell, "wiki", "enqueue-rss", locator]
+        elif kind == "github_owner":
+            cmd = [arcwell, "wiki", "enqueue-github-owner", "--limit", "10", locator]
+        elif kind == "arxiv_query":
+            cmd = [arcwell, "wiki", "enqueue-arxiv", "--limit", "10", locator]
+        else:
+            continue
+    commands.append((source, cmd))
+
+with jsonl.open("a") as out, err.open("a") as err_out:
+    for source, cmd in commands:
+        result = {
+            "source_kind": source["source_kind"],
+            "locator": source["locator"],
+            "mode": mode,
+            "command": cmd,
+        }
+        proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result["returncode"] = proc.returncode
+        if proc.stdout.strip():
+            try:
+                result["stdout_json"] = json.loads(proc.stdout)
+            except Exception:
+                result["stdout"] = proc.stdout[-4000:]
+        if proc.stderr.strip():
+            result["stderr"] = proc.stderr[-4000:]
+            err_out.write(f"## {' '.join(cmd)}\n{proc.stderr}\n")
+        out.write(json.dumps(result) + "\n")
+PY
+fi
+
+python3 - "$DB" "$ARTIFACT_DIR/selected-sources.json" "$ARTIFACT_DIR/post-source-health.json" <<'PY'
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+db = Path(sys.argv[1])
+plan = json.loads(Path(sys.argv[2]).read_text())
+out = Path(sys.argv[3])
+conn = sqlite3.connect(str(db))
+conn.row_factory = sqlite3.Row
+rows = []
+for source in plan["selected"]:
+    row = conn.execute(
+        """
+        SELECT key, provider, source_kind, locator, status,
+               last_success_at, last_failure_at, last_error, next_run_at, updated_at
+        FROM source_health
+        WHERE key = ?
+        """,
+        (source["source_health_key"],),
+    ).fetchone()
+    rows.append(dict(row) if row else {"key": source["source_health_key"], "missing": True})
+out.write_text(json.dumps(rows, indent=2))
+PY
+
+cat >"$PROOF_ROOT/proof.md" <<EOF
+# Source Health Stale Policy Retry Proof
+
+Generated: \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`
+
+- DB: \`$DB\`
+- Policy file: \`$POLICY_FILE\`
+- Mode: \`$MODE\`
+- Apply: \`$APPLY\`
+- Max sources: \`$MAX_SOURCES\`
+
+Artifacts:
+- \`artifacts/selected-sources.json\`
+- \`artifacts/selected-sources.csv\`
+- \`artifacts/results.jsonl\`
+- \`artifacts/results.err\`
+- \`artifacts/post-source-health.json\`
+
+This proof only covers non-X stale policy-deferred source-health rows whose
+current policy allow rule exists. It does not repair X rate limits, X policy,
+or unrelated dead-lettered jobs.
+EOF
+
+jq \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg db "$DB" \
+  --arg policy_file "$POLICY_FILE" \
+  --arg mode "$MODE" \
+  --argjson apply "$APPLY" \
+  --slurpfile selected "$ARTIFACT_DIR/selected-sources.json" \
+  --slurpfile post "$ARTIFACT_DIR/post-source-health.json" \
+  '{
+    ok: true,
+    proof_root: $proof_root,
+    db: $db,
+    policy_file: $policy_file,
+    mode: $mode,
+    applied: ($apply == 1),
+    selected: $selected[0],
+    post_source_health: $post[0],
+    non_claims: [
+      "does not mark failures healthy without a run result",
+      "does not process X watch sources",
+      "does not replay unrelated dead-lettered jobs"
+    ]
+  }' \
+  /dev/null >"$ARTIFACT_DIR/proof-packet.json"
+
+echo "[source-health-stale-policy-retry] proof root: $PROOF_ROOT"
+jq '{total_matching_stale_policy_rows, eligible_without_active_job, selected_count}' "$ARTIFACT_DIR/selected-sources.json"
+if [ "$APPLY" -eq 0 ]; then
+  echo "[source-health-stale-policy-retry] dry run only; rerun with --apply to execute $MODE"
+else
+  echo "[source-health-stale-policy-retry] applied mode: $MODE"
+fi
+echo "[source-health-stale-policy-retry] proof packet: $ARTIFACT_DIR/proof-packet.json"

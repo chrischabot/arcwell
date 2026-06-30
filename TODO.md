@@ -1,6 +1,6 @@
 # Arcwell Remaining Work
 
-Last updated: 2026-06-26
+Last updated: 2026-06-29
 
 This file is intentionally only unfinished work. Completed historical checklist
 items were removed. Existing unchecked items from the prior `TODO.md` have been
@@ -53,6 +53,19 @@ where relevant, docs, `STATUS.md`, and this file agree.
       failed, blocked, partial, retrying, and unknown states are distinguishable.
 - [ ] Do not call a slash command/MCP feature complete unless CLI, MCP schema,
       slash prompt, skill docs, package README, and verifier coverage agree.
+- [ ] Complete the generic proof-ledger M0 hardening. Schema v22 now provides
+      `proof_packets`, `proof_claims`, `proof_artifacts`, and `proof_checks`;
+      `arcwell proof record/read/list/promote/latest/verify-packet` exists;
+      severe tests block passed/promoted packets without checks, unresolved
+      claims, duplicate claim keys, malformed artifact hashes, hostile claim
+      text promotion, missing/tampered artifacts, artifact path escapes,
+      token/email-like proof leakage, and broad operational/freshness/model
+      proof claims without required evidence markers. Latest local proof:
+      `.arcwell-dev/proofs/proof-ledger-hardening-20260629T130621Z-93998/artifacts/proof-packet.json`,
+      durable packet `proof-7064d398e84a37b3c6b3d40d`. Remaining M0 work:
+      baseline all-capability snapshot, MCP/slash/docs parity, ops UI access,
+      and future source-heavy proof bundle sanitization where clean
+      verification is required.
 
 ### Proof Packet Template
 
@@ -163,11 +176,15 @@ PR, implementation note, or final report:
 
 ## 5. Proactive Delivery: Email, Telegram, Librarian, And X
 
-- [ ] Implement the unified knowledge pipeline plan in
-      `docs/unified-knowledge-pipeline-implementation-plan.md`. This is the
-      source-agnostic architecture for watch sources -> source cards -> events
-      -> clusters -> editorial decisions -> research fanout -> rich wiki pages
-      -> digest/report delivery. Do not mark it operational until the proof
+- [ ] Implement the autonomous knowledge system completion plan in
+      `docs/autonomous-knowledge-system-completion-plan.md`. That document is
+      the current execution source of truth and includes the dependency graph,
+      source-family completion matrix, anti-mirage proof gates, severe tests,
+      adversarial reviews, and final promotion criteria. The older
+      `docs/unified-knowledge-pipeline-implementation-plan.md` remains useful
+      supporting architecture for watch sources -> source cards -> events ->
+      clusters -> editorial decisions -> research fanout -> rich wiki pages ->
+      digest/report delivery. Do not mark it operational until the proof
       packet shows scheduled real or copied-production source ingestion from at
       least three source families, durable events/clusters/decisions,
       source-backed wiki writing, digest routing, external delivery ledger,
@@ -738,7 +755,13 @@ PR, implementation note, or final report:
       metadata/link-dump shape in severe tests, reader-facing digest bodies omit
       source-card ids and review scores from the notification body, and email
       sends auto-render Markdown/plain report text into inert HTML when no
-      explicit HTML body is supplied. A corrected editorial AI briefing was
+      explicit HTML body is supplied. 2026-06-29 follow-up: daily briefing and
+      X digest reader rendering now strips internal ledger/provenance language
+      such as source-card, cluster, `Knowledge:`, candidate ids, and delivery
+      gate terms; story sections use `Further Reading` links instead of source
+      id dumps; severe tests fixture the bad briefing language that triggered
+      this repair. This is local rendering proof, not a new live-send proof.
+      A corrected editorial AI briefing was
       written to `docs/reports/2026-06-27-ai-briefing-editorial.md`, ingested as
       wiki page `ai-briefing-2026-06-27-editorial-0c43849e`, and delivered live
       through Cloudflare Email with provider status 200. The three source
@@ -1153,6 +1176,378 @@ PR, implementation note, or final report:
       because no real worker-drained commerce run has produced passed worker
       proof metadata.
 
+## 6B. Job-Hunting Intelligence
+
+- [x] Add a durable local job-hunting ledger for candidate profiles, evidence
+      cards/claims, privacy rules/checks, job sources/source health, role
+      cards/source links, fit scores, skeptic findings, application packets,
+      company cards, contacts, intro paths, search runs, role status events,
+      applications, weekly reports, and weekly-report delivery-preparation
+      rows. Schema v20 plus core APIs, CLI
+      `arcwell job ...`, MCP tools, and a v19-to-v20 migration fixture are
+      locally proven only.
+- [x] Add severe local tests for the most dangerous mirages: private terms in
+      packets, local proof links, private-blocked evidence, aggregator-only
+      role promotion, evidence-fit without evidence-card links, hard blockers,
+      public-only contacts mislabeled as warm intros, weekly report state loss,
+      and MCP job workflow round-trip.
+- [x] Add reviewed-packet batch import plus manual refresh reconciliation for
+      caller-supplied observed/stale/closed role ids. Severe tests prove the
+      import writes durable evidence/source/role/score rows without claiming
+      live discovery, repeated refresh does not reannounce unchanged roles as
+      new, and closed roles cannot remain effective Tier 1 from stale scores.
+- [x] Add local evidence-readiness review reports for job candidate profiles.
+      Severe tests prove a pass requires enough reviewed, claim-mapped,
+      privacy-safe public evidence, while public local-only proof, blocked terms
+      in safe application text, needs-review evidence, unmapped cards, and thin
+      evidence sets remain visible as warnings or blockers.
+- [x] Import the user's current resume, public GitHub, and public blog/projects
+      into at least 20 reviewed evidence cards. Controlled-home
+      production-data proof at
+      `.arcwell-dev/proofs/job-evidence-production-import-20260628T213435Z/artifacts/proof-packet.md`
+      imported 26 evidence cards and 26 claims from the current Markdown
+      resume, public GitHub metadata, and current public blog/project evidence;
+      the evidence-readiness report passed with 26 privacy passes, no blocked
+      cards, and no needs-review cards. This does not prove P1 role import,
+      real job-source refresh, ops-browser proof, or approved application
+      packets.
+- [x] Capture the existing P1 job-search shortlist as durable role cards with
+      source confidence, evidence-card mappings, fit scores, skeptic findings,
+      and application packet drafts. Controlled-home production-data proof at
+      `.arcwell-dev/proofs/job-hunting-p1-tier1-import-20260628T214548Z/artifacts/proof-packet.md`
+      replayed the bounded P1 report into 7 sources, 7 healthy source-health
+      rows, 7 role cards, 7 source-linked role-source links, 7 company cards, 7
+      fit scores, 7 skeptic findings, 7 status events, and a compiled
+      shortlist with 7 Tier 1 entries. This does not prove autonomous job
+      discovery or fresh source refresh.
+- [x] Run privacy checks over the seven P1 Tier 1 application-packet drafts.
+      The same controlled proof created 7 draft packets and recorded 7 passing
+      packet privacy checks. This does not mean the packets are user-approved,
+      exported, sent, or outcome-tracked.
+- [x] Add Local Proof packet approval before packet-backed applied records.
+      Proof at
+      `.arcwell-dev/proofs/job-packet-approval-local-proof-20260629T000346Z/artifacts/proof-packet.json`
+      proves draft packets cannot back an `applied` application record,
+      approval requires a reviewer note and passing packet privacy check, and
+      the MCP workflow moves draft -> approved before recording applied. This
+      proof itself does not prove anything was exported, sent, or approved in
+      the user's operational home.
+- [x] Add Local Proof packet export for approved privacy-passing packets.
+      Proof at
+      `.arcwell-dev/proofs/job-packet-export-local-proof-20260629T032842Z/artifacts/proof-packet.json`
+      proves export rejects draft packets, rechecks privacy over the exact
+      Markdown before writing, writes a local Markdown file only after
+      approval, and does not record an application or mark anything sent. This
+      does not prove Google Docs draft creation, provider delivery, submission,
+      or a user-operational-home exported packet set.
+- [x] Add controlled P1 packet-set export proof without claiming user sending.
+      Proof at
+      `.arcwell-dev/proofs/job-p1-packet-export-controlled-proof-20260629T085332Z-55708/artifacts/proof-packet.json`
+      copies the imported P1 proof home, approves the seven imported Tier 1
+      packets for local export review only, exports the set through
+      `packet-export-set`, writes seven Markdown files plus one JSON manifest,
+      records seven `packet_export` privacy checks, and keeps application rows
+      at zero before and after export. This does not prove user-approved
+      sending, Google Docs draft creation, ATS submission, provider delivery,
+      or export from the user's operational home.
+- [x] Add configured source refresh for company/ATS pages, VC boards, founder
+      posts, and London startup sources. The Local Proof slice accepts
+      caller-supplied page text/html or explicit policy-gated `fetch_live`,
+      writes source health, role/company rows, source links, and stale events
+      for missing previously linked roles. It does not prove exhaustive market
+      coverage.
+- [x] Add source-family boundary proof so board refreshes cannot quietly become
+      canonical apply-now evidence. Proof at
+      `.arcwell-dev/proofs/job-source-family-boundary-proof-20260629T055922Z-50842/artifacts/proof-packet.json`
+      creates a disposable proof home, refreshes VC-board, job-board, and
+      company-detail fixtures, then live-refreshes the YC London software
+      engineering board. It proves company/ATS pages create
+      canonical-confirmed roles, VC/startup boards create secondary-confirmed
+      leads, broad job boards create aggregator-only leads, and generic
+      `/jobs/role/...` category links are rejected from role cards. The live YC
+      slice wrote 26 secondary-confirmed roles, 33 company cards, and 0 generic
+      category role imports. This does not prove exhaustive market coverage,
+      current apply-now recommendations, one-day recurrence, or operational
+      radar.
+- [x] Run source refresh against real imported job-search sources and preserve
+      source-health/canonical URL evidence for the run before claiming current
+      live role coverage. Partial production-data proof at
+      `.arcwell-dev/proofs/job-source-refresh-live-policy-allow-linked-fixed-20260628T215717Z/artifacts/proof-packet.md`
+      ran 7 policy-allowed live refreshes with 0 command failures, 6 partial
+      source-health rows, 1 failed source-health row, 0 stale events, and all
+      7 imported P1 roles still live. This does not prove complete current live
+      coverage, because one source failed and the other six were partial.
+- [x] Add local ops visibility for job sources, stale/closed roles, score
+      distribution, privacy blocks, applications, follow-ups, and source-health
+      failures. Severe ops UI coverage proves the summary/tables render durable
+      fixture state and escape hostile source-health text.
+- [x] Add operational/browser/live ops proof for real imported job-search data,
+      including source-health refresh states, stale/closed roles from a second
+      refresh, privacy blocks, application follow-ups, and no horizontal UI
+      overflow. Browser-backed controlled production-data proof at
+      `.arcwell-dev/proofs/job-hunting-ops-browser-proof-20260628T221108Z-9768/artifacts/proof-packet.json`
+      copied the imported/live-refresh P1 home, rendered authenticated
+      `/ops/ui`, showed 132 job roles, 7 non-healthy source-health rows, one
+      controlled closed imported Tier 1 role, one blocked privacy check, one
+      planned application follow-up, readable desktop/mobile job tables, and no
+      body horizontal overflow. This does not prove the one-day wall-clock
+      refresh requirement, operational scheduled job radar, user-approved
+      applications, or sent applications.
+- [x] Produce a production-data proof packet for a London startup map: at least
+      30 company cards, 10 high-fit companies, current hiring status, and
+      explicit public-only versus warm-intro-ready contact paths. Controlled
+      proof at
+      `.arcwell-dev/proofs/job-hunting-london-startup-map-20260628T222016Z-20346/artifacts/proof-packet.md`
+      imported 30 company cards from YC London jobs, Wellfound London
+      developer-tools/cybersecurity lists, Index London startup-job listings,
+      and existing P1 company sources. The summary records 20 high-fit
+      companies, 30 active-or-recently-listed hiring signals, 3 public
+      founder/team targets, 30 public-only contact paths, and 0
+      warm-intro-ready paths. This does not prove exhaustive market coverage,
+      official current hiring on every company page, user-network warm intros,
+      role-level scoring from the company map by itself, or scheduled refresh.
+- [x] Add Local Proof company-target scouting over durable company cards
+      without treating companies as current openings. Proof at
+      `.arcwell-dev/proofs/job-company-targets-local-proof-20260628T235317Z/artifacts/proof-packet.json`
+      proves deterministic London company-target ranking from company-card
+      fields and public evidence tags, exposes not-current-role warnings, and
+      writes no role cards. This does not prove live/current openings,
+      application-ready role evidence, warm intros, or role-level scoring.
+- [x] Add bounded production-data role confirmation for selected London
+      company targets before treating them as role-level opportunities. Proof
+      at
+      `.arcwell-dev/proofs/job-company-target-role-proof-20260629T042335Z-31884/artifacts/proof-packet.json`
+      copies the London company-map proof home, live-refreshes five selected
+      company/ATS pages, writes ten same-day canonical-confirmed live roles,
+      rejects parser-noise role cards, and scores seven confirmed roles against
+      reviewed evidence. This does not prove exhaustive London startup
+      coverage, future freshness, scheduled monitoring, application-packet
+      creation, user approval, sending, warm intros, or outcomes.
+- [x] Add bounded production-data direct-role expansion for selected global and
+      European AI/devtools/platform targets. Proof at
+      `.arcwell-dev/proofs/job-company-target-expanded-role-proof-20260629T050451Z-33630/artifacts/proof-packet.json`
+      copies the job-hunting proof home, live-refreshes four selected direct
+      company/ATS role pages, writes four same-day canonical-confirmed live
+      roles with zero live parser-noise role titles, and scores all four as
+      Tier 1 against reviewed evidence: Anthropic, Sierra, Tailscale, and
+      Langfuse. This does not prove exhaustive market coverage, future
+      freshness, scheduled monitoring, application-packet creation, user
+      approval, sending, warm intros, or outcomes.
+- [x] Add controlled draft-packet proof for the expanded direct-role Tier 1
+      matches without claiming approval/export/sending. Proof at
+      `.arcwell-dev/proofs/job-company-target-expanded-packet-proof-20260629T052029Z-33758/artifacts/proof-packet.json`
+      copies the expanded direct-role proof home, creates four new draft
+      packets for the confirmed Anthropic, Sierra, Tailscale, and Langfuse
+      Tier 1 roles, records four passing packet privacy checks, leaves the new
+      packets in `draft`, and writes no new application rows. This does not
+      prove current refresh beyond the source role proof, user review,
+      approval, Markdown/Google Docs export, delivery, submission, warm intros,
+      or outcomes.
+- [x] Add controlled local export proof for the expanded direct-role Tier 1
+      packets without claiming real user approval or delivery. Proof at
+      `.arcwell-dev/proofs/job-company-target-expanded-packet-export-proof-20260629T052450Z-51935/artifacts/proof-packet.json`
+      copies the expanded direct-role packet proof home, approves the four
+      packets for local export review only, exports four Markdown files,
+      records four `packet_export` privacy checks, and writes no new
+      application rows. This does not prove current refresh beyond the source
+      proofs, user-approved sending, Google Docs draft creation, ATS/browser
+      submission, provider delivery, operational-home export, warm intros, or
+      outcomes.
+- [x] Add controlled draft-packet proof for the confirmed Tier 1 company-target
+      roles without claiming approval/export/sending. Proof at
+      `.arcwell-dev/proofs/job-company-target-packet-proof-20260629T043746Z-98813/artifacts/proof-packet.json`
+      copies the bounded company-target role proof home, creates five new
+      draft packets for the confirmed Ably/Northflank Tier 1 roles, records
+      five passing packet privacy checks, leaves the new packets in `draft`,
+      and keeps application rows at zero before and after. This does not prove
+      current refresh beyond the source role proof, user review, approval,
+      Markdown/Google Docs export, delivery, submission, warm intros, or
+      outcomes.
+- [x] Add controlled local export proof for the confirmed Tier 1 company-target
+      packets without claiming real user approval or delivery. Proof at
+      `.arcwell-dev/proofs/job-company-target-packet-export-proof-20260629T044317Z-35795/artifacts/proof-packet.json`
+      copies the company-target packet proof home, approves the five packets
+      for local export review only, exports five Markdown files, records five
+      `packet_export` privacy checks, and keeps application rows at zero before
+      and after export. This does not prove current refresh beyond the source
+      proofs, user-approved sending, Google Docs draft creation, ATS/browser
+      submission, provider delivery, operational-home export, warm intros, or
+      outcomes.
+- [x] Produce a public-only Tier 1 intro/contact-path map without claiming warm
+      intros. Controlled proof at
+      `.arcwell-dev/proofs/job-hunting-tier1-intro-map-20260628T231128Z-33821/artifacts/proof-packet.md`
+      imported 7 contacts and 7 intro paths for the seven imported Tier 1
+      roles, with all paths public-only or weak public routes and 0
+      warm-intro-ready paths. This does not prove user-network relationships,
+      mutual introductions, or outreach readiness.
+- [x] Add contact-relevance validation so strategic labels do not become
+      guessed outreach routes. Severe test
+      `severe_job_contact_relevance_requires_source_evidence_or_user_confirmation`
+      rejects hiring-manager relevance inferred from title alone and accepts
+      public-only contacts only when the note names source evidence or user
+      confirmation. This does not prove a real hiring-manager route, user
+      network path, warm intro, or outreach readiness.
+- [x] Add scheduled worker job radar as Local Proof only after manual refresh,
+      source-health, and ops proof existed. Local proof at
+      `.arcwell-dev/proofs/job-radar-scheduled-local-proof-20260629T121212Z-42806/artifacts/proof-packet.json`
+      proves a `job_radar` watch source can enqueue and execute
+      `job_radar_refresh`, refresh replay snapshots, write role/source-health,
+      search-run, weekly-report, and generic watch-source health state, and
+      records failed health for missing snapshots. This is replay proof, not
+      live recurring market monitoring. Rerunnable proof script:
+      `scripts/job-radar-scheduled-local-proof`.
+- [x] Add bounded scheduled live-fetch proof for selected direct-role sources
+      without promoting job radar to operational. Proof at
+      `.arcwell-dev/proofs/job-radar-live-fetch-proof-20260629T053332Z-16818/artifacts/proof-packet.json`
+      copies the expanded direct-role proof home, schedules and immediately
+      enqueues `job_radar_refresh` with `fetch_live=true`, drains one worker
+      job, live-refreshes the four selected Anthropic/Langfuse/Sierra/Tailscale
+      sources with four healthy source-health rows, writes one
+      production-data-proof search run, and writes one local weekly report.
+      The proof's refresh audit still blocks because there is only one run and
+      no stale/closed transitions, so this is not wall-clock recurrence,
+      one-day refresh proof, exhaustive market coverage, or operational radar.
+- [x] Complete a preserved controlled live-radar recurrence proof without
+      promoting job radar to operational. Proof at
+      `.arcwell-dev/proofs/job-radar-live-recurrence-controlled-proof/artifacts/proof-packet.json`
+      copied the expanded direct-role proof home, scheduled a `job_radar` watch
+      source, let `worker run-once` enqueue and complete the first
+      `fetch_live=true` `job_radar_refresh` from `watch_poll`, refreshed the
+      four selected direct role sources, waited for the real hot-cadence due
+      time, then completed a second `watch_poll`-enqueued `fetch_live=true`
+      refresh over the same four selected direct role sources. The packet
+      records `status=passed`, `gate_state=passed`,
+      `second_worker_job_id=97407161-652f-4fdb-83bd-ecf4d1c583b3`, and
+      `hours_between_runs=1.004091`. This is bounded recurrence proof over one
+      selected hot-cadence interval in a copied proof home, not one-day refresh
+      proof, broad market coverage, operational-home monitoring, live external
+      delivery, application sending, warm intros, or outcomes.
+- [x] Add local failure-health proof for queued live job radar blocked before
+      source work. Proof at
+      `.arcwell-dev/proofs/job-radar-failure-health-proof-20260629T121156Z-40419/artifacts/proof-packet.json`
+      shows provider-network policy denial fails the `job_radar_refresh` wiki
+      job, writes no role or job-source-health rows, and records failed generic
+      source health at `job:radar:<profile_id>`. This proof by itself did not
+      prove retry recovery or live recurrence after policy is changed.
+      Rerunnable proof script: `scripts/job-radar-failure-health-proof`.
+- [x] Add local retry/recovery/dead-letter proof for queued job radar policy
+      failures. Proof at
+      `.arcwell-dev/proofs/job-radar-retry-recovery-local-proof-20260629T121206Z-41836/artifacts/proof-packet.json`
+      shows a provider-policy-blocked `job_radar_refresh` retries the same
+      queued wiki job, recovers after policy is allowed when replay snapshots
+      cover all configured sources, and dead-letters after max-attempts policy
+      denial without writing role or job-source-health rows. This is Local
+      Proof only; it does not prove live scheduled recurrence, real provider
+      recovery, or the one-day wall-clock refresh loop. Rerunnable proof
+      script: `scripts/job-radar-retry-recovery-local-proof`.
+- [x] Add local outcome-history notes without pretending to predict conversion.
+      Proof at
+      `.arcwell-dev/proofs/job-outcome-history-local-proof-20260629T031421Z/artifacts/proof-packet.json`
+      shows a prior application outcome at the same company appears as an
+      explicit shortlist and weekly-report note for a new role, while the new
+      role's weighted score and tier remain evidence/source-based. This does
+      not prove statistical outcome learning, company-level conversion odds, or
+      enough real application history to tune scoring.
+- [x] Add controlled application-pipeline proof without claiming sent
+      applications. Proof at
+      `.arcwell-dev/proofs/job-application-pipeline-proof-20260629T064631Z-15803/artifacts/proof-packet.json`
+      copies the expanded direct-role packet-export proof home, proves a draft
+      packet cannot back `applied`, records six controlled application rows
+      across `planned`, `applied`, `intro_requested`, `interview`, `rejected`,
+      and `withdrawn`, records one source-evidence-noted public-only contact
+      plus intro path, and shows application status, intro status, and next
+      actions plus a controlled role-status change in weekly-report output for
+      scored roles in the requested profile. The weekly report now renders
+      `warm_intro_ready: 0`, `identify: 1`, and role-change counts, and excludes
+      unscored role noise from the reader-facing shortlist while keeping
+      unscored rows visible in tier counts. This does not prove real user
+      approval, operational-home tracking, Google Docs draft creation,
+      sent/submitted applications, warm intros, live freshness, recurrence, or
+      predictive outcome learning.
+- [x] Add controlled outreach-readiness proof without claiming outreach was
+      sent or that a real introduction exists. Proof at
+      `.arcwell-dev/proofs/job-outreach-readiness-proof-20260629T074806Z-87604/artifacts/proof-packet.json`
+      walks one scored role through no packet, draft packet plus public-only
+      contact path, approved packet plus public-only path, approved packet plus
+      known warm route, a newer draft that blocks stale approval, approval of
+      that revision, and a later privacy-rule regression. The report blocks
+      unsafe or route-thin states, passes only approved/privacy-passing
+      known-route states, writes four outreach-readiness privacy checks, and
+      writes zero channel messages or provider delivery attempts. This does not
+      prove real outreach sending, Google Docs draft creation, user-network
+      agreement, application submission, operational-home tracking, live
+      freshness, or recurrence.
+- [x] Add controlled weekly-report delivery provider-path proof without
+      claiming live external send. Proof at
+      `.arcwell-dev/proofs/job-weekly-report-delivery-proof-20260629T093944Z-4028/artifacts/proof-packet.json`
+      seeds a disposable job report, proves unauthorized channel subjects and
+      privacy-blocked report text write blocked rows without provider attempts,
+      proves an authorized privacy-passing report writes one prepared channel
+      message, sends that prepared email through a loopback Cloudflare
+      Email-compatible provider, records exactly one successful
+      `channel_delivery_attempt`, and proves provider-send replay does not call
+      the provider again. Severe tests also prove a Cloudflare Email provider
+      cost kill switch blocks before any provider attempt and records a denied
+      cost decision. This does not prove live external email/Telegram
+      delivery, Google Docs draft creation, application submission,
+      operational-home tracking, live freshness, or recurrence.
+- [x] Add a controlled operational-audit blocker report without claiming job
+      hunting is operational. Proof at
+      `.arcwell-dev/proofs/job-operational-audit-proof-20260629T095526Z-2463/artifacts/proof-packet.json`
+      satisfies local evidence/source/scoring/approved-packet/warm-route/
+      application-history/weekly-report/delivery-preparation slices, proves
+      provider-delivery blocks before a successful attempt, sends the prepared
+      weekly report through a loopback Cloudflare Email-compatible provider,
+      enqueues and drains two replay-backed `job_radar_refresh` worker jobs,
+      then proves `job_operational_audit` recognizes both the provider-delivery
+      and scheduled-radar gates as passing while still blocking promotion on
+      the real one-day refresh gate. This does not prove live fetch, live
+      external provider send, application submission,
+      wall-clock recurrence, or operational status.
+- [x] Add an aggregate implementation-plan audit so the proof set cannot drift
+      silently. `scripts/job-implementation-plan-audit-proof` checks the
+      implementation plan's referenced proof packets, verifies JSON packets and
+      referenced proof scripts, validates the controlled operational-audit
+      shape, includes the preserved live-radar recurrence packet, and confirms
+      the skill/plan wording still blocks operational promotion. Latest proof:
+      `.arcwell-dev/proofs/job-implementation-plan-audit-proof-20260629T1257-one-day-packet-hygiene/artifacts/proof-packet.json`
+      records `status=hold_wall_clock`, 29 required proof packets, 0 missing
+      proof packets, 0 invalid JSON packets, 8 executable referenced scripts,
+      the controlled live-radar recurrence gate as passed, and one remaining
+      real-time blocker: the one-day refresh gate. The audit now re-evaluates
+      `ready_at_utc` instead of preserving stale `waiting_wall_clock`
+      indefinitely, so due gates become `ready_for_rerun` until their
+      preserved proof root is rerun.
+- [x] Add a local refresh-history audit gate for the two-refresh/one-day proof.
+      Proof at
+      `.arcwell-dev/proofs/job-refresh-audit-local-proof-20260629T034434Z/artifacts/proof-packet.json`
+      shows the audit blocks immediate repeat refreshes under the default
+      24-hour gate, reports the missing elapsed-time requirement, and can
+      separately verify new/unchanged/stale/closed transition evidence when the
+      elapsed threshold is deliberately lowered for local audit-logic proof.
+      This does not prove that the real one-day controlled refresh has
+      happened.
+- [ ] Run two refreshes at least one day apart in a controlled home and prove
+      new/unchanged/stale/closed role transitions from durable prior state.
+      Preserved harness `scripts/job-refresh-one-day-proof` has started the
+      controlled proof root at
+      `.arcwell-dev/proofs/job-refresh-one-day-controlled-proof/artifacts/proof-packet.json`.
+      The first checkpoint records one completed refresh run with seven
+      source-health rows plus `new`, `unchanged`, `stale`, and `closed`
+      transitions. The packet remains `incomplete` because it still needs a
+      second completed run after the real 24-hour elapsed-time gate. The packet
+      now records `gate_state=waiting_wall_clock`,
+      `ready_at_utc=2026-06-30T04:06:11.893Z`, `hours_remaining`,
+      `second_started_at=null`, `hours_between_runs=null`, and the exact
+      `next_action` rerun command.
+- [ ] Promote scheduled job radar beyond bounded proof only after broader
+      recurrence, real provider policy/cost recovery, privacy, ops, and
+      one-day wall-clock proof exists. The bounded live `fetch_live` worker
+      slice exists, and the preserved live-radar recurrence proof has passed
+      one selected hot-cadence interval over four direct role sources. Do not
+      call job hunting operational before the one-day proof packet passes and a
+      fresh operational audit confirms the remaining promotion gates.
+
 ## 7. Memory, Work Graph, And Procedural Retrieval Loop
 
 - [ ] Add consolidation job that can surface unresolved risks, recurring
@@ -1262,6 +1657,66 @@ PR, implementation note, or final report:
       visibly `rate_limited`. Remaining work: provider-plan capacity estimates,
       adaptive per-window fanout, and successful durable provider reads for the
       deferred rows.
+- [ ] Complete X watch-source curation beyond the first dry-run/local-restore
+      slice. Schema v21 now records durable curation runs, decisions, evidence,
+      manual rules, and restore snapshots. `arcwell x curate-watch-sources
+      --dry-run`, `--apply --mode pause-only`, `restore-watch-curation`, and
+      `watch-curation-report` exist, and proof packet
+      `.arcwell-dev/proofs/x-watch-curation-local-proof-20260629T122803Z-31456/artifacts/proof-packet.json`
+      plus durable proof ledger record
+      `.arcwell-dev/proofs/x-watch-curation-local-proof-20260629T122803Z-31456/artifacts/proof-ledger-record.json`
+      shows a real-home dry run over 1,553 active X handles with zero status
+      mutation plus severe tests for sparse-profile enrichment, prompt
+      injection as evidence, manual pause snapshotting, exact restore, and
+      proof-ledger promotion/input hardening. The recorded proof packet id is
+      `proof-4ac3b3e8c1238097fac26b43`. `arcwell x enrich-watch-profiles`
+      now fetches live X profile records for enrichment-needed handles and
+      writes canonical profiles, source-health, and sync-run rows. Live proof
+      `.arcwell-dev/proofs/x-profile-enrichment-live-20260629T124242Z-59670/artifacts/proof-ledger-record.json`
+      recorded packet `proof-057404a6477a36fa436c60d4`: 44 requested,
+      44 fetched/updated, 0 not-found, 0 failed batches; the follow-up
+      curation dry-run had 0 `needs_profile_enrichment` decisions.
+      `arcwell x import-watch-manual-rules` now supports reviewed JSON
+      keep/exclude rules, dry-runs by default, matches existing watch-source
+      handles case-insensitively, requires reviewed reasons, blocks all writes
+      if any row is rejected, and is covered by severe reversible
+      pause/restore plus mixed-case handle regression tests. The classifier now
+      handles broader engineering/platform/devtools vocabulary, CamelCase
+      handle terms, and seed-allowlisted sparse tech accounts; tests prove
+      platform/tooling profiles and seed accounts are kept. A live real-home
+      enrichment pass fetched/updated 500 additional X profiles with zero
+      failed batches. `scripts/x-watch-curation-generate-reviewed-candidates`
+      generated a conservative candidate ruleset from curation/profile evidence:
+      289 rules total, 244 manual keeps, 45 manual excludes, and zero protected
+      seed excludes after adversarial review. Copied-home pause/restore proof
+      `.arcwell-dev/proofs/x-watch-curation-copied-home-pause-proof-20260629T165839Z-98279/artifacts/proof-packet.json`
+      recorded packet `proof-f4defe8f09b3e92fb69183a1`: all 289 reviewed
+      candidate rules were imported into a copied real home, pause-only applied
+      exactly 45 manual excludes, 244 manual keeps remained active, restore
+      returned the copied DB to its original status/checksum, the proof packet
+      verified cleanly, and the real home remained unchanged. After explicit
+      user approval, real-home proof
+      `.arcwell-dev/proofs/x-watch-curation-real-home-pause-proof-20260629T172628Z-3381/artifacts/proof-packet.json`
+      recorded packet `proof-7af2b88bfb178b1fd747b4fe`: a private SQLite
+      backup was created, all 289 rules were imported into the real home,
+      pause-only applied exactly the 45 reviewed excludes, 244 manual keeps
+      remained active, total `x_handle` watch sources stayed at 1,553, status
+      counts changed from 1,553 active to 1,508 active / 45 paused, and the
+      clean proof packet verified with zero redaction findings. Post-apply
+      live monitor initially exposed the real blocker as missing/expired
+      `source.write` policy for X `source_card_add`; import reports now carry
+      redacted rejection reasons, a regression test proves that failure is
+      visible and cursor-safe, and real-home policy override
+      `override-e02dbb28-381b-4089-ae3f-214dc313a29e` repaired X source-card
+      writes through 2026-07-29. Bounded real-home monitor proof
+      `.arcwell-dev/reviewed-inputs/x-watch-curation-post-apply-monitor-5-after-source-write-fix.json`
+      polled 5/5 sources with 0 failures, 0 rejects, 10 imports, 10 duplicate
+      skips, and 1 digest candidate; `0xbeepit` and `0xblacklight` are healthy
+      with advanced cursors. Spot-checked protected seed accounts
+      `AsahiLinux`, `Dialogflow`, and `benedictevans` remain active. Remaining
+      work before this can close: scheduled enrichment queue, optional CSV
+      converter, ops UI controls, MCP/slash/docs parity, expanded seed/gold-set
+      quality measurement, and worker/source-health pressure reduction proof.
 - [x] Add scheduled credential rotation reminders and stale-scope warnings.
       `secret_health`, `health`, `doctor`, and `ops_snapshot` warn when
       local/ref credentials expire within 72 hours, and active scheduled X

@@ -1,0 +1,332 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in jq sqlite3 shasum; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the live job-radar proof." >&2
+    exit 2
+  fi
+done
+
+DEFAULT_SOURCE_PROOF="$REPO_ROOT/.arcwell-dev/proofs/job-company-target-expanded-role-proof-20260629T050451Z-33630"
+SOURCE_PROOF="${ARCWELL_JOB_RADAR_LIVE_FETCH_SOURCE_PROOF:-$DEFAULT_SOURCE_PROOF}"
+SOURCE_HOME="$SOURCE_PROOF/home"
+
+if [ ! -f "$SOURCE_HOME/arcwell.sqlite3" ]; then
+  cat >&2 <<EOF
+BLOCKED: source proof home not found: $SOURCE_HOME
+Set ARCWELL_JOB_RADAR_LIVE_FETCH_SOURCE_PROOF to a proof home with direct role sources.
+EOF
+  exit 2
+fi
+
+RUN_STAMP="${ARCWELL_JOB_RADAR_LIVE_FETCH_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_RADAR_LIVE_FETCH_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-radar-live-fetch-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_JOB_RADAR_LIVE_FETCH_HOME:-$PROOF_ROOT/home}"
+DB="$ARCWELL_HOME/arcwell.sqlite3"
+SCOPE="Controlled live job radar proof"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[job-radar-live-fetch-proof] %s\n' "$*"
+}
+
+sql_json() {
+  sqlite3 -json "$DB" "$1"
+}
+
+log "proof root: $PROOF_ROOT"
+log "source proof: $SOURCE_PROOF"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+
+cp -R "$SOURCE_HOME/." "$ARCWELL_HOME/"
+cat >"$ARCWELL_HOME/arcwell-policy.toml" <<'POLICY'
+[[rules]]
+id = "allow-job-radar-live-fetch-enqueue-proof"
+effect = "allow"
+action = "worker.enqueue"
+package = "arcwell-job-hunting"
+provider = "web"
+source = "job_radar_refresh"
+reason = "controlled proof of live job radar enqueue over selected direct role sources"
+priority = 30
+
+[[rules]]
+id = "allow-job-radar-live-fetch-provider-proof"
+effect = "allow"
+action = "provider.network"
+package = "arcwell-job-hunting"
+provider = "web"
+source = "job_source_refresh"
+reason = "controlled proof of live job radar refresh over selected direct role sources"
+priority = 30
+POLICY
+
+printf '%s\n' "$SOURCE_PROOF" >"$ARTIFACT_DIR/source-proof.txt"
+printf '%s\n' "$SOURCE_HOME" >"$ARTIFACT_DIR/source-home.txt"
+
+"$ARCWELL_BIN" job profiles >"$ARTIFACT_DIR/profiles.json"
+PROFILE_ID="$(jq -r '.[0].id // empty' "$ARTIFACT_DIR/profiles.json")"
+if [ -z "$PROFILE_ID" ]; then
+  echo "BLOCKED: source proof home has no job candidate profile" >&2
+  exit 2
+fi
+
+sql_json "
+  SELECT id, name, url
+  FROM job_sources
+  WHERE name IN ('Anthropic Greenhouse','Sierra Ashby','Tailscale Greenhouse','Langfuse Ashby')
+  ORDER BY name;
+" >"$ARTIFACT_DIR/sources.json"
+
+SOURCE_COUNT="$(jq 'length' "$ARTIFACT_DIR/sources.json")"
+if [ "$SOURCE_COUNT" != "4" ]; then
+  echo "BLOCKED: expected four selected direct role sources, found $SOURCE_COUNT" >&2
+  exit 2
+fi
+
+SOURCE_ARGS=()
+while IFS= read -r source_id; do
+  [ -n "$source_id" ] || continue
+  SOURCE_ARGS+=(--source-id "$source_id")
+done < <(jq -r '.[].id' "$ARTIFACT_DIR/sources.json")
+
+log "scheduling live job radar watch source"
+"$ARCWELL_BIN" job radar-schedule "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --fetch-live \
+  "${SOURCE_ARGS[@]}" \
+  >"$ARTIFACT_DIR/schedule.json"
+
+log "enqueueing immediate live job radar refresh"
+"$ARCWELL_BIN" job radar-enqueue "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --fetch-live \
+  "${SOURCE_ARGS[@]}" \
+  >"$ARTIFACT_DIR/enqueue.json"
+
+log "draining worker once"
+"$ARCWELL_BIN" worker run-once --max-jobs 10 >"$ARTIFACT_DIR/worker-run-once.json"
+
+if ! jq -e --arg scope "$SCOPE" '
+  .processed == 1
+  and .completed == 1
+  and .failed == 0
+  and .deferred == 0
+  and .dead_lettered == 0
+  and (.jobs | length) == 1
+  and .jobs[0].kind == "job_radar_refresh"
+  and .jobs[0].status == "completed"
+  and .jobs[0].input_json.fetch_live == true
+  and .jobs[0].input_json.proof_level == "production_data_proof"
+  and .jobs[0].input_json.scope == $scope
+  and (.jobs[0].input_json.source_ids | length) == 4
+  and .jobs[0].result_json.fetch_live == true
+  and .jobs[0].result_json.proof_level == "production_data_proof"
+  and .jobs[0].result_json.scope == $scope
+  and .jobs[0].result_json.source_count == 4
+  and .jobs[0].result_json.observed_role_count == 4
+  and .jobs[0].result_json.error_count == 0
+  and (.jobs[0].result_json.errors | length) == 0
+  and (.jobs[0].result_json.refreshes | length) == 4
+  and all(.jobs[0].result_json.refreshes[]; .status == "healthy" and .role_count == 1 and .accepted_count >= 2)
+' "$ARTIFACT_DIR/worker-run-once.json" >/dev/null; then
+  echo "BLOCKED: worker result did not prove one completed live job_radar_refresh over four healthy sources" >&2
+  exit 2
+fi
+
+SEARCH_RUN_ID="$(jq -r '.jobs[0].result_json.search_run_id // empty' "$ARTIFACT_DIR/worker-run-once.json")"
+WEEKLY_REPORT_ID="$(jq -r '.jobs[0].result_json.weekly_report_id // empty' "$ARTIFACT_DIR/worker-run-once.json")"
+if [ -z "$SEARCH_RUN_ID" ] || [ -z "$WEEKLY_REPORT_ID" ]; then
+  echo "BLOCKED: worker result missing search_run_id or weekly_report_id" >&2
+  exit 2
+fi
+
+SOURCE_HEALTH_IDS_JSON="$(jq -c '.jobs[0].result_json.source_health_ids' "$ARTIFACT_DIR/worker-run-once.json")"
+printf '%s\n' "$SOURCE_HEALTH_IDS_JSON" >"$ARTIFACT_DIR/source-health-ids.json"
+
+SQL_ID_LIST="$(jq -r 'map("'"'"'" + . + "'"'"'") | join(",")' "$ARTIFACT_DIR/source-health-ids.json")"
+sql_json "
+  SELECT sh.id, sh.status, sh.fetched_count, sh.accepted_count, sh.rejected_count, sh.note, src.name, src.url
+  FROM job_source_health sh
+  JOIN job_sources src ON src.id = sh.source_id
+  WHERE sh.id IN ($SQL_ID_LIST)
+  ORDER BY src.name;
+" >"$ARTIFACT_DIR/live-source-health.json"
+
+if ! jq -e 'length == 4 and all(.[]; .status == "healthy" and .accepted_count >= 2 and (.note | contains("live_fetch")))' "$ARTIFACT_DIR/live-source-health.json" >/dev/null; then
+  echo "BLOCKED: created source-health rows are not four healthy live_fetch rows" >&2
+  exit 2
+fi
+
+sql_json "
+  SELECT id, scope, proof_level, source_count, role_count, new_role_count, stale_role_count, error_count, report_artifact_id, started_at, completed_at
+  FROM job_search_runs
+  WHERE id = '$SEARCH_RUN_ID';
+" >"$ARTIFACT_DIR/search-run.json"
+
+if ! jq -e --arg scope "$SCOPE" '
+  length == 1
+  and .[0].scope == $scope
+  and .[0].proof_level == "production_data_proof"
+  and .[0].source_count == 4
+  and .[0].role_count == 4
+  and .[0].error_count == 0
+' "$ARTIFACT_DIR/search-run.json" >/dev/null; then
+  echo "BLOCKED: search run row does not match the live radar proof claim" >&2
+  exit 2
+fi
+
+sql_json "
+  SELECT id, profile_id, scope, generated_at, proof_level, metadata_json
+  FROM job_weekly_reports
+  WHERE id = '$WEEKLY_REPORT_ID';
+" >"$ARTIFACT_DIR/weekly-report-row.json"
+
+if ! jq -e --arg scope "$SCOPE" '
+  length == 1
+  and .[0].scope == $scope
+  and .[0].proof_level == "local_proof"
+' "$ARTIFACT_DIR/weekly-report-row.json" >/dev/null; then
+  echo "BLOCKED: weekly report row does not match the live radar proof claim" >&2
+  exit 2
+fi
+
+"$ARCWELL_BIN" job refresh-audit "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --min-elapsed-hours 0 \
+  >"$ARTIFACT_DIR/refresh-audit-zero.json" 2>"$ARTIFACT_DIR/refresh-audit-zero.err" || true
+"$ARCWELL_BIN" ops >"$ARTIFACT_DIR/ops.json" || true
+
+sql_json "
+  SELECT id, kind, status, input_json, result_json, error, attempts, max_attempts, created_at, updated_at
+  FROM wiki_jobs
+  WHERE kind = 'job_radar_refresh'
+  ORDER BY created_at DESC
+  LIMIT 3;
+" >"$ARTIFACT_DIR/wiki-jobs.json"
+
+sql_json "
+  SELECT action, package, provider, source, allowed, reason
+  FROM policy_decisions
+  WHERE reason IN (
+    'controlled proof of live job radar enqueue over selected direct role sources',
+    'controlled proof of live job radar refresh over selected direct role sources'
+  )
+  ORDER BY created_at;
+" >"$ARTIFACT_DIR/policy-decisions.json"
+
+if ! jq -e '
+  any(.[]; .action == "worker.enqueue" and .package == "arcwell-job-hunting" and .provider == "web" and .source == "job_radar_refresh" and .allowed == 1)
+  and ([.[] | select(.action == "provider.network" and .package == "arcwell-job-hunting" and .provider == "web" and .source == "job_source_refresh" and .allowed == 1)] | length >= 4)
+' "$ARTIFACT_DIR/policy-decisions.json" >/dev/null; then
+  echo "BLOCKED: expected allowed worker.enqueue and provider.network policy decisions were not recorded" >&2
+  exit 2
+fi
+
+jq -n \
+  --arg feature "live job-radar fetch over selected direct role sources" \
+  --arg status "Production Data Proof (bounded scheduled live fetch slice)" \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg source_proof "$SOURCE_PROOF" \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg copied_home "$ARCWELL_HOME" \
+  --arg scope "$SCOPE" \
+  --arg profile_id "$PROFILE_ID" \
+  --arg search_run_id "$SEARCH_RUN_ID" \
+  --arg weekly_report_id "$WEEKLY_REPORT_ID" \
+  --arg worker_sha256 "$(shasum -a 256 "$ARTIFACT_DIR/worker-run-once.json" | awk '{print $1}')" \
+  --arg source_health_sha256 "$(shasum -a 256 "$ARTIFACT_DIR/live-source-health.json" | awk '{print $1}')" \
+  --slurpfile sources "$ARTIFACT_DIR/sources.json" \
+  --slurpfile schedule "$ARTIFACT_DIR/schedule.json" \
+  --slurpfile enqueue "$ARTIFACT_DIR/enqueue.json" \
+  --slurpfile worker "$ARTIFACT_DIR/worker-run-once.json" \
+  --slurpfile source_health "$ARTIFACT_DIR/live-source-health.json" \
+  --slurpfile search_run "$ARTIFACT_DIR/search-run.json" \
+  --slurpfile weekly_report "$ARTIFACT_DIR/weekly-report-row.json" \
+  --slurpfile refresh_audit "$ARTIFACT_DIR/refresh-audit-zero.json" \
+  --slurpfile policy_decisions "$ARTIFACT_DIR/policy-decisions.json" \
+  '{
+    feature: $feature,
+    status: $status,
+    created_at: $created_at,
+    skill_gates: ["arc:anti-mirage", "arc:job-hunting"],
+    user_visible_claim: "Starting from the expanded direct-role proof home, Arcwell can schedule and immediately enqueue a job_radar_refresh with fetch_live=true, drain it through the resident worker, live-refresh the four selected direct role sources, record healthy source-health rows, and write a production-data-proof search run plus a local weekly report in a copied proof home.",
+    non_claims: [
+      "This is one immediate scheduled-worker drain, not wall-clock recurrence.",
+      "This does not satisfy the one-day two-refresh audit gate.",
+      "This is not exhaustive market coverage.",
+      "This is not a user operational-home proof.",
+      "This is not application approval, delivery, sending, or submission.",
+      "This does not prove warm-intro paths or hiring outcomes."
+    ],
+    inputs: {
+      source_proof: $source_proof,
+      copied_home: $copied_home,
+      profile_id: $profile_id,
+      scope: $scope,
+      sources: $sources[0]
+    },
+    outputs: {
+      proof_root: $proof_root,
+      search_run_id: $search_run_id,
+      weekly_report_id: $weekly_report_id,
+      worker_run_once_sha256: $worker_sha256,
+      live_source_health_sha256: $source_health_sha256,
+      schedule: $schedule[0],
+      enqueue: $enqueue[0],
+      worker_result: $worker[0],
+      source_health: $source_health[0],
+      search_run: $search_run[0],
+      weekly_report: $weekly_report[0],
+      refresh_audit_zero_threshold: $refresh_audit[0],
+      policy_decisions: $policy_decisions[0]
+    },
+    durable_state_written: [
+      "one copied-home active job_radar watch source",
+      "one copied-home completed job_radar_refresh wiki job",
+      "four copied-home healthy live_fetch job_source_health rows for selected direct role sources",
+      "one copied-home production_data_proof job_search_run",
+      "one copied-home local_proof job_weekly_report"
+    ],
+    durable_state_not_written: [
+      "no writes to the source proof home",
+      "no writes to the user operational home",
+      "no application packet approval or export",
+      "no sent/delivered/submitted provider rows"
+    ],
+    commands_run: [
+      "scripts/job-radar-live-fetch-proof"
+    ],
+    adversarial_review_judgment: "Promote only as bounded Production Data Proof for one scheduled-worker live-fetch slice over four selected direct role sources. Hold operational job radar, one-day refresh, broad market coverage, sending, warm-intro, and outcome claims.",
+    remaining_risks: [
+      {
+        risk: "Only one immediate scheduled worker drain was proven.",
+        next_action: "Run recurring wall-clock scheduled proof after the one-day refresh proof passes."
+      },
+      {
+        risk: "The proof uses four selected direct role sources from the expanded role proof.",
+        next_action: "Broaden source families and company targets before claiming wider market coverage."
+      },
+      {
+        risk: "The zero-threshold refresh audit remains blocked because the proof has only one run and no stale/closed transitions.",
+        next_action: "Keep the preserved one-day proof as the audit gate for operational promotion."
+      }
+    ]
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"
+log "live job-radar fetch proof passed"

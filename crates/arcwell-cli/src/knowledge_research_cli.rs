@@ -79,8 +79,21 @@ pub(crate) fn wiki(store: Store, args: WikiCommand) -> Result<()> {
         WikiSubcommand::Expand { topic } => print_json(&store.run_wiki_expand_page_job(&topic)?),
         WikiSubcommand::Jobs => print_json(&store.list_wiki_jobs()?),
         WikiSubcommand::Job { id } => print_json(&store.get_wiki_job(&id)?),
+        WikiSubcommand::DecisionLedger { command } => wiki_decision_ledger(store, command),
         WikiSubcommand::List => print_json(&store.list_wiki_pages()?),
         WikiSubcommand::Read { id } => print_json(&store.read_wiki_page(&id)?),
+    }
+}
+
+pub(crate) fn wiki_decision_ledger(
+    store: Store,
+    command: WikiDecisionLedgerSubcommand,
+) -> Result<()> {
+    match command {
+        WikiDecisionLedgerSubcommand::Summary => print_json(&store.wiki_decision_ledger_summary()?),
+        WikiDecisionLedgerSubcommand::List { limit } => {
+            print_json(&store.list_wiki_decision_ledger(limit)?)
+        }
     }
 }
 
@@ -297,6 +310,23 @@ pub(crate) fn knowledge(store: Store, args: KnowledgeCommand) -> Result<()> {
             max_source_cards,
             max_clusters,
         } => print_json(&store.enqueue_knowledge_cluster_model_proposal_job(
+            &query,
+            &provider,
+            model_name.as_deref(),
+            endpoint.as_deref(),
+            timeout_seconds,
+            max_source_cards,
+            max_clusters,
+        )?),
+        KnowledgeSubcommand::RunModelClusters {
+            query,
+            provider,
+            model_name,
+            endpoint,
+            timeout_seconds,
+            max_source_cards,
+            max_clusters,
+        } => print_json(&store.run_knowledge_cluster_model_proposal_job(
             &query,
             &provider,
             model_name.as_deref(),

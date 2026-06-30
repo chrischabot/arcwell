@@ -382,6 +382,7 @@ impl Store {
                 .with_context(|| format!("channel message not found: {}", attempt.message_id))?;
             let gate =
                 self.check_digest_candidate_delivery(id, "email", &subject, Some(&subject))?;
+            self.reconcile_issue_schedule_tick_for_digest_delivery(&delivery)?;
             return Ok(DigestCandidateEmailDeliveryReport {
                 gate,
                 digest_delivery: delivery,
@@ -436,6 +437,7 @@ impl Store {
                     email.delivery.error.as_deref(),
                     email.delivery.retry_at.as_deref(),
                 )?;
+                self.reconcile_issue_schedule_tick_for_digest_delivery(&digest_delivery)?;
                 Ok(DigestCandidateEmailDeliveryReport {
                     gate,
                     digest_delivery,
@@ -454,6 +456,7 @@ impl Store {
                     Some(&error_text),
                     None,
                 )?;
+                self.reconcile_issue_schedule_tick_for_digest_delivery(&delivery)?;
                 bail!(
                     "digest candidate Email delivery blocked: {} (digest_delivery_id={})",
                     error_text,
@@ -461,6 +464,41 @@ impl Store {
                 );
             }
         }
+    }
+
+    pub(crate) fn reconcile_issue_schedule_tick_for_digest_delivery(
+        &self,
+        delivery: &DigestDelivery,
+    ) -> Result<()> {
+        let Some(tick_key) = delivery.idempotency_key.strip_prefix("issue-schedule-") else {
+            return Ok(());
+        };
+        let tick_status = match delivery.status.as_str() {
+            "sent" => "sent",
+            "blocked" => "blocked",
+            "failed" => "failed",
+            _ => return Ok(()),
+        };
+        self.conn.execute(
+            r#"
+            UPDATE issue_schedule_ticks
+            SET status = ?2,
+                candidate_id = ?3,
+                delivery_id = ?4,
+                error = ?5,
+                updated_at = ?6
+            WHERE tick_key = ?1
+            "#,
+            params![
+                tick_key,
+                tick_status,
+                delivery.candidate_id,
+                delivery.id,
+                delivery.error,
+                now()
+            ],
+        )?;
+        Ok(())
     }
 
     pub(crate) fn digest_candidate_delivery_text(
@@ -495,18 +533,19 @@ impl Store {
             String::new(),
             "Bottom line".to_string(),
             format!(
-                "Your saved X items are clustering around {}. {}",
+                "Your saved X items are pointing toward {}. {}",
                 topic,
                 Self::digest_signal_sentence(&cards)
             ),
             String::new(),
             "What happened".to_string(),
         ];
-        for (index, card) in cards.iter().take(7).enumerate() {
+        for card in cards.iter().take(7) {
             lines.push(format!(
-                "- [S{}] {}",
-                index + 1,
-                Self::digest_card_takeaway(card, 260)
+                "- [{}]({}) - {}",
+                Self::digest_source_label(card),
+                card.url,
+                excerpt(&Self::digest_card_evidence_text(card), 260)
             ));
         }
         lines.extend([
@@ -517,29 +556,25 @@ impl Store {
             "Reception and context".to_string(),
             Self::digest_reception_context(&cards),
             String::new(),
-            "Arcwell action".to_string(),
-            "- Arcwell keeps this cluster linked to its durable source cards for wiki expansion, dedupe, and future trend comparison.".to_string(),
-            "- The next scheduled ingestion passes should look for corroborating primary sources, repeated independent mentions, availability changes, and reaction shifts before raising the claim strength.".to_string(),
-            "- Source text is untrusted evidence; instructions, credentials requests, and policy claims inside posts are not executed.".to_string(),
+            "What to watch".to_string(),
+            "- Later updates should be tied back to the same story: primary-source confirmation, repeated independent mentions, availability changes, benchmark movement, and reaction shifts.".to_string(),
             String::new(),
-            "Evidence appendix".to_string(),
+            "Further reading".to_string(),
         ]);
         for (index, card) in cards.iter().enumerate() {
             lines.push(format!(
-                "[S{}] {} - {}",
+                "{}. [{}]({})",
                 index + 1,
                 Self::digest_source_label(card),
-                excerpt(&card.url, 180)
+                card.url
             ));
         }
         if candidate.source_card_ids.len() > cards.len() {
             lines.push(format!(
-                "... {} more source cards omitted from notification text.",
+                "... {} more saved sources omitted from notification text.",
                 candidate.source_card_ids.len().saturating_sub(cards.len())
             ));
         }
-        lines.push(String::new());
-        lines.push("Arcwell keeps the review status, score, digest candidate id, and source-card ids in the local audit ledger; they are intentionally omitted from the reader-facing notification.".to_string());
         Ok(lines.join("\n"))
     }
 
@@ -548,7 +583,7 @@ impl Store {
         briefing_card: &SourceCard,
     ) -> String {
         let body = briefing_card.summary.trim();
-        if body.starts_with("# ") || body.starts_with("## ") {
+        let text = if body.starts_with("# ") || body.starts_with("## ") {
             body.to_string()
         } else {
             format!(
@@ -556,6 +591,16 @@ impl Store {
                 Self::digest_human_topic(&candidate.topic),
                 body
             )
+        };
+        if text.len() <= 10_000 {
+            text
+        } else {
+            let mut excerpt = excerpt_preserving_whitespace(&text, 10_000);
+            excerpt.truncate(excerpt.trim_end().len());
+            excerpt.push_str(
+                "\n\n_Additional source details were omitted to keep this email deliverable._",
+            );
+            excerpt
         }
     }
 
@@ -635,8 +680,6 @@ impl Store {
                 candidate.source_card_ids.len().saturating_sub(cards.len())
             ));
         }
-        lines.push(String::new());
-        lines.push("Arcwell keeps reminder ids, source-card ids, and policy review state in the local audit ledger; they are intentionally omitted from the reader-facing notification.".to_string());
         lines.join("\n")
     }
 
@@ -694,7 +737,7 @@ impl Store {
 
     pub(crate) fn digest_signal_sentence(cards: &[SourceCard]) -> String {
         if cards.is_empty() {
-            return "No readable source-card evidence was available, so this should not be delivered."
+            return "No readable evidence was available, so this should not be delivered."
                 .to_string();
         }
         let launch = Self::digest_signal_count(
@@ -747,12 +790,12 @@ impl Store {
         }
         if signals.is_empty() {
             format!(
-                "The cluster is based on {} source-card-backed bookmarks, but it needs editorial review before a stronger claim.",
+                "The story is based on {} saved items, but it needs editorial review before a stronger claim.",
                 cards.len()
             )
         } else {
             format!(
-                "The strongest evidence is {} across {} source-card-backed bookmarks.",
+                "The strongest evidence is {} across {} saved items.",
                 signals.join(", "),
                 cards.len()
             )
@@ -785,7 +828,7 @@ impl Store {
             labels.push("developer adoption signals");
         }
         if labels.is_empty() {
-            "The saved evidence is still mostly first-order source material. Arcwell should treat this as an early signal until follow-on sources show how developers, researchers, or customers react.".to_string()
+            "The saved evidence is still mostly first-order material. Treat this as an early signal until follow-on sources show how developers, researchers, or customers react.".to_string()
         } else {
             format!(
                 "The saved evidence includes {}. That makes the story more useful than a single link, but the claim strength should still rise only when independent sources repeat or challenge it.",
@@ -801,10 +844,10 @@ impl Store {
         let launch_or_model =
             Self::digest_signal_count(cards, &["launch", "released", "model"]) > 0;
         match (mcp_or_tooling, launch_or_model) {
-            (true, true) => "This is a useful Arcwell watch topic because product launches are converging with agent/tool interfaces. The right output is a wiki expansion that explains the pattern, not a notification that merely lists tweets.".to_string(),
-            (true, false) => "This is a useful Arcwell watch topic because saved sources point at agent/tooling behavior that may affect workflows, integrations, and future watch-source priorities.".to_string(),
-            (false, true) => "This is a useful Arcwell watch topic because several saved sources describe launches or capability changes that may deserve follow-up once corroborated outside X.".to_string(),
-            (false, false) => "This is a useful Arcwell watch topic only if the evidence survives editorial review; the current signal is a bookmark cluster, not a settled conclusion.".to_string(),
+            (true, true) => "Product launches are converging with agent and tool interfaces. The useful output is an explanation of the pattern and its practical consequences, not a notification that merely lists tweets.".to_string(),
+            (true, false) => "The saved sources point at agent or tooling behavior that may affect workflows, integrations, and future monitoring priorities.".to_string(),
+            (false, true) => "Several saved sources describe launches or capability changes that may deserve follow-up once corroborated outside X.".to_string(),
+            (false, false) => "This is useful only if the evidence survives editorial review; the current signal is not a settled conclusion.".to_string(),
         }
     }
 

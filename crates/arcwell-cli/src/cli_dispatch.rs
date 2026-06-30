@@ -34,5 +34,6 @@ pub(crate) fn run(store: Store, command: Command) -> Result<()> {
         Command::Policy(args) => policy(store, args),
         Command::Secrets(args) => secrets(store, args),
         Command::Cursors(args) => cursors(store, args),
+        Command::Proof(args) => proof(store, args),
     }
 }

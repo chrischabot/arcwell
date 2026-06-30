@@ -1,5 +1,12 @@
 use super::*;
 
+struct PreparedJobApplicationPacketExport {
+    packet: JobApplicationPacket,
+    markdown: String,
+    findings: Vec<JobPrivacyFinding>,
+    filename: String,
+}
+
 impl Store {
     pub fn record_job_source(&self, input: JobSourceInput) -> Result<JobSource> {
         let input = normalize_job_source_input(input)?;
@@ -398,6 +405,173 @@ impl Store {
         })
     }
 
+    pub fn compile_job_outreach_readiness_report(
+        &self,
+        profile_id: &str,
+        limit: usize,
+    ) -> Result<JobOutreachReadinessReport> {
+        self.require_job_profile(profile_id)?;
+        let limit = limit.clamp(1, 100);
+        let shortlist = self.compile_job_shortlist(profile_id)?;
+        let all_intro_paths = self.list_job_intro_paths()?;
+        let contacts = self.list_job_contacts()?;
+        let contacts_by_id = contacts
+            .into_iter()
+            .map(|contact| (contact.id.clone(), contact))
+            .collect::<BTreeMap<_, _>>();
+        let mut entries = Vec::new();
+        for shortlist_entry in shortlist
+            .entries
+            .into_iter()
+            .filter(|entry| entry.score.is_some())
+            .take(limit)
+        {
+            let role = shortlist_entry.role;
+            let score = shortlist_entry.score;
+            let mut blockers = Vec::new();
+            if role.current_status != "live" {
+                blockers.push(format!("role status is `{}`", role.current_status));
+            }
+            if let Some(score) = &score {
+                if !matches!(score.tier.as_str(), "tier_1" | "tier_2") {
+                    blockers.push(format!(
+                        "fit tier is `{}`; outreach readiness is limited to Tier 1 or Tier 2 roles",
+                        score.tier
+                    ));
+                }
+                for blocker in &score.blockers {
+                    blockers.push(format!("fit blocker: {blocker}"));
+                }
+            }
+            for warning in &shortlist_entry.outcome_warnings {
+                blockers.push(format!("pipeline warning: {warning}"));
+            }
+
+            let packet =
+                self.latest_job_application_packet_for_role_profile(&role.id, profile_id)?;
+            let mut packet_id = None;
+            let mut packet_status = None;
+            let mut privacy_check_id = None;
+            if let Some(packet) = packet {
+                packet_id = Some(packet.id.clone());
+                packet_status = Some(packet.status.clone());
+                if packet.status != "approved" {
+                    blockers.push(format!(
+                        "latest application packet is `{}`; approved packet required",
+                        packet.status
+                    ));
+                } else {
+                    let check = self.check_job_privacy_text(
+                        "job_outreach_readiness",
+                        Some(&packet.id),
+                        &packet.outreach_note,
+                        &[],
+                    )?;
+                    privacy_check_id = Some(check.id.clone());
+                    if check.decision != "pass" {
+                        blockers.push(format!(
+                            "approved packet outreach note privacy decision is `{}`",
+                            check.decision
+                        ));
+                    }
+                }
+            } else {
+                blockers.push("no application packet exists for this role".to_string());
+            }
+
+            let role_intro_paths = all_intro_paths
+                .iter()
+                .filter(|path| path.role_id == role.id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let intro_path_ids = role_intro_paths
+                .iter()
+                .map(|path| path.id.clone())
+                .collect::<Vec<_>>();
+            let contact_ids = role_intro_paths
+                .iter()
+                .map(|path| path.contact_id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let public_only_count = contact_ids
+                .iter()
+                .filter(|contact_id| {
+                    contacts_by_id
+                        .get(*contact_id)
+                        .map(|contact| contact.relationship_status == "public_only")
+                        .unwrap_or(false)
+                })
+                .count();
+            let warm_intro_ready_count = role_intro_paths
+                .iter()
+                .filter(|path| {
+                    let warm_contact = contacts_by_id
+                        .get(&path.contact_id)
+                        .map(|contact| {
+                            matches!(
+                                contact.relationship_status.as_str(),
+                                "known" | "possible_mutual"
+                            )
+                        })
+                        .unwrap_or(false);
+                    warm_contact && job_intro_path_is_warm_ready(path)
+                })
+                .count();
+            if role_intro_paths.is_empty() {
+                blockers.push("no intro or outreach path recorded for this role".to_string());
+            } else if warm_intro_ready_count == 0 {
+                blockers.push(
+                    "no user-confirmed warm intro or outreach route is ready; public-only paths remain identify/monitor work"
+                        .to_string(),
+                );
+            }
+
+            let decision = if blockers.is_empty() {
+                "ready".to_string()
+            } else {
+                "blocked".to_string()
+            };
+            let next_action = if decision == "ready" {
+                "Use the approved packet to ask for the warm intro or user-confirmed outreach route; Arcwell has not sent anything.".to_string()
+            } else {
+                format!("Resolve before outreach: {}", blockers.join("; "))
+            };
+            entries.push(JobOutreachReadinessEntry {
+                role,
+                score,
+                packet_id,
+                packet_status,
+                privacy_check_id,
+                intro_path_ids,
+                contact_ids,
+                warm_intro_ready_count,
+                public_only_count,
+                decision,
+                blockers,
+                next_action,
+            });
+        }
+        let ready_count = entries
+            .iter()
+            .filter(|entry| entry.decision == "ready")
+            .count();
+        let blocked_count = entries.len().saturating_sub(ready_count);
+        Ok(JobOutreachReadinessReport {
+            profile_id: profile_id.to_string(),
+            generated_at: now(),
+            proof_level: "local_proof".to_string(),
+            ready_count,
+            blocked_count,
+            entries,
+            non_claims: vec![
+                "This report does not send outreach or applications.".to_string(),
+                "Public-only contacts are not warm intros.".to_string(),
+                "A ready row means local packet/privacy/path gates passed, not that a person agreed to introduce or reply.".to_string(),
+            ],
+        })
+    }
+
     pub(crate) fn job_outcome_warnings_for_role(
         &self,
         role: &JobRoleCard,
@@ -650,6 +824,30 @@ impl Store {
             .map_err(Into::into)
     }
 
+    fn latest_job_application_packet_for_role_profile(
+        &self,
+        role_id: &str,
+        profile_id: &str,
+    ) -> Result<Option<JobApplicationPacket>> {
+        validate_id(role_id)?;
+        validate_id(profile_id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, role_id, profile_id, generated_at, status, evidence_card_ids_json, resume_emphasis, tailored_bullets_json, outreach_note, proof_links_json, likely_objections_json, interview_stories_json, questions_to_ask_json, privacy_check_id, reviewer_note
+                FROM job_application_packets
+                WHERE role_id = ?1
+                  AND profile_id = ?2
+                ORDER BY generated_at DESC, id DESC
+                LIMIT 1
+                "#,
+                params![role_id, profile_id],
+                job_application_packet_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn update_job_application_packet_status(
         &self,
         input: JobApplicationPacketStatusInput,
@@ -704,6 +902,23 @@ impl Store {
         packet_id: &str,
         out_dir: &Path,
     ) -> Result<JobApplicationPacketExport> {
+        let prepared = self.prepare_job_application_packet_export(packet_id)?;
+        if out_dir.exists() && !out_dir.is_dir() {
+            bail!("application packet export output path is not a directory");
+        }
+        fs::create_dir_all(out_dir).with_context(|| {
+            format!(
+                "creating application packet export directory {}",
+                out_dir.display()
+            )
+        })?;
+        self.write_prepared_job_application_packet_export(prepared, out_dir)
+    }
+
+    fn prepare_job_application_packet_export(
+        &self,
+        packet_id: &str,
+    ) -> Result<PreparedJobApplicationPacketExport> {
         validate_id(packet_id)?;
         let packet = self
             .read_job_application_packet(packet_id)?
@@ -752,34 +967,38 @@ impl Store {
         if decision != "pass" {
             bail!("application packet export failed privacy check with decision {decision}");
         }
-        let export_privacy_check = self.record_job_privacy_check_result(
-            "packet_export",
-            Some(&packet.id),
-            &decision,
-            findings,
-            &markdown,
-        )?;
-        if out_dir.exists() && !out_dir.is_dir() {
-            bail!("application packet export output path is not a directory");
-        }
-        fs::create_dir_all(out_dir).with_context(|| {
-            format!(
-                "creating application packet export directory {}",
-                out_dir.display()
-            )
-        })?;
         let slug = slugify(&format!("{} {}", role.company, role.role_title));
         let filename = format!("{slug}-{}.md", packet.id);
-        let path = out_dir.join(filename);
-        fs::write(&path, markdown.as_bytes())
+        Ok(PreparedJobApplicationPacketExport {
+            packet,
+            markdown,
+            findings,
+            filename,
+        })
+    }
+
+    fn write_prepared_job_application_packet_export(
+        &self,
+        prepared: PreparedJobApplicationPacketExport,
+        out_dir: &Path,
+    ) -> Result<JobApplicationPacketExport> {
+        let export_privacy_check = self.record_job_privacy_check_result(
+            "packet_export",
+            Some(&prepared.packet.id),
+            "pass",
+            prepared.findings,
+            &prepared.markdown,
+        )?;
+        let path = out_dir.join(prepared.filename);
+        fs::write(&path, prepared.markdown.as_bytes())
             .with_context(|| format!("writing application packet export {}", path.display()))?;
         Ok(JobApplicationPacketExport {
-            packet_id: packet.id,
-            role_id: packet.role_id,
-            profile_id: packet.profile_id,
+            packet_id: prepared.packet.id,
+            role_id: prepared.packet.role_id,
+            profile_id: prepared.packet.profile_id,
             path: path.to_string_lossy().to_string(),
-            byte_len: markdown.len(),
-            sha256: sha256(markdown.as_bytes()),
+            byte_len: prepared.markdown.len(),
+            sha256: sha256(prepared.markdown.as_bytes()),
             privacy_check_id: export_privacy_check.id,
             proof_level: "local_proof".to_string(),
             delivery_status: "not_sent".to_string(),
@@ -789,6 +1008,97 @@ impl Store {
                 "User must review the exported artifact before external use.".to_string(),
             ],
         })
+    }
+
+    pub fn export_job_application_packet_set(
+        &self,
+        profile_id: &str,
+        packet_ids: Vec<String>,
+        out_dir: &Path,
+    ) -> Result<JobApplicationPacketSetExport> {
+        validate_id(profile_id)?;
+        self.require_job_profile(profile_id)?;
+        let packet_ids = normalize_job_id_list(packet_ids, "job application packet id")?;
+        if packet_ids.is_empty() {
+            bail!("job application packet set export requires at least one packet id");
+        }
+        if packet_ids.len() > 50 {
+            bail!("job application packet set export has too many packet ids");
+        }
+        let mut prepared_exports = Vec::new();
+        for packet_id in &packet_ids {
+            let prepared = self.prepare_job_application_packet_export(packet_id)?;
+            if prepared.packet.profile_id != profile_id {
+                bail!(
+                    "job application packet {} belongs to profile {}, not {}",
+                    prepared.packet.id,
+                    prepared.packet.profile_id,
+                    profile_id
+                );
+            }
+            prepared_exports.push(prepared);
+        }
+        if out_dir.exists() && !out_dir.is_dir() {
+            bail!("application packet set export output path is not a directory");
+        }
+        fs::create_dir_all(out_dir).with_context(|| {
+            format!(
+                "creating application packet set export directory {}",
+                out_dir.display()
+            )
+        })?;
+
+        let mut exports = Vec::new();
+        for prepared in prepared_exports {
+            exports.push(self.write_prepared_job_application_packet_export(prepared, out_dir)?);
+        }
+        let total_byte_len = exports.iter().map(|export| export.byte_len).sum::<usize>();
+        let export_fingerprint = exports
+            .iter()
+            .map(|export| format!("{}\t{}\t{}", export.packet_id, export.path, export.sha256))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let export_set_sha256 = sha256(export_fingerprint.as_bytes());
+        let packet_set_hash = sha256(packet_ids.join("\n").as_bytes());
+        let manifest_path = out_dir.join(format!(
+            "job-packet-export-set-{}-{}.json",
+            profile_id,
+            &packet_set_hash[..16]
+        ));
+        let report = JobApplicationPacketSetExport {
+            profile_id: profile_id.to_string(),
+            packet_ids,
+            out_dir: out_dir.to_string_lossy().to_string(),
+            manifest_path: manifest_path.to_string_lossy().to_string(),
+            exported_count: exports.len(),
+            total_byte_len,
+            export_set_sha256,
+            exports,
+            proof_level: "local_proof".to_string(),
+            delivery_status: "not_sent".to_string(),
+            application_status_changed: false,
+            warnings: vec![
+                "Local Markdown packet-set export only; no application was sent or recorded."
+                    .to_string(),
+                "User must review every exported artifact before external use.".to_string(),
+            ],
+            non_claims: vec![
+                "This is not Google Docs draft creation.".to_string(),
+                "This is not email, browser, ATS, or provider delivery.".to_string(),
+                "This is not application submission proof.".to_string(),
+                "This is not proof that the user approved these packets for sending.".to_string(),
+                "This is not operational-home proof unless intentionally run in that home."
+                    .to_string(),
+            ],
+        };
+        let manifest = serde_json::to_vec_pretty(&report)?;
+        fs::write(&manifest_path, manifest).with_context(|| {
+            format!(
+                "writing application packet set export manifest {}",
+                manifest_path.display()
+            )
+        })?;
+        Ok(report)
     }
 
     pub fn record_job_company_card(&self, input: JobCompanyCardInput) -> Result<JobCompanyCard> {
@@ -925,6 +1235,17 @@ impl Store {
             .map_err(Into::into)
     }
 
+    pub fn list_job_contacts(&self) -> Result<Vec<JobContact>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, name, company_id, role_title, public_profile_url, source_url, relationship_status, relevance, note, created_at, updated_at
+            FROM job_contacts
+            ORDER BY updated_at DESC, name ASC, id ASC
+            "#,
+        )?;
+        rows(stmt.query_map([], job_contact_from_row)?)
+    }
+
     pub fn record_job_intro_path(&self, input: JobIntroPathInput) -> Result<JobIntroPath> {
         let input = normalize_job_intro_path_input(input)?;
         self.read_job_role_card(&input.role_id)?
@@ -983,6 +1304,17 @@ impl Store {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn list_job_intro_paths(&self) -> Result<Vec<JobIntroPath>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, role_id, contact_id, path_type, confidence, next_action, status, created_at, updated_at
+            FROM job_intro_paths
+            ORDER BY updated_at DESC, id ASC
+            "#,
+        )?;
+        rows(stmt.query_map([], job_intro_path_from_row)?)
     }
 
     pub fn record_job_search_run(&self, input: JobSearchRunInput) -> Result<JobSearchRun> {
@@ -1111,6 +1443,42 @@ impl Store {
         rows(stmt.query_map(params![run_id], job_role_status_event_from_row)?)
     }
 
+    pub(crate) fn list_job_role_status_events_for_roles_recent(
+        &self,
+        role_ids: &BTreeSet<String>,
+        limit: usize,
+    ) -> Result<Vec<JobRoleStatusEvent>> {
+        if role_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.clamp(1, 500) as i64;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, role_id, run_id, status, previous_tier, current_tier, note, created_at
+            FROM job_role_status_events
+            WHERE role_id = ?1
+            ORDER BY created_at DESC, id ASC
+            LIMIT ?2
+            "#,
+        )?;
+        let mut events = Vec::new();
+        for role_id in role_ids {
+            validate_id(role_id)?;
+            events.extend(rows(stmt.query_map(
+                params![role_id, limit],
+                job_role_status_event_from_row,
+            )?)?);
+        }
+        events.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        events.truncate(limit as usize);
+        Ok(events)
+    }
+
     pub fn record_job_application(&self, input: JobApplicationInput) -> Result<JobApplication> {
         let input = normalize_job_application_input(input)?;
         self.read_job_role_card(&input.role_id)?
@@ -1185,13 +1553,40 @@ impl Store {
         self.require_job_profile(profile_id)?;
         let scope = sanitize_required_job_text(scope, "scope", 500)?;
         let shortlist = self.compile_job_shortlist(profile_id)?;
-        let applications = self.list_job_applications()?;
+        let scored_role_ids = shortlist
+            .entries
+            .iter()
+            .filter(|entry| entry.score.is_some())
+            .map(|entry| entry.role.id.clone())
+            .collect::<BTreeSet<_>>();
+        let applications = self
+            .list_job_applications()?
+            .into_iter()
+            .filter(|application| scored_role_ids.contains(&application.role_id))
+            .collect::<Vec<_>>();
         let health = self.list_job_source_health_recent(50)?;
-        let body = render_job_weekly_report(&shortlist, &applications, &health);
+        let intro_paths = self
+            .list_job_intro_paths()?
+            .into_iter()
+            .filter(|path| scored_role_ids.contains(&path.role_id))
+            .collect::<Vec<_>>();
+        let contacts = self.list_job_contacts()?;
+        let role_events =
+            self.list_job_role_status_events_for_roles_recent(&scored_role_ids, 50)?;
+        let body = render_job_weekly_report(
+            &shortlist,
+            &applications,
+            &health,
+            &intro_paths,
+            &contacts,
+            &role_events,
+        );
         let id = job_weekly_report_id(profile_id, &scope, &body);
         let metadata = json!({
             "role_count": shortlist.entries.len(),
             "application_count": applications.len(),
+            "intro_path_count": intro_paths.len(),
+            "role_status_event_count": role_events.len(),
             "source_health_count": health.len(),
             "proof_level": "local_proof"
         });
@@ -1228,5 +1623,572 @@ impl Store {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn prepare_job_weekly_report_delivery(
+        &self,
+        input: JobWeeklyReportDeliveryInput,
+    ) -> Result<JobWeeklyReportDeliveryReport> {
+        let input = normalize_job_weekly_report_delivery_input(input)?;
+        let weekly_report = self
+            .read_job_weekly_report(&input.report_id)?
+            .with_context(|| format!("job weekly report not found: {}", input.report_id))?;
+        let idempotency_key = input
+            .idempotency_key
+            .as_deref()
+            .context("normalized job weekly report delivery missing idempotency key")?;
+        let existing_delivery = self.find_job_weekly_report_delivery(
+            &input.report_id,
+            &input.channel,
+            &input.subject,
+            &input.target,
+            idempotency_key,
+        )?;
+        if !self.channel_subject_can_send(&input.channel, &input.subject)? {
+            if let Some(message_id) = existing_delivery
+                .as_ref()
+                .and_then(|delivery| delivery.channel_message_id.as_deref())
+            {
+                let _ = self.update_channel_message_status(message_id, "blocked");
+            }
+            let delivery = self.record_job_weekly_report_delivery_state(
+                &input,
+                "blocked",
+                None,
+                None,
+                Some(format!(
+                    "{} subject is not authorized to send: {}",
+                    input.channel, input.subject
+                )),
+            )?;
+            return self.hydrate_job_weekly_report_delivery_report(delivery, weekly_report, false);
+        }
+
+        self.conn
+            .execute_batch("SAVEPOINT job_weekly_report_delivery_prepare")?;
+        let prepared_result = (|| -> Result<JobWeeklyReportDeliveryReport> {
+            let privacy_check = self.check_job_privacy_text(
+                "job_weekly_report_delivery",
+                Some(&weekly_report.id),
+                &weekly_report.body,
+                &[],
+            )?;
+            if privacy_check.decision == "block" {
+                if let Some(message_id) = existing_delivery
+                    .as_ref()
+                    .and_then(|delivery| delivery.channel_message_id.as_deref())
+                {
+                    let _ = self.update_channel_message_status(message_id, "blocked");
+                }
+                let delivery = self.record_job_weekly_report_delivery_state(
+                    &input,
+                    "blocked",
+                    Some(&privacy_check.id),
+                    None,
+                    Some("job weekly report delivery privacy check blocked".to_string()),
+                )?;
+                return Ok(JobWeeklyReportDeliveryReport {
+                    delivery,
+                    weekly_report: weekly_report.clone(),
+                    privacy_check: Some(privacy_check),
+                    channel_message: None,
+                    idempotent_replay: false,
+                });
+            }
+
+            if let Some(existing) = existing_delivery.as_ref() {
+                if existing.status == "prepared" {
+                    let delivery = self.record_job_weekly_report_delivery_state(
+                        &input,
+                        "prepared",
+                        Some(&privacy_check.id),
+                        existing.channel_message_id.as_deref(),
+                        None,
+                    )?;
+                    return self.hydrate_job_weekly_report_delivery_report(
+                        delivery,
+                        weekly_report.clone(),
+                        true,
+                    );
+                }
+            }
+
+            let message = self.record_channel_message_with_status(
+                &input.channel,
+                "outgoing",
+                &input.target,
+                &weekly_report.body,
+                "prepared",
+                None,
+                Some(&weekly_report.id),
+            )?;
+            let delivery = self.record_job_weekly_report_delivery_state(
+                &input,
+                "prepared",
+                Some(&privacy_check.id),
+                Some(&message.id),
+                None,
+            )?;
+            Ok(JobWeeklyReportDeliveryReport {
+                delivery,
+                weekly_report: weekly_report.clone(),
+                privacy_check: Some(privacy_check),
+                channel_message: Some(message),
+                idempotent_replay: false,
+            })
+        })();
+        match prepared_result {
+            Ok(report) => {
+                self.conn
+                    .execute_batch("RELEASE SAVEPOINT job_weekly_report_delivery_prepare")?;
+                Ok(report)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO SAVEPOINT job_weekly_report_delivery_prepare;\
+                     RELEASE SAVEPOINT job_weekly_report_delivery_prepare;",
+                );
+                Err(error)
+            }
+        }
+    }
+
+    pub fn send_job_weekly_report_delivery(
+        &self,
+        input: JobWeeklyReportDeliverySendInput,
+    ) -> Result<JobWeeklyReportDeliverySendReport> {
+        let input = normalize_job_weekly_report_delivery_send_input(input)?;
+        let delivery = self
+            .read_job_weekly_report_delivery(&input.delivery_id)?
+            .with_context(|| {
+                format!(
+                    "job weekly report delivery not found: {}",
+                    input.delivery_id
+                )
+            })?;
+        let weekly_report = self
+            .read_job_weekly_report(&delivery.report_id)?
+            .with_context(|| format!("job weekly report not found: {}", delivery.report_id))?;
+        let message_id = delivery
+            .channel_message_id
+            .as_deref()
+            .context("job weekly report delivery has no prepared channel message")?;
+        if delivery.status == "blocked" {
+            return self.hydrate_job_weekly_report_delivery_send_report(
+                delivery,
+                weekly_report,
+                None,
+                true,
+            );
+        }
+
+        if let Some(successful_attempt) = self
+            .list_channel_delivery_attempts(Some(message_id))?
+            .into_iter()
+            .find(|attempt| attempt.ok)
+        {
+            return self.hydrate_job_weekly_report_delivery_send_report(
+                delivery,
+                weekly_report,
+                Some(successful_attempt),
+                true,
+            );
+        }
+
+        let delivery_input = JobWeeklyReportDeliveryInput {
+            report_id: delivery.report_id.clone(),
+            channel: delivery.channel.clone(),
+            subject: delivery.subject.clone(),
+            target: delivery.target.clone(),
+            idempotency_key: Some(delivery.idempotency_key.clone()),
+        };
+
+        if !self.channel_subject_can_send(&delivery.channel, &delivery.subject)? {
+            let _ = self.update_channel_message_status(message_id, "blocked");
+            let blocked = self.record_job_weekly_report_delivery_state(
+                &delivery_input,
+                "blocked",
+                delivery.privacy_check_id.as_deref(),
+                Some(message_id),
+                Some(format!(
+                    "{} subject is not authorized to send: {}",
+                    delivery.channel, delivery.subject
+                )),
+            )?;
+            return self.hydrate_job_weekly_report_delivery_send_report(
+                blocked,
+                weekly_report,
+                None,
+                false,
+            );
+        }
+
+        let privacy_check = self.check_job_privacy_text(
+            "job_weekly_report_provider_delivery",
+            Some(&weekly_report.id),
+            &weekly_report.body,
+            &[],
+        )?;
+        if privacy_check.decision == "block" {
+            let _ = self.update_channel_message_status(message_id, "blocked");
+            let blocked = self.record_job_weekly_report_delivery_state(
+                &delivery_input,
+                "blocked",
+                Some(&privacy_check.id),
+                Some(message_id),
+                Some("job weekly report provider delivery privacy check blocked".to_string()),
+            )?;
+            return self.hydrate_job_weekly_report_delivery_send_report(
+                blocked,
+                weekly_report,
+                None,
+                false,
+            );
+        }
+
+        let send_result: Result<(bool, u16, ChannelMessage, ChannelDeliveryAttempt)> =
+            (|| match delivery.channel.as_str() {
+                "telegram" => {
+                    let token = input.telegram_bot_token.as_deref().context(
+                        "telegram_bot_token is required for telegram weekly report delivery",
+                    )?;
+                    let chat_id = delivery
+                        .target
+                        .strip_prefix("telegram:chat:")
+                        .unwrap_or(&delivery.target);
+                    self.policy_guard(PolicyRequest {
+                        action: "channel.send".to_string(),
+                        package: Some("arcwell-job-hunting".to_string()),
+                        provider: Some("telegram".to_string()),
+                        source: Some("job_weekly_report_delivery".to_string()),
+                        channel: Some("telegram".to_string()),
+                        subject: Some(delivery.subject.clone()),
+                        target: Some(chat_id.to_string()),
+                        projected_usd: None,
+                        metadata: json!({
+                            "delivery_id": delivery.id,
+                            "report_id": weekly_report.id,
+                            "parse_mode": "MarkdownV2",
+                        }),
+                        untrusted_excerpt: Some(weekly_report.body.clone()),
+                    })?;
+                    self.require_cost_budget(
+                        "arcwell-job-hunting",
+                        &delivery.id,
+                        "telegram",
+                        "send_message",
+                        Some("job_weekly_report_delivery"),
+                        estimated_channel_send_cost(),
+                        "Job weekly report Telegram delivery",
+                    )?;
+                    let report = self.send_existing_telegram_message_preflighted(
+                        message_id,
+                        token,
+                        chat_id,
+                        &weekly_report.body,
+                        input.api_base.as_deref(),
+                    )?;
+                    Ok((report.ok, report.status, report.message, report.delivery))
+                }
+                "email" => {
+                    let account_id = input
+                        .email_account_id
+                        .as_deref()
+                        .context("email_account_id is required for email weekly report delivery")?;
+                    let api_token = input
+                        .email_api_token
+                        .as_deref()
+                        .context("email_api_token is required for email weekly report delivery")?;
+                    let from = input
+                        .email_from
+                        .as_deref()
+                        .context("email_from is required for email weekly report delivery")?;
+                    let to = delivery
+                        .target
+                        .strip_prefix("email:")
+                        .unwrap_or(&delivery.target);
+                    let subject = format!("Arcwell job weekly report: {}", weekly_report.scope);
+                    let report = self.send_existing_cloudflare_email_message_with_context(
+                        account_id,
+                        api_token,
+                        from,
+                        message_id,
+                        to,
+                        &subject,
+                        &weekly_report.body,
+                        input.api_base.as_deref(),
+                        "job_weekly_report_delivery",
+                        "Job weekly report email delivery",
+                        json!({
+                            "delivery_id": delivery.id,
+                            "report_id": weekly_report.id,
+                            "scope": weekly_report.scope,
+                        }),
+                    )?;
+                    Ok((report.ok, report.status, report.message, report.delivery))
+                }
+                _ => bail!(
+                    "unsupported job weekly report delivery channel: {}",
+                    delivery.channel
+                ),
+            })();
+
+        match send_result {
+            Ok((ok, status, _message, attempt)) => {
+                let delivery = self.record_job_weekly_report_delivery_state(
+                    &delivery_input,
+                    if ok { "sent" } else { "failed" },
+                    Some(&privacy_check.id),
+                    Some(message_id),
+                    if ok {
+                        None
+                    } else {
+                        Some(format!(
+                            "provider send failed with status {}{}",
+                            status,
+                            attempt
+                                .error
+                                .as_deref()
+                                .map(|error| format!(": {error}"))
+                                .unwrap_or_default()
+                        ))
+                    },
+                )?;
+                self.hydrate_job_weekly_report_delivery_send_report(
+                    delivery,
+                    weekly_report,
+                    Some(attempt),
+                    false,
+                )
+            }
+            Err(error) => {
+                let _ = self.update_channel_message_status(message_id, "blocked");
+                let blocked = self.record_job_weekly_report_delivery_state(
+                    &delivery_input,
+                    "blocked",
+                    Some(&privacy_check.id),
+                    Some(message_id),
+                    Some(error.to_string()),
+                )?;
+                self.hydrate_job_weekly_report_delivery_send_report(
+                    blocked,
+                    weekly_report,
+                    None,
+                    false,
+                )
+            }
+        }
+    }
+
+    pub fn read_job_weekly_report_delivery(
+        &self,
+        id: &str,
+    ) -> Result<Option<JobWeeklyReportDelivery>> {
+        validate_id(id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, report_id, channel, subject, target, status, privacy_check_id, channel_message_id, idempotency_key, error, created_at, updated_at
+                FROM job_weekly_report_deliveries
+                WHERE id = ?1
+                "#,
+                params![id],
+                job_weekly_report_delivery_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn list_job_weekly_report_deliveries(
+        &self,
+        report_id: Option<&str>,
+    ) -> Result<Vec<JobWeeklyReportDelivery>> {
+        if let Some(report_id) = report_id {
+            validate_id(report_id)?;
+            let mut stmt = self.conn.prepare(
+                r#"
+                SELECT id, report_id, channel, subject, target, status, privacy_check_id, channel_message_id, idempotency_key, error, created_at, updated_at
+                FROM job_weekly_report_deliveries
+                WHERE report_id = ?1
+                ORDER BY updated_at DESC, id ASC
+                "#,
+            )?;
+            return rows(stmt.query_map(params![report_id], job_weekly_report_delivery_from_row)?);
+        }
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, report_id, channel, subject, target, status, privacy_check_id, channel_message_id, idempotency_key, error, created_at, updated_at
+            FROM job_weekly_report_deliveries
+            ORDER BY updated_at DESC, id ASC
+            "#,
+        )?;
+        rows(stmt.query_map([], job_weekly_report_delivery_from_row)?)
+    }
+
+    fn hydrate_job_weekly_report_delivery_report(
+        &self,
+        delivery: JobWeeklyReportDelivery,
+        weekly_report: JobWeeklyReport,
+        idempotent_replay: bool,
+    ) -> Result<JobWeeklyReportDeliveryReport> {
+        let privacy_check = delivery
+            .privacy_check_id
+            .as_deref()
+            .map(|id| {
+                self.read_job_privacy_check(id)?
+                    .with_context(|| format!("job privacy check not found: {id}"))
+            })
+            .transpose()?;
+        let channel_message = delivery
+            .channel_message_id
+            .as_deref()
+            .map(|id| {
+                self.get_channel_message(id)?
+                    .with_context(|| format!("channel message not found: {id}"))
+            })
+            .transpose()?;
+        Ok(JobWeeklyReportDeliveryReport {
+            delivery,
+            weekly_report,
+            privacy_check,
+            channel_message,
+            idempotent_replay,
+        })
+    }
+
+    fn hydrate_job_weekly_report_delivery_send_report(
+        &self,
+        delivery: JobWeeklyReportDelivery,
+        weekly_report: JobWeeklyReport,
+        channel_delivery_attempt: Option<ChannelDeliveryAttempt>,
+        idempotent_replay: bool,
+    ) -> Result<JobWeeklyReportDeliverySendReport> {
+        let privacy_check = delivery
+            .privacy_check_id
+            .as_deref()
+            .map(|id| {
+                self.read_job_privacy_check(id)?
+                    .with_context(|| format!("job privacy check not found: {id}"))
+            })
+            .transpose()?;
+        let channel_message = delivery
+            .channel_message_id
+            .as_deref()
+            .map(|id| {
+                self.get_channel_message(id)?
+                    .with_context(|| format!("channel message not found: {id}"))
+            })
+            .transpose()?;
+        Ok(JobWeeklyReportDeliverySendReport {
+            delivery,
+            weekly_report,
+            privacy_check,
+            channel_message,
+            channel_delivery_attempt,
+            idempotent_replay,
+            proof_level: "controlled_provider_delivery".to_string(),
+            non_claims: vec![
+                "This is not proof of wall-clock recurrence or unattended scheduling.".to_string(),
+                "A mock or local API base proves the provider path shape, not live external delivery."
+                    .to_string(),
+                "This does not submit applications or contact employers.".to_string(),
+            ],
+        })
+    }
+
+    fn find_job_weekly_report_delivery(
+        &self,
+        report_id: &str,
+        channel: &str,
+        subject: &str,
+        target: &str,
+        idempotency_key: &str,
+    ) -> Result<Option<JobWeeklyReportDelivery>> {
+        validate_id(report_id)?;
+        validate_key(channel)?;
+        validate_query(subject)?;
+        validate_query(target)?;
+        validate_query(idempotency_key)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, report_id, channel, subject, target, status, privacy_check_id, channel_message_id, idempotency_key, error, created_at, updated_at
+                FROM job_weekly_report_deliveries
+                WHERE report_id = ?1
+                  AND channel = ?2
+                  AND subject = ?3
+                  AND target = ?4
+                  AND idempotency_key = ?5
+                "#,
+                params![report_id, channel, subject, target, idempotency_key],
+                job_weekly_report_delivery_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn record_job_weekly_report_delivery_state(
+        &self,
+        input: &JobWeeklyReportDeliveryInput,
+        status: &str,
+        privacy_check_id: Option<&str>,
+        channel_message_id: Option<&str>,
+        error: Option<String>,
+    ) -> Result<JobWeeklyReportDelivery> {
+        let status = normalize_job_weekly_report_delivery_status(status)?;
+        let idempotency_key = input
+            .idempotency_key
+            .as_deref()
+            .context("normalized job weekly report delivery missing idempotency key")?;
+        if let Some(privacy_check_id) = privacy_check_id {
+            validate_id(privacy_check_id)?;
+        }
+        if let Some(channel_message_id) = channel_message_id {
+            validate_id(channel_message_id)?;
+        }
+        let error = error
+            .as_deref()
+            .map(|value| sanitize_required_job_text(value, "delivery error", 1_000))
+            .transpose()?;
+        let timestamp = now();
+        self.conn.execute(
+            r#"
+            INSERT INTO job_weekly_report_deliveries
+              (id, report_id, channel, subject, target, status, privacy_check_id, channel_message_id, idempotency_key, error, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
+            ON CONFLICT(report_id, channel, subject, target, idempotency_key) DO UPDATE SET
+              status = excluded.status,
+              privacy_check_id = excluded.privacy_check_id,
+              channel_message_id = excluded.channel_message_id,
+              error = excluded.error,
+              updated_at = excluded.updated_at
+            "#,
+            params![
+                job_weekly_report_delivery_id(),
+                input.report_id,
+                input.channel,
+                input.subject,
+                input.target,
+                status,
+                privacy_check_id,
+                channel_message_id,
+                idempotency_key,
+                error,
+                timestamp,
+            ],
+        )?;
+        self.find_job_weekly_report_delivery(
+            &input.report_id,
+            &input.channel,
+            &input.subject,
+            &input.target,
+            idempotency_key,
+        )?
+        .with_context(|| {
+            format!(
+                "job weekly report delivery not found after upsert for report {}",
+                input.report_id
+            )
+        })
     }
 }

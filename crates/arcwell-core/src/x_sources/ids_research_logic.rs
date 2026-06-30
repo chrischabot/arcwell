@@ -173,6 +173,10 @@ pub(crate) fn job_weekly_report_id(profile_id: &str, scope: &str, body: &str) ->
     format!("jweek-{}", &hash[..16])
 }
 
+pub(crate) fn job_weekly_report_delivery_id() -> String {
+    format!("jweekdel-{}", Uuid::new_v4().simple())
+}
+
 pub(crate) fn research_host_search_id() -> String {
     format!("rhsearch-{}", Uuid::new_v4().simple())
 }

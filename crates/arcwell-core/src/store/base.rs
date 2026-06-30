@@ -251,6 +251,26 @@ impl Store {
             CREATE VIRTUAL TABLE IF NOT EXISTS wiki_pages_fts
             USING fts5(id UNINDEXED, title, content);
 
+            CREATE TABLE IF NOT EXISTS wiki_editorial_decision_ledger (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              page_id TEXT NOT NULL,
+              page_title TEXT NOT NULL DEFAULT '',
+              decision TEXT NOT NULL CHECK (decision IN ('hold', 'reject')),
+              reviewed_source_card_ids TEXT NOT NULL,
+              source_set_hash TEXT NOT NULL,
+              source_count INTEGER NOT NULL DEFAULT 0,
+              rationale TEXT NOT NULL DEFAULT '',
+              follow_up TEXT NOT NULL DEFAULT '',
+              reviewed_at TEXT NOT NULL,
+              first_seen_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              source_file TEXT NOT NULL DEFAULT '',
+              UNIQUE(page_id, source_set_hash)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_wiki_editorial_decision_ledger_page
+            ON wiki_editorial_decision_ledger(page_id);
+
             CREATE TABLE IF NOT EXISTS source_cards (
               id TEXT PRIMARY KEY,
               title TEXT NOT NULL,
@@ -1552,6 +1572,19 @@ impl Store {
         })?;
         self.apply_schema_migration(19, "job_hunting_intelligence", false, None, |conn| {
             ensure_job_hunting_schema_on(conn)
+        })?;
+        self.apply_schema_migration(
+            20,
+            "job_weekly_report_delivery_preparation",
+            false,
+            None,
+            |conn| ensure_job_hunting_schema_on(conn),
+        )?;
+        self.apply_schema_migration(21, "x_watch_curation", false, None, |conn| {
+            ensure_x_watch_curation_schema_on(conn)
+        })?;
+        self.apply_schema_migration(22, "proof_packet_ledger", false, None, |conn| {
+            ensure_proof_packet_schema_on(conn)
         })?;
         repair_radar_source_quality_run_scope_on(&self.conn)?;
         self.conn.execute(

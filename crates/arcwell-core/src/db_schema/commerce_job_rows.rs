@@ -524,3 +524,22 @@ pub(crate) fn job_weekly_report_from_row(
         metadata: parse_json_column(&metadata_json, 6)?,
     })
 }
+
+pub(crate) fn job_weekly_report_delivery_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<JobWeeklyReportDelivery> {
+    Ok(JobWeeklyReportDelivery {
+        id: row.get(0)?,
+        report_id: row.get(1)?,
+        channel: row.get(2)?,
+        subject: row.get(3)?,
+        target: row.get(4)?,
+        status: row.get(5)?,
+        privacy_check_id: row.get(6)?,
+        channel_message_id: row.get(7)?,
+        idempotency_key: row.get(8)?,
+        error: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}

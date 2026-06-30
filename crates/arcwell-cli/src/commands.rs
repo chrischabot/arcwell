@@ -45,6 +45,7 @@ pub(crate) enum Command {
     Policy(PolicyCommand),
     Secrets(SecretsCommand),
     Cursors(CursorCommand),
+    Proof(ProofCommand),
 }
 
 #[derive(Args)]
@@ -63,6 +64,61 @@ pub(crate) struct DoctorArgs {
 pub(crate) struct ProviderCommand {
     #[command(subcommand)]
     pub(crate) command: ProviderSubcommand,
+}
+
+#[derive(Args)]
+pub(crate) struct ProofCommand {
+    #[command(subcommand)]
+    pub(crate) command: ProofSubcommand,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ProofSubcommand {
+    Record {
+        #[arg(long)]
+        scope: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long, default_value = "local_proof")]
+        proof_level: String,
+        #[arg(long, default_value = "partial")]
+        status: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        artifact_root: Option<String>,
+        #[arg(long)]
+        reviewer: Option<String>,
+        #[arg(long, default_value = "[]")]
+        claims_json: String,
+        #[arg(long, default_value = "[]")]
+        artifacts_json: String,
+        #[arg(long, default_value = "[]")]
+        checks_json: String,
+        #[arg(long, default_value = "{}")]
+        metadata_json: String,
+    },
+    Read {
+        packet_id: String,
+    },
+    List {
+        #[arg(long)]
+        scope: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    Latest {
+        #[arg(long, alias = "scope")]
+        capability: String,
+    },
+    VerifyPacket {
+        path: PathBuf,
+    },
+    Promote {
+        packet_id: String,
+        #[arg(long)]
+        reviewer: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -746,6 +802,21 @@ pub(crate) enum KnowledgeSubcommand {
         status: String,
     },
     EnqueueModelClusters {
+        query: String,
+        #[arg(long, default_value = "mock")]
+        provider: String,
+        #[arg(long)]
+        model_name: Option<String>,
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        #[arg(long, default_value_t = 24)]
+        max_source_cards: usize,
+        #[arg(long, default_value_t = 6)]
+        max_clusters: usize,
+    },
+    RunModelClusters {
         query: String,
         #[arg(long, default_value = "mock")]
         provider: String,
@@ -1750,6 +1821,11 @@ pub(crate) enum JobSubcommand {
     Shortlist {
         profile_id: String,
     },
+    OutreachReadiness {
+        profile_id: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     CompanyTargets {
         profile_id: String,
         #[arg(long)]
@@ -1801,6 +1877,13 @@ pub(crate) enum JobSubcommand {
     },
     PacketExport {
         packet_id: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    PacketExportSet {
+        profile_id: String,
+        #[arg(long = "packet-id")]
+        packet_ids: Vec<String>,
         #[arg(long)]
         out: PathBuf,
     },
@@ -1936,10 +2019,45 @@ pub(crate) enum JobSubcommand {
         #[arg(long, default_value_t = 24)]
         min_elapsed_hours: i64,
     },
+    OperationalAudit {
+        profile_id: String,
+        #[arg(long)]
+        scope: String,
+        #[arg(long, default_value_t = 24)]
+        min_elapsed_hours: i64,
+    },
     WeeklyReport {
         profile_id: String,
         #[arg(long)]
         scope: String,
+    },
+    WeeklyReportDeliveryPrepare {
+        report_id: String,
+        #[arg(long)]
+        channel: String,
+        #[arg(long)]
+        subject: String,
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    WeeklyReportDeliverySend {
+        delivery_id: String,
+        #[arg(long)]
+        telegram_bot_token: Option<String>,
+        #[arg(long)]
+        email_account_id: Option<String>,
+        #[arg(long)]
+        email_api_token: Option<String>,
+        #[arg(long)]
+        email_from: Option<String>,
+        #[arg(long)]
+        api_base: Option<String>,
+    },
+    WeeklyReportDeliveries {
+        #[arg(long)]
+        report_id: Option<String>,
     },
 }
 
@@ -2753,9 +2871,49 @@ pub(crate) enum XSubcommand {
         #[arg(long, default_value_t = 100)]
         max_recent_follows: usize,
     },
+    CurateWatchSources {
+        #[arg(long, conflicts_with = "apply")]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        #[arg(long, default_value = "pause-only")]
+        mode: String,
+    },
+    RestoreWatchCuration {
+        run_id: String,
+    },
+    WatchCurationReport {
+        #[arg(long)]
+        run_id: Option<String>,
+    },
+    ImportWatchManualRules {
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long, default_value = "[]")]
+        rules_json: String,
+        #[arg(long)]
+        reviewed_by: String,
+        #[arg(long, conflicts_with = "apply")]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+    },
+    EnrichWatchProfiles {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long = "handle")]
+        handles: Vec<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
     MonitorWatchSources {
         #[arg(long, default_value_t = 25)]
         max_sources: usize,
+        #[arg(long, default_value_t = 10)]
+        max_results_per_source: usize,
+    },
+    MonitorWatchSource {
+        handle: String,
         #[arg(long, default_value_t = 10)]
         max_results_per_source: usize,
     },
@@ -2978,9 +3136,22 @@ pub(crate) enum WikiSubcommand {
     Job {
         id: String,
     },
+    DecisionLedger {
+        #[command(subcommand)]
+        command: WikiDecisionLedgerSubcommand,
+    },
     List,
     Read {
         id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum WikiDecisionLedgerSubcommand {
+    Summary,
+    List {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
     },
 }
 

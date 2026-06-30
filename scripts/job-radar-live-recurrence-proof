@@ -1,0 +1,624 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in jq sqlite3 node shasum; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the live job-radar recurrence proof." >&2
+    exit 2
+  fi
+done
+
+DEFAULT_SOURCE_PROOF="$REPO_ROOT/.arcwell-dev/proofs/job-company-target-expanded-role-proof-20260629T050451Z-33630"
+SOURCE_PROOF="${ARCWELL_JOB_RADAR_RECURRENCE_SOURCE_PROOF:-$DEFAULT_SOURCE_PROOF}"
+PROOF_ROOT="${ARCWELL_JOB_RADAR_RECURRENCE_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-radar-live-recurrence-controlled-proof}"
+CADENCE="${ARCWELL_JOB_RADAR_RECURRENCE_CADENCE:-hot}"
+ALLOW_INCOMPLETE=0
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/job-radar-live-recurrence-proof [options]
+
+Creates or resumes a controlled live job-radar recurrence proof. The first run
+copies a bounded direct-role proof home, schedules a job_radar watch source,
+lets worker run-once enqueue and process the first live refresh through the
+watch-source poller, then records the watch source's own next_run_at. The second
+run is only attempted after that real due timestamp.
+
+Options:
+  --proof-root path      Proof root to create/resume.
+  --source-proof path    Controlled direct-role proof to copy on first run.
+  --cadence word         Watch-source cadence. Default: hot.
+  --allow-incomplete     Write an incomplete proof packet and exit 0.
+  -h, --help             Show this help.
+USAGE
+}
+
+fail() {
+  printf '[job-radar-live-recurrence-proof] BLOCKED: %s\n' "$*" >&2
+  exit 2
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --proof-root)
+      [[ $# -ge 2 ]] || fail "--proof-root requires a path"
+      PROOF_ROOT="$2"
+      shift
+      ;;
+    --source-proof)
+      [[ $# -ge 2 ]] || fail "--source-proof requires a path"
+      SOURCE_PROOF="$2"
+      shift
+      ;;
+    --cadence)
+      [[ $# -ge 2 ]] || fail "--cadence requires a value"
+      CADENCE="$2"
+      shift
+      ;;
+    --allow-incomplete)
+      ALLOW_INCOMPLETE=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+  shift
+done
+
+case "$CADENCE" in
+  hot|warm|cold) ;;
+  *) fail "unsupported cadence: $CADENCE" ;;
+esac
+
+cadence_seconds() {
+  case "$1" in
+    hot) printf '%s\n' 3600 ;;
+    warm) printf '%s\n' 21600 ;;
+    cold) printf '%s\n' 86400 ;;
+    *) return 1 ;;
+  esac
+}
+
+SOURCE_HOME="$SOURCE_PROOF/home"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="$PROOF_ROOT/home"
+DB="$ARCWELL_HOME/arcwell.sqlite3"
+STATE_FILE="$ARTIFACT_DIR/state.json"
+PACKET_FILE="$ARTIFACT_DIR/proof-packet.json"
+SCOPE="Controlled live job radar recurrence proof"
+WATCH_SOURCE_KEY=""
+
+mkdir -p "$ARTIFACT_DIR"
+
+log() {
+  printf '[job-radar-live-recurrence-proof] %s\n' "$*"
+}
+
+run_arcwell() {
+  "$ARCWELL_BIN" "$@"
+}
+
+sql_json() {
+  sqlite3 -json "$DB" "$1"
+}
+
+json_get() {
+  jq -r "$1 // empty" "$STATE_FILE"
+}
+
+json_file_sha() {
+  local path="$1"
+  if [ -f "$path" ]; then
+    shasum -a 256 "$path" | awk '{print $1}'
+  else
+    printf ''
+  fi
+}
+
+hours_between_or_null() {
+  node -e '
+const first = Date.parse(process.argv[1] || "");
+const second = Date.parse(process.argv[2] || "");
+if (!Number.isFinite(first) || !Number.isFinite(second)) {
+  console.log("null");
+} else {
+  console.log(JSON.stringify(Number(((second - first) / 3600000).toFixed(6))));
+}
+' "$1" "$2"
+}
+
+hours_since_or_null() {
+  node -e '
+const started = Date.parse(process.argv[1] || "");
+if (!Number.isFinite(started)) {
+  console.log("null");
+} else {
+  console.log(JSON.stringify(Number(Math.max(0, (Date.now() - started) / 3600000).toFixed(6))));
+}
+' "$1"
+}
+
+hours_remaining_or_null() {
+  node -e '
+const due = Date.parse(process.argv[1] || "");
+if (!Number.isFinite(due)) {
+  console.log("null");
+} else {
+  console.log(JSON.stringify(Number(Math.max(0, (due - Date.now()) / 3600000).toFixed(6))));
+}
+' "$1"
+}
+
+due_state() {
+  node -e '
+const due = Date.parse(process.argv[1] || "");
+if (!Number.isFinite(due)) {
+  console.log("invalid_ready_at");
+} else if (Date.now() >= due) {
+  console.log("ready_for_rerun");
+} else {
+  console.log("waiting_wall_clock");
+}
+' "$1"
+}
+
+write_packet() {
+  local status="$1"
+  local gate_state="$2"
+  local failure="$3"
+  local next_action="$4"
+
+  local profile_id schedule_id first_worker_job_id second_worker_job_id
+  local first_search_run_id second_search_run_id first_weekly_report_id second_weekly_report_id
+  local first_started_at second_started_at ready_at source_ids_json cadence_interval_hours
+  profile_id="$(json_get '.profile_id')"
+  schedule_id="$(json_get '.schedule_id')"
+  first_worker_job_id="$(json_get '.first_worker_job_id')"
+  second_worker_job_id="$(json_get '.second_worker_job_id')"
+  first_search_run_id="$(json_get '.first_search_run_id')"
+  second_search_run_id="$(json_get '.second_search_run_id')"
+  first_weekly_report_id="$(json_get '.first_weekly_report_id')"
+  second_weekly_report_id="$(json_get '.second_weekly_report_id')"
+  first_started_at="$(json_get '.first_started_at')"
+  second_started_at="$(json_get '.second_started_at')"
+  ready_at="$(json_get '.ready_at_utc')"
+  source_ids_json="$(jq -c '.source_ids // []' "$STATE_FILE")"
+  cadence_interval_hours="$(node -e 'console.log(JSON.stringify(Number(process.argv[1]) / 3600))' "$(cadence_seconds "$CADENCE")")"
+
+  local hours_since_first hours_remaining hours_between_runs
+  hours_since_first="$(hours_since_or_null "$first_started_at")"
+  hours_remaining="$(hours_remaining_or_null "$ready_at")"
+  hours_between_runs="$(hours_between_or_null "$first_started_at" "$second_started_at")"
+
+  jq -n \
+    --arg feature "controlled live job-radar recurrence proof" \
+    --arg status "$status" \
+    --arg gate_state "$gate_state" \
+    --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg next_action "$next_action" \
+    --arg failure "$failure" \
+    --arg source_proof "$SOURCE_PROOF" \
+    --arg proof_root "$PROOF_ROOT" \
+    --arg copied_home "$ARCWELL_HOME" \
+    --arg scope "$SCOPE" \
+    --arg cadence "$CADENCE" \
+    --arg watch_source_key "$WATCH_SOURCE_KEY" \
+    --arg schedule_id "$schedule_id" \
+    --arg profile_id "$profile_id" \
+    --arg first_worker_job_id "$first_worker_job_id" \
+    --arg second_worker_job_id "$second_worker_job_id" \
+    --arg first_search_run_id "$first_search_run_id" \
+    --arg second_search_run_id "$second_search_run_id" \
+    --arg first_weekly_report_id "$first_weekly_report_id" \
+    --arg second_weekly_report_id "$second_weekly_report_id" \
+    --arg first_started_at "$first_started_at" \
+    --arg second_started_at "$second_started_at" \
+    --arg ready_at "$ready_at" \
+    --arg first_worker_sha "$(json_file_sha "$ARTIFACT_DIR/first-worker-run-once.json")" \
+    --arg second_worker_sha "$(json_file_sha "$ARTIFACT_DIR/second-worker-run-once.json")" \
+    --arg watch_health_sha "$(json_file_sha "$ARTIFACT_DIR/watch-source-health.json")" \
+    --argjson cadence_interval_hours "$cadence_interval_hours" \
+    --argjson source_ids "$source_ids_json" \
+    --argjson hours_since_first "$hours_since_first" \
+    --argjson hours_remaining "$hours_remaining" \
+    --argjson hours_between_runs "$hours_between_runs" \
+    '{
+      feature: $feature,
+      status: $status,
+      gate_state: $gate_state,
+      created_at: $created_at,
+      next_action: $next_action,
+      skill_gates: ["arc:anti-mirage", "arc:job-hunting"],
+      user_visible_claim: "Arcwell can prove live job-radar recurrence only when the same copied proof home has two completed fetch_live=true job_radar_refresh runs that were enqueued by the job_radar watch-source poller across the configured real cadence window.",
+      non_claims: [
+        "This does not shorten or synthesize the watch-source cadence window.",
+        "This is not the one-day refresh-audit proof.",
+        "This is not exhaustive market coverage.",
+        "This is not proof over the user operational home.",
+        "This is not live external email or Telegram delivery.",
+        "This is not application approval, sending, submission, warm-intro proof, or hiring outcome proof."
+      ],
+      inputs: {
+        source_proof: $source_proof,
+        copied_home: $copied_home,
+        profile_id: (if $profile_id == "" then null else $profile_id end),
+        scope: $scope,
+        cadence: $cadence,
+        cadence_interval_hours: $cadence_interval_hours,
+        source_ids: $source_ids,
+        watch_source_key: (if $watch_source_key == "" then null else $watch_source_key end)
+      },
+      timestamps: {
+        packet_created_at: $created_at,
+        first_started_at: (if $first_started_at == "" then null else $first_started_at end),
+        second_started_at: (if $second_started_at == "" then null else $second_started_at end),
+        ready_at_utc: (if $ready_at == "" then null else $ready_at end),
+        cadence_interval_hours: $cadence_interval_hours,
+        hours_since_first: $hours_since_first,
+        hours_remaining: $hours_remaining,
+        hours_between_runs: $hours_between_runs
+      },
+      run_state: {
+        schedule_id: (if $schedule_id == "" then null else $schedule_id end),
+        first_worker_job_id: (if $first_worker_job_id == "" then null else $first_worker_job_id end),
+        second_worker_job_id: (if $second_worker_job_id == "" then null else $second_worker_job_id end),
+        first_search_run_id: (if $first_search_run_id == "" then null else $first_search_run_id end),
+        second_search_run_id: (if $second_search_run_id == "" then null else $second_search_run_id end),
+        first_weekly_report_id: (if $first_weekly_report_id == "" then null else $first_weekly_report_id end),
+        second_weekly_report_id: (if $second_weekly_report_id == "" then null else $second_weekly_report_id end)
+      },
+      artifacts: {
+        proof_root: $proof_root,
+        first_worker_run_once_sha256: (if $first_worker_sha == "" then null else $first_worker_sha end),
+        second_worker_run_once_sha256: (if $second_worker_sha == "" then null else $second_worker_sha end),
+        watch_source_health_sha256: (if $watch_health_sha == "" then null else $watch_health_sha end)
+      },
+      durable_state_written: [
+        "one copied-home active job_radar watch source",
+        "one copied-home completed fetch_live=true job_radar_refresh from the watch-source poller on the first checkpoint",
+        "one copied-home job:radar source_health row with scheduler next_run_at after the first checkpoint",
+        if $status == "passed" then "one copied-home completed fetch_live=true job_radar_refresh from the watch-source poller after the real cadence window" else empty end
+      ],
+      durable_state_not_written: [
+        "no writes to the source proof home",
+        "no writes to the user operational home",
+        "no application packet approval or export",
+        "no sent/delivered/submitted provider rows"
+      ],
+      failure: (if $failure == "" then null else $failure end),
+      adversarial_review_judgment: (
+        if $status == "passed" then
+          "Promote only as controlled live job-radar recurrence proof over four selected direct role sources and one configured hot cadence window. Keep one-day refresh, broad coverage, external delivery, operational-home, and application-sending claims blocked."
+        else
+          "Hold promotion. The first scheduled live-fetch checkpoint exists, but recurrence is intentionally incomplete until the watch source is actually due and the second worker pass completes from watch_poll."
+        end
+      ),
+      remaining_risks: [
+        {
+          risk: "The proof uses four selected direct role sources from the expanded role proof.",
+          next_action: "Broaden source families before claiming general market coverage."
+        },
+        {
+          risk: "The proof uses a copied proof home.",
+          next_action: "Do not claim user operational-home monitoring from this packet."
+        },
+        if $status == "passed" then
+          {
+            risk: "The proof covers one hot-cadence recurrence interval, not the one-day refresh audit or multi-day service operation.",
+            next_action: "Keep the preserved one-day refresh proof and a fresh operational audit as separate promotion gates."
+          }
+        else
+          {
+            risk: "The second checkpoint requires real elapsed time.",
+            next_action: $next_action
+          }
+        end
+      ]
+    }' >"$PACKET_FILE"
+}
+
+validate_worker_result() {
+  local path="$1"
+  local run_label="$2"
+  jq -e --arg scope "$SCOPE" --arg cadence "$CADENCE" '
+    .processed == 1
+    and .completed == 1
+    and .failed == 0
+    and .deferred == 0
+    and .dead_lettered == 0
+    and (.jobs | length) == 1
+    and .jobs[0].kind == "job_radar_refresh"
+    and .jobs[0].status == "completed"
+    and .jobs[0].input_json.fetch_live == true
+    and .jobs[0].input_json.proof_level == "production_data_proof"
+    and .jobs[0].input_json.scope == $scope
+    and .jobs[0].input_json.lineage.trigger == "watch_source_due"
+    and .jobs[0].input_json.lineage.source_kind == "job_radar"
+    and .jobs[0].input_json.lineage.cadence == $cadence
+    and (.jobs[0].input_json.source_ids | length) == 4
+    and .jobs[0].result_json.fetch_live == true
+    and .jobs[0].result_json.proof_level == "production_data_proof"
+    and .jobs[0].result_json.scope == $scope
+    and .jobs[0].result_json.source_count == 4
+    and .jobs[0].result_json.observed_role_count == 4
+    and .jobs[0].result_json.error_count == 0
+    and (.jobs[0].result_json.errors | length) == 0
+    and (.jobs[0].result_json.refreshes | length) == 4
+    and all(.jobs[0].result_json.refreshes[]; .status == "healthy" and .role_count == 1 and .accepted_count >= 2)
+    and .watch_poll.inspected == 1
+    and .watch_poll.enqueued == 1
+    and .watch_poll.skipped == 0
+    and (.watch_poll.jobs | length) == 1
+    and .watch_poll.jobs[0] == .jobs[0].id
+  ' "$path" >/dev/null || fail "$run_label worker result did not prove one watch-poll-enqueued live job_radar_refresh over four healthy sources"
+}
+
+collect_run_artifacts() {
+  local worker_path="$1"
+  local prefix="$2"
+  local search_run_id weekly_report_id source_health_ids_json sql_id_list
+  search_run_id="$(jq -r '.jobs[0].result_json.search_run_id // empty' "$worker_path")"
+  weekly_report_id="$(jq -r '.jobs[0].result_json.weekly_report_id // empty' "$worker_path")"
+  source_health_ids_json="$(jq -c '.jobs[0].result_json.source_health_ids // []' "$worker_path")"
+  [ -n "$search_run_id" ] || fail "$prefix worker result missing search_run_id"
+  [ -n "$weekly_report_id" ] || fail "$prefix worker result missing weekly_report_id"
+
+  printf '%s\n' "$source_health_ids_json" >"$ARTIFACT_DIR/${prefix}-source-health-ids.json"
+  sql_id_list="$(jq -r 'map("'"'"'" + . + "'"'"'") | join(",")' "$ARTIFACT_DIR/${prefix}-source-health-ids.json")"
+  sql_json "
+    SELECT sh.id, sh.status, sh.fetched_count, sh.accepted_count, sh.rejected_count, sh.note, src.name, src.url
+    FROM job_source_health sh
+    JOIN job_sources src ON src.id = sh.source_id
+    WHERE sh.id IN ($sql_id_list)
+    ORDER BY src.name;
+  " >"$ARTIFACT_DIR/${prefix}-live-source-health.json"
+  jq -e 'length == 4 and all(.[]; .status == "healthy" and .accepted_count >= 2 and (.note | contains("live_fetch")))' "$ARTIFACT_DIR/${prefix}-live-source-health.json" >/dev/null \
+    || fail "$prefix source-health rows are not four healthy live_fetch rows"
+
+  sql_json "
+    SELECT id, scope, proof_level, source_count, role_count, new_role_count, stale_role_count, error_count, report_artifact_id, started_at, completed_at
+    FROM job_search_runs
+    WHERE id = '$search_run_id';
+  " >"$ARTIFACT_DIR/${prefix}-search-run.json"
+  jq -e --arg scope "$SCOPE" '
+    length == 1
+    and .[0].scope == $scope
+    and .[0].proof_level == "production_data_proof"
+    and .[0].source_count == 4
+    and .[0].role_count == 4
+    and .[0].error_count == 0
+  ' "$ARTIFACT_DIR/${prefix}-search-run.json" >/dev/null \
+    || fail "$prefix search run row does not match the recurrence claim"
+
+  sql_json "
+    SELECT id, profile_id, scope, generated_at, proof_level, metadata_json
+    FROM job_weekly_reports
+    WHERE id = '$weekly_report_id';
+  " >"$ARTIFACT_DIR/${prefix}-weekly-report-row.json"
+  jq -e --arg scope "$SCOPE" '
+    length == 1
+    and .[0].scope == $scope
+    and .[0].proof_level == "local_proof"
+  ' "$ARTIFACT_DIR/${prefix}-weekly-report-row.json" >/dev/null \
+    || fail "$prefix weekly report row does not match the recurrence claim"
+}
+
+refresh_watch_source_health_artifact() {
+  local profile_id="$1"
+  WATCH_SOURCE_KEY="job:radar:$profile_id"
+  sql_json "
+    SELECT key, provider, source_kind, locator, status, last_success_at, last_failure_at,
+           last_error, last_item_id, last_item_date, next_run_at, updated_at
+    FROM source_health
+    WHERE key = '$WATCH_SOURCE_KEY';
+  " >"$ARTIFACT_DIR/watch-source-health.json"
+  jq -e 'length == 1 and .[0].status == "healthy" and (. [0].next_run_at // "") != ""' "$ARTIFACT_DIR/watch-source-health.json" >/dev/null \
+    || fail "watch-source health did not record a healthy job:radar row with next_run_at"
+}
+
+if [ ! -f "$STATE_FILE" ]; then
+  [ -f "$SOURCE_HOME/arcwell.sqlite3" ] || fail "source proof home not found: $SOURCE_HOME"
+  log "creating proof root: $PROOF_ROOT"
+  mkdir -p "$ARCWELL_HOME"
+  cp -R "$SOURCE_HOME/." "$ARCWELL_HOME/"
+  cat >"$ARCWELL_HOME/arcwell-policy.toml" <<'POLICY'
+[[rules]]
+id = "allow-job-radar-live-recurrence-enqueue-proof"
+effect = "allow"
+action = "worker.enqueue"
+package = "arcwell-job-hunting"
+provider = "web"
+source = "job_radar_refresh"
+reason = "controlled proof of recurring live job radar enqueue over selected direct role sources"
+priority = 30
+
+[[rules]]
+id = "allow-job-radar-live-recurrence-provider-proof"
+effect = "allow"
+action = "provider.network"
+package = "arcwell-job-hunting"
+provider = "web"
+source = "job_source_refresh"
+reason = "controlled proof of recurring live job radar refresh over selected direct role sources"
+priority = 30
+POLICY
+
+  printf '%s\n' "$SOURCE_PROOF" >"$ARTIFACT_DIR/source-proof.txt"
+  printf '%s\n' "$SOURCE_HOME" >"$ARTIFACT_DIR/source-home.txt"
+
+  run_arcwell job profiles >"$ARTIFACT_DIR/profiles.json"
+  PROFILE_ID="$(jq -r '.[0].id // empty' "$ARTIFACT_DIR/profiles.json")"
+  [ -n "$PROFILE_ID" ] || fail "source proof home has no job candidate profile"
+
+  sql_json "
+    SELECT id, name, url
+    FROM job_sources
+    WHERE name IN ('Anthropic Greenhouse','Sierra Ashby','Tailscale Greenhouse','Langfuse Ashby')
+    ORDER BY name;
+  " >"$ARTIFACT_DIR/sources.json"
+  SOURCE_COUNT="$(jq 'length' "$ARTIFACT_DIR/sources.json")"
+  [ "$SOURCE_COUNT" = "4" ] || fail "expected four selected direct role sources, found $SOURCE_COUNT"
+
+  SOURCE_ARGS=()
+  while IFS= read -r source_id; do
+    [ -n "$source_id" ] || continue
+    SOURCE_ARGS+=(--source-id "$source_id")
+  done < <(jq -r '.[].id' "$ARTIFACT_DIR/sources.json")
+
+  log "scheduling live job radar watch source with cadence=$CADENCE"
+  run_arcwell job radar-schedule "$PROFILE_ID" \
+    --scope "$SCOPE" \
+    --fetch-live \
+    --cadence "$CADENCE" \
+    "${SOURCE_ARGS[@]}" \
+    >"$ARTIFACT_DIR/schedule.json"
+
+  log "draining first due watch-source live refresh"
+  run_arcwell worker run-once --max-jobs 10 >"$ARTIFACT_DIR/first-worker-run-once.json"
+  validate_worker_result "$ARTIFACT_DIR/first-worker-run-once.json" "first"
+  collect_run_artifacts "$ARTIFACT_DIR/first-worker-run-once.json" "first"
+  refresh_watch_source_health_artifact "$PROFILE_ID"
+
+  FIRST_WORKER_JOB_ID="$(jq -r '.jobs[0].id' "$ARTIFACT_DIR/first-worker-run-once.json")"
+  FIRST_SEARCH_RUN_ID="$(jq -r '.jobs[0].result_json.search_run_id' "$ARTIFACT_DIR/first-worker-run-once.json")"
+  FIRST_WEEKLY_REPORT_ID="$(jq -r '.jobs[0].result_json.weekly_report_id' "$ARTIFACT_DIR/first-worker-run-once.json")"
+  FIRST_STARTED_AT="$(jq -r '.[0].started_at' "$ARTIFACT_DIR/first-search-run.json")"
+  READY_AT="$(jq -r '.[0].next_run_at' "$ARTIFACT_DIR/watch-source-health.json")"
+  SCHEDULE_ID="$(jq -r '.id' "$ARTIFACT_DIR/schedule.json")"
+  WATCH_SOURCE_KEY="job:radar:$PROFILE_ID"
+
+  jq -n \
+    --arg profile_id "$PROFILE_ID" \
+    --arg scope "$SCOPE" \
+    --arg cadence "$CADENCE" \
+    --arg schedule_id "$SCHEDULE_ID" \
+    --arg watch_source_key "$WATCH_SOURCE_KEY" \
+    --arg first_worker_job_id "$FIRST_WORKER_JOB_ID" \
+    --arg first_search_run_id "$FIRST_SEARCH_RUN_ID" \
+    --arg first_weekly_report_id "$FIRST_WEEKLY_REPORT_ID" \
+    --arg first_started_at "$FIRST_STARTED_AT" \
+    --arg ready_at_utc "$READY_AT" \
+    --slurpfile sources "$ARTIFACT_DIR/sources.json" \
+    '{
+      profile_id: $profile_id,
+      scope: $scope,
+      cadence: $cadence,
+      schedule_id: $schedule_id,
+      watch_source_key: $watch_source_key,
+      source_ids: [$sources[0][] | .id],
+      first_worker_job_id: $first_worker_job_id,
+      first_search_run_id: $first_search_run_id,
+      first_weekly_report_id: $first_weekly_report_id,
+      first_started_at: $first_started_at,
+      ready_at_utc: $ready_at_utc
+    }' >"$STATE_FILE"
+else
+  log "resuming proof root: $PROOF_ROOT"
+  [ -f "$DB" ] || fail "proof home missing for resumed state: $ARCWELL_HOME"
+fi
+
+PROFILE_ID="$(json_get '.profile_id')"
+WATCH_SOURCE_KEY="$(json_get '.watch_source_key')"
+READY_AT="$(json_get '.ready_at_utc')"
+[ -n "$PROFILE_ID" ] || fail "proof state is missing profile_id"
+[ -n "$READY_AT" ] || fail "proof state is missing ready_at_utc"
+
+refresh_watch_source_health_artifact "$PROFILE_ID"
+CURRENT_READY_AT="$(jq -r '.[0].next_run_at // empty' "$ARTIFACT_DIR/watch-source-health.json")"
+if [ -n "$CURRENT_READY_AT" ]; then
+  READY_AT="$CURRENT_READY_AT"
+  tmp_state="$STATE_FILE.tmp"
+  jq --arg ready_at_utc "$READY_AT" '. + {ready_at_utc: $ready_at_utc}' "$STATE_FILE" >"$tmp_state"
+  mv "$tmp_state" "$STATE_FILE"
+fi
+
+SECOND_WORKER_JOB_ID="$(json_get '.second_worker_job_id')"
+if [ -z "$SECOND_WORKER_JOB_ID" ]; then
+  GATE_STATE="$(due_state "$READY_AT")"
+  if [ "$GATE_STATE" = "ready_for_rerun" ]; then
+    log "watch-source cadence gate is due; draining second scheduled live refresh"
+    run_arcwell worker run-once --max-jobs 10 >"$ARTIFACT_DIR/second-worker-run-once.json"
+    validate_worker_result "$ARTIFACT_DIR/second-worker-run-once.json" "second"
+    collect_run_artifacts "$ARTIFACT_DIR/second-worker-run-once.json" "second"
+    refresh_watch_source_health_artifact "$PROFILE_ID"
+
+    SECOND_WORKER_JOB_ID="$(jq -r '.jobs[0].id' "$ARTIFACT_DIR/second-worker-run-once.json")"
+    SECOND_SEARCH_RUN_ID="$(jq -r '.jobs[0].result_json.search_run_id' "$ARTIFACT_DIR/second-worker-run-once.json")"
+    SECOND_WEEKLY_REPORT_ID="$(jq -r '.jobs[0].result_json.weekly_report_id' "$ARTIFACT_DIR/second-worker-run-once.json")"
+    SECOND_STARTED_AT="$(jq -r '.[0].started_at' "$ARTIFACT_DIR/second-search-run.json")"
+    tmp_state="$STATE_FILE.tmp"
+    jq \
+      --arg second_worker_job_id "$SECOND_WORKER_JOB_ID" \
+      --arg second_search_run_id "$SECOND_SEARCH_RUN_ID" \
+      --arg second_weekly_report_id "$SECOND_WEEKLY_REPORT_ID" \
+      --arg second_started_at "$SECOND_STARTED_AT" \
+      '. + {
+        second_worker_job_id: $second_worker_job_id,
+        second_search_run_id: $second_search_run_id,
+        second_weekly_report_id: $second_weekly_report_id,
+        second_started_at: $second_started_at
+      }' "$STATE_FILE" >"$tmp_state"
+    mv "$tmp_state" "$STATE_FILE"
+  else
+    log "watch-source cadence gate not met yet; next_run_at=$READY_AT"
+  fi
+fi
+
+run_arcwell ops >"$ARTIFACT_DIR/ops-after.json" || true
+sql_json "
+  SELECT id, kind, status, input_json, result_json, error, attempts, max_attempts, created_at, updated_at
+  FROM wiki_jobs
+  WHERE kind = 'job_radar_refresh'
+  ORDER BY created_at DESC;
+" >"$ARTIFACT_DIR/wiki-jobs.json"
+sql_json "
+  SELECT id, action, effect, allowed, reason, matched_rule_id, package, provider, source, target, created_at
+  FROM policy_decisions
+  WHERE reason IN (
+    'controlled proof of recurring live job radar enqueue over selected direct role sources',
+    'controlled proof of recurring live job radar refresh over selected direct role sources'
+  )
+  ORDER BY created_at;
+" >"$ARTIFACT_DIR/policy-decisions.json"
+
+SECOND_WORKER_JOB_ID="$(json_get '.second_worker_job_id')"
+if [ -n "$SECOND_WORKER_JOB_ID" ]; then
+  FIRST_STARTED_AT="$(json_get '.first_started_at')"
+  SECOND_STARTED_AT="$(json_get '.second_started_at')"
+  HOURS_BETWEEN="$(hours_between_or_null "$FIRST_STARTED_AT" "$SECOND_STARTED_AT")"
+  MIN_HOURS="$(node -e 'console.log(JSON.stringify(Number(process.argv[1]) / 3600))' "$(cadence_seconds "$CADENCE")")"
+  if ! node -e 'process.exit(Number(process.argv[1]) >= Number(process.argv[2]) ? 0 : 1)' "$HOURS_BETWEEN" "$MIN_HOURS"; then
+    write_packet "incomplete" "failed_elapsed_check" "second run was recorded before the configured cadence interval elapsed" "Keep this packet blocked; rerun in a fresh proof root."
+    fail "second run was recorded before the configured cadence interval elapsed"
+  fi
+  write_packet "passed" "passed" "" "No recurrence rerun required for this controlled proof. Keep one-day refresh, broad coverage, external delivery, and operational-home gates separate."
+  log "proof packet: $PACKET_FILE"
+  log "controlled live job-radar recurrence proof passed"
+  exit 0
+fi
+
+GATE_STATE="$(due_state "$READY_AT")"
+NEXT_ACTION="Rerun scripts/job-radar-live-recurrence-proof --proof-root $PROOF_ROOT after $READY_AT UTC."
+FAILURE="second scheduled live refresh has not run after the configured watch-source cadence window"
+write_packet "incomplete" "$GATE_STATE" "$FAILURE" "$NEXT_ACTION"
+log "proof packet: $PACKET_FILE"
+if [ "$ALLOW_INCOMPLETE" = "1" ]; then
+  log "recorded incomplete proof packet"
+  exit 0
+fi
+fail "$FAILURE"

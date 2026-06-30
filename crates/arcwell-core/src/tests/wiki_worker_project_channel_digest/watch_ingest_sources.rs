@@ -921,6 +921,100 @@ reason = "network blocked for resident poll test"
         report.jobs[0]
     );
     assert!(store.list_source_cards().unwrap().is_empty());
+    let health = store
+        .get_source_health("blog:https://example.com/agent-blog")
+        .unwrap()
+        .expect("failed blog watch-source ingest must write source health");
+    assert_eq!(health.status, "failed");
+    assert_eq!(health.provider, "blog");
+    assert_eq!(health.source_kind, "blog");
+    assert_eq!(health.locator, "https://example.com/agent-blog");
+    assert!(
+        health
+            .last_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("policy denied provider.network"),
+        "{health:?}"
+    );
+}
+
+#[test]
+fn severe_blog_watch_source_url_ingest_records_success_health() {
+    // CLAIM: scheduled blog URL ingestion has auditable source-health status,
+    // not just a completed wiki job.
+    // ORACLE: worker report, completed ingest_url job, added wiki page, and
+    // blog source_health row all point at the same source.
+    // SEVERITY: Severe because freshness scans depend on source_health to tell
+    // whether important watch sources have actually run recently.
+    unsafe {
+        std::env::set_var("ARCWELL_ALLOW_LOOPBACK_URL_INGEST", "1");
+    }
+    let url = mock_header_server(
+        "200 OK",
+        "content-type: text/html; charset=utf-8\r\n",
+        "<html><head><title>Fresh Agent Blog</title></head><body><main><h1>Fresh Agent Blog</h1><p>New source-backed update.</p></main></body></html>",
+    );
+    let store = test_store("blog-url-ingest-health");
+    write_policy(
+        &store,
+        r#"
+[[rules]]
+id = "allow-worker-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+reason = "enqueue is allowed for blog health test"
+
+[[rules]]
+id = "allow-url-ingest"
+effect = "allow"
+action = "provider.network"
+provider = "web"
+source = "url_ingest"
+reason = "loopback URL ingest is allowed for blog health test"
+"#,
+    );
+    store
+        .upsert_watch_source(WatchSourceInput {
+            source_kind: "blog".to_string(),
+            locator: url.clone(),
+            label: "Fresh Agent Blog".to_string(),
+            cadence: "hot".to_string(),
+            status: "active".to_string(),
+            metadata: Value::Null,
+        })
+        .unwrap();
+
+    let report = store.run_worker_once(1).unwrap();
+
+    assert_eq!(report.processed, 1);
+    assert_eq!(report.completed, 1);
+    assert_eq!(report.jobs[0].kind, "ingest_url");
+    let result_json = report.jobs[0]
+        .result_json
+        .as_ref()
+        .expect("completed ingest_url job must include result json");
+    let page_id = result_json
+        .get("page_id")
+        .and_then(Value::as_str)
+        .expect("completed ingest_url job must include page id");
+    let source_health_key = result_json
+        .get("source_health_key")
+        .and_then(Value::as_str)
+        .expect("blog watch-source ingest must include source health key");
+    let health = store
+        .get_source_health(source_health_key)
+        .unwrap()
+        .expect("blog watch-source ingest must write source health");
+    assert_eq!(health.status, "healthy");
+    assert_eq!(health.provider, "blog");
+    assert_eq!(health.source_kind, "blog");
+    assert_eq!(health.locator, url);
+    assert_eq!(health.last_item_id.as_deref(), Some(page_id));
+    assert!(health.next_run_at.is_some(), "{health:?}");
+    unsafe {
+        std::env::remove_var("ARCWELL_ALLOW_LOOPBACK_URL_INGEST");
+    }
 }
 
 #[test]
@@ -1437,6 +1531,64 @@ fn github_owner_mapper_rejects_repo_name_injection_and_maps_repo() {
     assert_eq!(card.source_type, "github_repo");
     assert!(card.title.contains("openai/codex"));
     assert!(card.summary.contains("coding agent"));
+}
+
+#[test]
+fn severe_github_owner_job_defers_before_network_when_credential_probe_failed() {
+    // CLAIM: scheduled GitHub source jobs do not keep burning provider calls
+    // when Arcwell already knows the GitHub credential is rejected.
+    // ORACLE: a failed provider credential probe turns a GitHub owner job into
+    // a deferred job with an inspectable reason before any source-card write.
+    // SEVERITY: Severe because repeated unauthenticated GitHub retries can
+    // create false "freshness" work while only deepening rate-limit blockage.
+    let store = test_store("github-provider-credential-preflight");
+    store
+        .record_source_failure(
+            "provider:github:credential-probe",
+            "github",
+            "provider_credential_probe",
+            "github",
+            "github token rejected or expired; HTTP 401; provider_error={\"message\":\"Bad credentials\"}",
+        )
+        .unwrap();
+    let job = store
+        .insert_wiki_job("github_owner", json!({ "owner": "openai", "limit": 10 }))
+        .unwrap();
+    let job = store.execute_wiki_job(job).unwrap();
+    assert_eq!(job.status, "deferred");
+    assert_eq!(job.attempts, 0, "defer should not consume retry attempts");
+    assert!(job.next_run_at.is_some());
+    assert!(job.error.is_none());
+
+    let result = job.result_json.as_ref().expect("deferred result json");
+    assert_eq!(
+        result.get("status").and_then(Value::as_str),
+        Some("deferred")
+    );
+    assert_eq!(
+        result.get("provider_health_status").and_then(Value::as_str),
+        Some("failed")
+    );
+    assert_eq!(
+        result.get("source_health_key").and_then(Value::as_str),
+        Some("github-owner:openai")
+    );
+    assert!(
+        result
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("provider network skipped")
+    );
+    let card_count: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM source_cards WHERE provider = 'github'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(card_count, 0);
 }
 
 #[test]

@@ -1,0 +1,478 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PLAN_PATH="${ARCWELL_JOB_IMPLEMENTATION_PLAN:-$REPO_ROOT/docs/job-hunting-intelligence-implementation-plan.md}"
+RUN_STAMP="${ARCWELL_JOB_PLAN_AUDIT_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_PLAN_AUDIT_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-implementation-plan-audit-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+
+OPERATIONAL_PACKET="${ARCWELL_JOB_OPERATIONAL_PACKET:-$REPO_ROOT/.arcwell-dev/proofs/job-operational-audit-proof-20260629T095526Z-2463/artifacts/proof-packet.json}"
+ONE_DAY_PACKET="${ARCWELL_JOB_ONE_DAY_PACKET:-$REPO_ROOT/.arcwell-dev/proofs/job-refresh-one-day-controlled-proof/artifacts/proof-packet.json}"
+RADAR_RECURRENCE_PACKET="${ARCWELL_JOB_RADAR_RECURRENCE_PACKET:-$REPO_ROOT/.arcwell-dev/proofs/job-radar-live-recurrence-controlled-proof/artifacts/proof-packet.json}"
+SOURCE_FAMILY_PACKET="${ARCWELL_JOB_SOURCE_FAMILY_PACKET:-$REPO_ROOT/.arcwell-dev/proofs/job-source-family-boundary-proof-20260629T055922Z-50842/artifacts/proof-packet.json}"
+PLUGIN_SKILL="$REPO_ROOT/plugins/arcwell-codex/skills/job-hunting/SKILL.md"
+HOST_SKILL="$REPO_ROOT/hosts/codex/skills/job-hunting/SKILL.md"
+
+for required in jq node shasum grep sort wc date; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for job implementation plan audit proof." >&2
+    exit 2
+  fi
+done
+
+for required_file in "$PLAN_PATH" "$OPERATIONAL_PACKET" "$ONE_DAY_PACKET" "$RADAR_RECURRENCE_PACKET" "$SOURCE_FAMILY_PACKET" "$PLUGIN_SKILL" "$HOST_SKILL"; do
+  if [ ! -f "$required_file" ]; then
+    echo "BLOCKED: required file not found: $required_file" >&2
+    exit 2
+  fi
+done
+
+mkdir -p "$ARTIFACT_DIR"
+
+PLAN_PROOF_REFS="$ARTIFACT_DIR/plan-proof-refs.txt"
+EXTRA_PROOF_REFS="$ARTIFACT_DIR/extra-proof-refs.txt"
+REQUIRED_PROOF_REFS="$ARTIFACT_DIR/required-proof-refs.txt"
+PROOF_ARTIFACTS="$ARTIFACT_DIR/proof-artifacts.jsonl"
+SCRIPT_REFS="$ARTIFACT_DIR/script-refs.txt"
+EXTRA_SCRIPT_REFS="$ARTIFACT_DIR/extra-script-refs.txt"
+REQUIRED_SCRIPT_REFS="$ARTIFACT_DIR/required-script-refs.txt"
+SCRIPT_ARTIFACTS="$ARTIFACT_DIR/script-artifacts.jsonl"
+
+grep -Eo '\.arcwell-dev/proofs/[^`[:space:]]+/artifacts/proof-packet\.(json|md)' "$PLAN_PATH" \
+  | grep -v '/job-implementation-plan-audit-proof-' \
+  | sort -u >"$PLAN_PROOF_REFS"
+
+{
+  printf '%s\n' ".arcwell-dev/proofs/job-source-family-boundary-proof-20260629T055922Z-50842/artifacts/proof-packet.json"
+  printf '%s\n' ".arcwell-dev/proofs/job-radar-live-recurrence-controlled-proof/artifacts/proof-packet.json"
+} >"$EXTRA_PROOF_REFS"
+
+sort -u "$PLAN_PROOF_REFS" "$EXTRA_PROOF_REFS" >"$REQUIRED_PROOF_REFS"
+
+: >"$PROOF_ARTIFACTS"
+MISSING_PROOFS=0
+INVALID_JSON_PROOFS=0
+
+while IFS= read -r rel_path; do
+  [ -n "$rel_path" ] || continue
+  abs_path="$REPO_ROOT/$rel_path"
+  if [ ! -f "$abs_path" ]; then
+    MISSING_PROOFS=$((MISSING_PROOFS + 1))
+    jq -n --arg rel "$rel_path" '{path: $rel, exists: false}' >>"$PROOF_ARTIFACTS"
+    continue
+  fi
+
+  sha256="$(shasum -a 256 "$abs_path" | awk '{print $1}')"
+  bytes="$(wc -c <"$abs_path" | tr -d ' ')"
+  format="${rel_path##*.}"
+  feature=""
+  status=""
+  audit_decision=""
+  adversarial_review_judgment=""
+
+  if [ "$format" = "json" ]; then
+    if ! jq empty "$abs_path" >/dev/null 2>&1; then
+      INVALID_JSON_PROOFS=$((INVALID_JSON_PROOFS + 1))
+      jq -n \
+        --arg rel "$rel_path" \
+        --arg sha "$sha256" \
+        --argjson bytes "$bytes" \
+        '{path: $rel, exists: true, valid_json: false, sha256: $sha, bytes: $bytes, format: "json"}' \
+        >>"$PROOF_ARTIFACTS"
+      continue
+    fi
+    feature="$(jq -r '.feature // ""' "$abs_path")"
+    status="$(jq -r '.status // ""' "$abs_path")"
+    audit_decision="$(jq -r '.audit_decision // .audit.decision // ""' "$abs_path")"
+    adversarial_review_judgment="$(jq -r '.adversarial_review_judgment // ""' "$abs_path")"
+  else
+    feature="$(grep -m1 '^# ' "$abs_path" | sed 's/^# //')"
+    status="$(grep -m1 -E 'Status:|status:' "$abs_path" | sed 's/^[[:space:]-]*//')"
+  fi
+
+  jq -n \
+    --arg rel "$rel_path" \
+    --arg sha "$sha256" \
+    --argjson bytes "$bytes" \
+    --arg format "$format" \
+    --arg feature "$feature" \
+    --arg status "$status" \
+    --arg audit_decision "$audit_decision" \
+    --arg adversarial "$adversarial_review_judgment" \
+    '{
+      path: $rel,
+      exists: true,
+      valid_json: (if $format == "json" then true else null end),
+      sha256: $sha,
+      bytes: $bytes,
+      format: $format,
+      feature: $feature,
+      status: $status,
+      audit_decision: $audit_decision,
+      adversarial_review_judgment: $adversarial
+    }' >>"$PROOF_ARTIFACTS"
+done <"$REQUIRED_PROOF_REFS"
+
+grep -Eo 'scripts/job-[A-Za-z0-9_-]+' "$PLAN_PATH" | sort -u >"$SCRIPT_REFS" || true
+{
+  printf '%s\n' "scripts/job-radar-scheduled-local-proof"
+  printf '%s\n' "scripts/job-radar-failure-health-proof"
+  printf '%s\n' "scripts/job-radar-retry-recovery-local-proof"
+  printf '%s\n' "scripts/job-radar-live-fetch-proof"
+  printf '%s\n' "scripts/job-radar-live-recurrence-proof"
+} >"$EXTRA_SCRIPT_REFS"
+sort -u "$SCRIPT_REFS" "$EXTRA_SCRIPT_REFS" >"$REQUIRED_SCRIPT_REFS"
+
+: >"$SCRIPT_ARTIFACTS"
+MISSING_OR_NONEXECUTABLE_SCRIPTS=0
+while IFS= read -r script_ref; do
+  [ -n "$script_ref" ] || continue
+  abs_script="$REPO_ROOT/$script_ref"
+  exists=false
+  executable=false
+  if [ -f "$abs_script" ]; then
+    exists=true
+  fi
+  if [ -x "$abs_script" ]; then
+    executable=true
+  else
+    MISSING_OR_NONEXECUTABLE_SCRIPTS=$((MISSING_OR_NONEXECUTABLE_SCRIPTS + 1))
+  fi
+  jq -n \
+    --arg path "$script_ref" \
+    --argjson exists "$exists" \
+    --argjson executable "$executable" \
+    '{path: $path, exists: $exists, executable: $executable}' >>"$SCRIPT_ARTIFACTS"
+done <"$REQUIRED_SCRIPT_REFS"
+
+jq '{
+  audit_decision,
+  block_gates: [.gates[]? | select(.decision == "block") | .name],
+  pass_gates: [.gates[]? | select(.decision == "pass") | .name],
+  required_pass_gates_present: {
+    evidence_ledger: any(.gates[]?; .name == "evidence_ledger" and .decision == "pass"),
+    source_map: any(.gates[]?; .name == "source_map" and .decision == "pass"),
+    role_scoring: any(.gates[]?; .name == "role_scoring" and .decision == "pass"),
+    privacy: any(.gates[]?; .name == "privacy" and .decision == "pass"),
+    application_packets: any(.gates[]?; .name == "application_packets" and .decision == "pass"),
+    outreach_readiness: any(.gates[]?; .name == "outreach_readiness" and .decision == "pass"),
+    application_tracking: any(.gates[]?; .name == "application_tracking" and .decision == "pass"),
+    weekly_report: any(.gates[]?; .name == "weekly_report" and .decision == "pass"),
+    delivery_preparation: any(.gates[]?; .name == "delivery_preparation" and .decision == "pass"),
+    provider_delivery: any(.gates[]?; .name == "provider_delivery" and .decision == "pass"),
+    scheduled_radar: any(.gates[]?; .name == "scheduled_radar" and .decision == "pass")
+  },
+  valid_controlled_block: (
+    .audit_decision == "block"
+    and ([.gates[]? | select(.decision == "block") | .name] == ["weekly_refresh"])
+    and all(([
+      any(.gates[]?; .name == "evidence_ledger" and .decision == "pass"),
+      any(.gates[]?; .name == "source_map" and .decision == "pass"),
+      any(.gates[]?; .name == "role_scoring" and .decision == "pass"),
+      any(.gates[]?; .name == "privacy" and .decision == "pass"),
+      any(.gates[]?; .name == "application_packets" and .decision == "pass"),
+      any(.gates[]?; .name == "outreach_readiness" and .decision == "pass"),
+      any(.gates[]?; .name == "application_tracking" and .decision == "pass"),
+      any(.gates[]?; .name == "weekly_report" and .decision == "pass"),
+      any(.gates[]?; .name == "delivery_preparation" and .decision == "pass"),
+      any(.gates[]?; .name == "provider_delivery" and .decision == "pass"),
+      any(.gates[]?; .name == "scheduled_radar" and .decision == "pass")
+    ])[]; . == true)
+  )
+}' "$OPERATIONAL_PACKET" >"$ARTIFACT_DIR/operational-audit-status.json"
+
+node - "$ONE_DAY_PACKET" >"$ARTIFACT_DIR/one-day-status.json" <<'NODE'
+const fs = require("fs");
+const packetPath = process.argv[2];
+const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+const readyAt = packet.timestamps?.ready_at_utc || packet.ready_at_utc || null;
+const nowMs = Date.now();
+const readyMs = readyAt ? Date.parse(readyAt) : NaN;
+const status = packet.status || "unknown";
+const explicitGate = packet.gate_state || null;
+const knownExplicitGates = new Set(["passed", "ready_for_rerun"]);
+let gate = "invalid_ready_at";
+if (knownExplicitGates.has(explicitGate)) {
+  gate = explicitGate;
+} else if (explicitGate === "waiting_wall_clock") {
+  if (Number.isFinite(readyMs) && nowMs >= readyMs) {
+    gate = "ready_for_rerun";
+  } else if (Number.isFinite(readyMs)) {
+    gate = "waiting_wall_clock";
+  }
+} else if (status === "passed" || status === "pass") {
+  gate = "passed";
+} else if (Number.isFinite(readyMs) && nowMs >= readyMs) {
+  gate = "ready_for_rerun";
+} else if (Number.isFinite(readyMs)) {
+  gate = "waiting_wall_clock";
+}
+const hoursRemaining = Number.isFinite(readyMs)
+  ? Math.max(0, (readyMs - nowMs) / 1000 / 60 / 60)
+  : null;
+console.log(JSON.stringify({
+  status,
+  gate,
+  gate_state: explicitGate,
+  now_utc: new Date(nowMs).toISOString(),
+  ready_at_utc: readyAt,
+  hours_remaining: hoursRemaining,
+  hours_since_first: packet.timestamps?.hours_since_first ?? packet.run_state?.hours_since_first ?? null,
+  hours_between_runs: packet.timestamps?.hours_between_runs ?? null,
+  first_run_id: packet.run_state?.first_run_id || packet.first_run_id || null,
+  second_run_id: packet.run_state?.second_run_id || packet.second_run_id || null,
+  first_started_at: packet.run_state?.first_started_at || packet.timestamps?.first_started_at || null,
+  second_started_at: packet.run_state?.second_started_at || packet.timestamps?.second_started_at || null,
+  audit_decision: packet.audit?.decision || null,
+  failure: packet.failure || null,
+  next_action: packet.next_action || null
+}, null, 2));
+NODE
+
+node - "$RADAR_RECURRENCE_PACKET" >"$ARTIFACT_DIR/radar-recurrence-status.json" <<'NODE'
+const fs = require("fs");
+const packetPath = process.argv[2];
+const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+const readyAt = packet.timestamps?.ready_at_utc || packet.ready_at_utc || null;
+const nowMs = Date.now();
+const readyMs = readyAt ? Date.parse(readyAt) : NaN;
+const status = packet.status || "unknown";
+const explicitGate = packet.gate_state || null;
+const knownExplicitGates = new Set([
+  "passed",
+  "ready_for_rerun",
+  "failed_elapsed_check",
+]);
+let gate = "invalid_ready_at";
+if (knownExplicitGates.has(explicitGate)) {
+  gate = explicitGate;
+} else if (explicitGate === "waiting_wall_clock") {
+  if (Number.isFinite(readyMs) && nowMs >= readyMs) {
+    gate = "ready_for_rerun";
+  } else if (Number.isFinite(readyMs)) {
+    gate = "waiting_wall_clock";
+  }
+} else if (status === "passed" || status === "pass") {
+  gate = "passed";
+} else if (Number.isFinite(readyMs) && nowMs >= readyMs) {
+  gate = "ready_for_rerun";
+} else if (Number.isFinite(readyMs)) {
+  gate = "waiting_wall_clock";
+}
+const hoursRemaining = Number.isFinite(readyMs)
+  ? Math.max(0, (readyMs - nowMs) / 1000 / 60 / 60)
+  : null;
+console.log(JSON.stringify({
+  status,
+  gate,
+  gate_state: explicitGate,
+  now_utc: new Date(nowMs).toISOString(),
+  ready_at_utc: readyAt,
+  hours_remaining: hoursRemaining,
+  hours_since_first: packet.timestamps?.hours_since_first ?? null,
+  hours_between_runs: packet.timestamps?.hours_between_runs ?? null,
+  first_worker_job_id: packet.run_state?.first_worker_job_id || null,
+  second_worker_job_id: packet.run_state?.second_worker_job_id || null,
+  first_search_run_id: packet.run_state?.first_search_run_id || null,
+  second_search_run_id: packet.run_state?.second_search_run_id || null,
+  first_started_at: packet.timestamps?.first_started_at || null,
+  second_started_at: packet.timestamps?.second_started_at || null,
+  failure: packet.failure || null,
+  next_action: packet.next_action || null
+}, null, 2));
+NODE
+
+PLAN_HAS_BLOCKER_LANGUAGE=false
+PLAN_HAS_OPERATIONAL_BOUNDARY=false
+PLAN_HAS_RADAR_RECURRENCE_GATE=false
+PLUGIN_HAS_INCOMPLETE_GATE=false
+PLUGIN_HAS_NOT_OPERATIONAL=false
+PLUGIN_HAS_RADAR_RECURRENCE_GATE=false
+HOST_HAS_INCOMPLETE_GATE=false
+HOST_HAS_NOT_OPERATIONAL=false
+HOST_HAS_RADAR_RECURRENCE_GATE=false
+
+if grep -q 'ready_at_utc=2026-06-30T04:06:11.893Z' "$PLAN_PATH"; then
+  PLAN_HAS_BLOCKER_LANGUAGE=true
+fi
+if grep -q 'No operational scheduled recurrence' "$PLAN_PATH" || grep -q 'not wall-clock recurrence' "$PLAN_PATH"; then
+  PLAN_HAS_OPERATIONAL_BOUNDARY=true
+fi
+if grep -q 'job-radar-live-recurrence-controlled-proof' "$PLAN_PATH"; then
+  PLAN_HAS_RADAR_RECURRENCE_GATE=true
+fi
+if grep -q 'Incomplete Gate' "$PLUGIN_SKILL"; then
+  PLUGIN_HAS_INCOMPLETE_GATE=true
+fi
+if grep -q 'not yet an operational tracker' "$PLUGIN_SKILL"; then
+  PLUGIN_HAS_NOT_OPERATIONAL=true
+fi
+if grep -q 'job-radar-live-recurrence-proof' "$PLUGIN_SKILL"; then
+  PLUGIN_HAS_RADAR_RECURRENCE_GATE=true
+fi
+if grep -q 'Incomplete Gate' "$HOST_SKILL"; then
+  HOST_HAS_INCOMPLETE_GATE=true
+fi
+if grep -q 'not yet an operational tracker' "$HOST_SKILL"; then
+  HOST_HAS_NOT_OPERATIONAL=true
+fi
+if grep -q 'job-radar-live-recurrence-proof' "$HOST_SKILL"; then
+  HOST_HAS_RADAR_RECURRENCE_GATE=true
+fi
+
+jq -n \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg plan_path "$PLAN_PATH" \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg artifact_dir "$ARTIFACT_DIR" \
+  --arg operational_packet "${OPERATIONAL_PACKET#$REPO_ROOT/}" \
+  --arg one_day_packet "${ONE_DAY_PACKET#$REPO_ROOT/}" \
+  --arg radar_recurrence_packet "${RADAR_RECURRENCE_PACKET#$REPO_ROOT/}" \
+  --arg source_family_packet "${SOURCE_FAMILY_PACKET#$REPO_ROOT/}" \
+  --argjson missing_proofs "$MISSING_PROOFS" \
+  --argjson invalid_json_proofs "$INVALID_JSON_PROOFS" \
+  --argjson missing_or_nonexecutable_scripts "$MISSING_OR_NONEXECUTABLE_SCRIPTS" \
+  --argjson plan_has_blocker_language "$PLAN_HAS_BLOCKER_LANGUAGE" \
+  --argjson plan_has_operational_boundary "$PLAN_HAS_OPERATIONAL_BOUNDARY" \
+  --argjson plan_has_radar_recurrence_gate "$PLAN_HAS_RADAR_RECURRENCE_GATE" \
+  --argjson plugin_has_incomplete_gate "$PLUGIN_HAS_INCOMPLETE_GATE" \
+  --argjson plugin_has_not_operational "$PLUGIN_HAS_NOT_OPERATIONAL" \
+  --argjson plugin_has_radar_recurrence_gate "$PLUGIN_HAS_RADAR_RECURRENCE_GATE" \
+  --argjson host_has_incomplete_gate "$HOST_HAS_INCOMPLETE_GATE" \
+  --argjson host_has_not_operational "$HOST_HAS_NOT_OPERATIONAL" \
+  --argjson host_has_radar_recurrence_gate "$HOST_HAS_RADAR_RECURRENCE_GATE" \
+  --slurpfile proofs "$PROOF_ARTIFACTS" \
+  --slurpfile scripts "$SCRIPT_ARTIFACTS" \
+  --slurpfile operational "$ARTIFACT_DIR/operational-audit-status.json" \
+  --slurpfile one_day "$ARTIFACT_DIR/one-day-status.json" \
+  --slurpfile radar_recurrence "$ARTIFACT_DIR/radar-recurrence-status.json" \
+  '($one_day[0].gate // "unknown") as $one_day_gate
+  | ($radar_recurrence[0].gate // "unknown") as $radar_recurrence_gate
+  | ($operational[0].valid_controlled_block // false) as $operational_valid
+  | {
+    feature: "job_hunting_implementation_plan_audit",
+    status: (
+      if ($missing_proofs > 0 or $invalid_json_proofs > 0 or $missing_or_nonexecutable_scripts > 0 or ($operational_valid | not))
+      then "blocked"
+      elif ($one_day_gate == "passed" and $radar_recurrence_gate == "passed")
+      then "promotion_ready_subject_to_fresh_operational_audit"
+      elif ($one_day_gate == "ready_for_rerun" or $radar_recurrence_gate == "ready_for_rerun")
+      then "rerun_required"
+      elif ($one_day_gate == "waiting_wall_clock" or $radar_recurrence_gate == "waiting_wall_clock")
+      then "hold_wall_clock"
+      else "blocked"
+      end
+    ),
+    audit_decision: (
+      if ($missing_proofs > 0 or $invalid_json_proofs > 0 or $missing_or_nonexecutable_scripts > 0 or ($operational_valid | not))
+      then "block"
+      elif ($one_day_gate == "passed" and $radar_recurrence_gate == "passed")
+      then "hold_for_fresh_operational_audit"
+      elif ($one_day_gate == "ready_for_rerun" or $radar_recurrence_gate == "ready_for_rerun")
+      then "block"
+      elif ($one_day_gate == "waiting_wall_clock" or $radar_recurrence_gate == "waiting_wall_clock")
+      then "hold"
+      else "block"
+      end
+    ),
+    created_at: $created_at,
+    proof_root: $proof_root,
+    artifact_dir: $artifact_dir,
+    plan_path: $plan_path,
+    user_visible_claim: (
+      if $one_day_gate == "passed" and $radar_recurrence_gate == "passed" then
+        "Arcwell job-hunting implementation has many local and bounded production-data proof slices, and the preserved one-day refresh and controlled live-radar recurrence gates have passed; operational promotion still needs a fresh operational audit in the current state."
+      elif $radar_recurrence_gate == "passed" then
+        "Arcwell job-hunting implementation has many local and bounded production-data proof slices, and the controlled live-radar recurrence gate has passed; operational promotion is still held on the preserved one-day refresh gate."
+      else
+        "Arcwell job-hunting implementation has many local and bounded production-data proof slices, but operational promotion is held until the preserved one-day refresh gate and controlled live-radar recurrence gate both pass, then a fresh operational audit no longer blocks weekly_refresh."
+      end
+    ),
+    proof_inputs: {
+      operational_packet: $operational_packet,
+      one_day_packet: $one_day_packet,
+      radar_recurrence_packet: $radar_recurrence_packet,
+      source_family_packet: $source_family_packet
+    },
+    counts: {
+      required_proof_packets: ($proofs | length),
+      missing_proofs: $missing_proofs,
+      invalid_json_proofs: $invalid_json_proofs,
+      referenced_scripts: ($scripts | length),
+      missing_or_nonexecutable_scripts: $missing_or_nonexecutable_scripts
+    },
+    gates: {
+      required_proofs_exist: ($missing_proofs == 0),
+      required_json_valid: ($invalid_json_proofs == 0),
+      referenced_scripts_executable: ($missing_or_nonexecutable_scripts == 0),
+      operational_audit_controlled_block_valid: $operational_valid,
+      one_day_refresh_gate: $one_day[0],
+      radar_recurrence_gate: $radar_recurrence[0],
+      claim_boundary_text: {
+        plan_has_blocker_language: $plan_has_blocker_language,
+        plan_has_operational_boundary: $plan_has_operational_boundary,
+        plan_has_radar_recurrence_gate: $plan_has_radar_recurrence_gate,
+        plugin_has_incomplete_gate: $plugin_has_incomplete_gate,
+        plugin_has_not_operational: $plugin_has_not_operational,
+        plugin_has_radar_recurrence_gate: $plugin_has_radar_recurrence_gate,
+        host_has_incomplete_gate: $host_has_incomplete_gate,
+        host_has_not_operational: $host_has_not_operational,
+        host_has_radar_recurrence_gate: $host_has_radar_recurrence_gate
+      }
+    },
+    proof_packets: $proofs,
+    script_artifacts: $scripts,
+    blockers: [
+      if $missing_proofs > 0 then "\($missing_proofs) required proof packet references are missing" else empty end,
+      if $invalid_json_proofs > 0 then "\($invalid_json_proofs) JSON proof packets are invalid" else empty end,
+      if $missing_or_nonexecutable_scripts > 0 then "\($missing_or_nonexecutable_scripts) referenced job proof scripts are missing or not executable" else empty end,
+      if ($operational_valid | not) then "latest operational audit packet does not show the expected controlled weekly_refresh block shape" else empty end,
+      if $one_day_gate == "waiting_wall_clock" then "one-day refresh gate is waiting for real elapsed time before rerun" else empty end,
+      if $one_day_gate == "ready_for_rerun" then "one-day refresh gate is ready, but the preserved proof root has not been rerun" else empty end,
+      if $one_day_gate == "invalid_ready_at" then "one-day refresh packet has no parseable ready_at_utc" else empty end,
+      if $radar_recurrence_gate == "waiting_wall_clock" then "controlled live-radar recurrence gate is waiting for its real cadence window before rerun" else empty end,
+      if $radar_recurrence_gate == "ready_for_rerun" then "controlled live-radar recurrence gate is ready, but the preserved proof root has not been rerun" else empty end,
+      if $radar_recurrence_gate == "invalid_ready_at" then "controlled live-radar recurrence packet has no parseable ready_at_utc" else empty end,
+      if $radar_recurrence_gate == "failed_elapsed_check" then "controlled live-radar recurrence packet failed the elapsed-time check" else empty end
+    ],
+    next_actions: [
+      if $one_day_gate == "waiting_wall_clock" then $one_day[0].next_action else empty end,
+      if $one_day_gate == "ready_for_rerun" then $one_day[0].next_action else empty end,
+      if $radar_recurrence_gate == "waiting_wall_clock" then $radar_recurrence[0].next_action else empty end,
+      if $radar_recurrence_gate == "ready_for_rerun" then $radar_recurrence[0].next_action else empty end,
+      if ($one_day_gate == "passed" and $radar_recurrence_gate == "passed") then "Rerun scripts/job-operational-audit-proof and this aggregate audit before promoting job hunting to Operational." else empty end
+    ],
+    non_claims: [
+      "This aggregate audit does not fetch new job sources.",
+      "This aggregate audit does not send applications or outreach.",
+      "This aggregate audit does not prove exhaustive market coverage.",
+      "This aggregate audit does not satisfy the one-day wall-clock gate by itself.",
+      "This aggregate audit does not satisfy the controlled live-radar recurrence gate by itself.",
+      "This aggregate audit does not make copied proof homes equivalent to the user operational home."
+    ],
+    adversarial_review_judgment: (
+      if ($missing_proofs == 0 and $invalid_json_proofs == 0 and $missing_or_nonexecutable_scripts == 0 and $operational_valid and ($one_day_gate == "waiting_wall_clock" or $radar_recurrence_gate == "waiting_wall_clock"))
+      then (
+        if $radar_recurrence_gate == "passed" then
+          "Hold. The implementation plan is well-evidenced for local and bounded production-data slices, and the controlled live-radar recurrence proof has passed, but the operational claim must stay blocked until the preserved one-day refresh proof is rerun after its real wall-clock gate."
+        else
+          "Hold. The implementation plan is well-evidenced for local and bounded production-data slices, but the operational claim must stay blocked until the preserved one-day refresh proof and controlled live-radar recurrence proof are rerun after their real wall-clock gates."
+        end
+      )
+      elif ($missing_proofs == 0 and $invalid_json_proofs == 0 and $missing_or_nonexecutable_scripts == 0 and $operational_valid and $one_day_gate == "passed" and $radar_recurrence_gate == "passed")
+      then "Hold for a fresh operational audit. The wall-clock packets passed, but promotion still needs the operational audit to stop blocking weekly_refresh in the same current state."
+      else "Block. One or more evidence, executable, operational-audit, or wall-clock gates are not satisfied."
+      end
+    )
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+STATUS="$(jq -r '.status' "$ARTIFACT_DIR/proof-packet.json")"
+DECISION="$(jq -r '.audit_decision' "$ARTIFACT_DIR/proof-packet.json")"
+echo "[job-implementation-plan-audit-proof] proof packet: $ARTIFACT_DIR/proof-packet.json"
+echo "[job-implementation-plan-audit-proof] status: $STATUS"
+echo "[job-implementation-plan-audit-proof] decision: $DECISION"
+
+if [ "$STATUS" = "blocked" ] || [ "$STATUS" = "rerun_required" ]; then
+  exit 2
+fi

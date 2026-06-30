@@ -1,0 +1,548 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in jq sqlite3 python3; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the job operational audit proof." >&2
+    exit 2
+  fi
+done
+
+RUN_STAMP="${ARCWELL_JOB_OPERATIONAL_AUDIT_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_OPERATIONAL_AUDIT_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-operational-audit-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_JOB_OPERATIONAL_AUDIT_HOME:-$PROOF_ROOT/home}"
+DB="$ARCWELL_HOME/arcwell.sqlite3"
+SCOPE="London agent platform roles"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[job-operational-audit-proof] %s\n' "$*"
+}
+
+PROVIDER_PID=""
+cleanup() {
+  if [ -n "${PROVIDER_PID:-}" ]; then
+    kill "$PROVIDER_PID" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+fail() {
+  printf '[job-operational-audit-proof] BLOCKED: %s\n' "$*" >&2
+  exit 2
+}
+
+require_json_value() {
+  local value="$1"
+  local label="$2"
+  if [ -z "$value" ] || [ "$value" = "null" ]; then
+    fail "missing $label"
+  fi
+}
+
+assert_json() {
+  local file="$1"
+  local filter="$2"
+  local label="$3"
+  if ! jq -e "$filter" "$file" >/dev/null; then
+    fail "$label failed for $file"
+  fi
+}
+
+assert_sql_count() {
+  local sql="$1"
+  local expected="$2"
+  local label="$3"
+  local actual
+  actual="$(sqlite3 "$DB" "$sql")"
+  if [ "$actual" != "$expected" ]; then
+    fail "$label expected $expected, got $actual"
+  fi
+}
+
+log "proof root: $PROOF_ROOT"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+
+"$ARCWELL_BIN" job profile-add \
+  --label "Chris Chabot" \
+  --current-resume-source "proof-fixture:current-resume" \
+  --github-profile "https://github.com/chrischabot" \
+  --blog-url "https://chabot.dev" \
+  >"$ARTIFACT_DIR/profile.json"
+PROFILE_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/profile.json")"
+require_json_value "$PROFILE_ID" "profile id"
+
+"$ARCWELL_BIN" job evidence-add "$PROFILE_ID" \
+  --title "Open Cloud" \
+  --evidence-type "github" \
+  --visibility "public" \
+  --summary "Public project showing cloud and developer-tooling work." \
+  --proof-url "https://github.com/chrischabot/opencloud" \
+  --source-date "2026-06-28" \
+  --confidence "verified" \
+  --tag "developer-tools" \
+  --tag "agents" \
+  --safe-application-text "Built public developer tooling around cloud workflows." \
+  >"$ARTIFACT_DIR/evidence.json"
+EVIDENCE_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/evidence.json")"
+require_json_value "$EVIDENCE_ID" "evidence id"
+
+"$ARCWELL_BIN" job source-add \
+  --source-family "company" \
+  --name "Example AI careers" \
+  --url "https://example.com/careers" \
+  --market-scope "london" \
+  --refresh-policy "manual" \
+  >"$ARTIFACT_DIR/source.json"
+SOURCE_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/source.json")"
+require_json_value "$SOURCE_ID" "source id"
+
+"$ARCWELL_BIN" job role-add \
+  --company "Example AI" \
+  --role-title "Staff Agent Platform Engineer" \
+  --canonical-url "https://example.com/careers/staff-agent-platform-engineer" \
+  --source-family "company" \
+  --source-url "https://example.com/careers/staff-agent-platform-engineer" \
+  --source-confidence "canonical_confirmed" \
+  --date-accessed "2026-06-29T08:00:00Z" \
+  --posting-freshness "same_day" \
+  --location "London or remote Europe" \
+  --work-mode "hybrid_or_remote" \
+  --company-stage-or-size "startup" \
+  --role-seniority "staff" \
+  --requirement "agent systems" \
+  --requirement "developer tooling" \
+  --implied-business-problem "The company needs reliable agent infrastructure for developers." \
+  --why-they-might-need-user "Public work maps to agent and developer-tooling problems." \
+  --evidence-card-id "$EVIDENCE_ID" \
+  --cluster "agent-platform" \
+  --current-status "live" \
+  >"$ARTIFACT_DIR/role-observed.json"
+OBSERVED_ROLE_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/role-observed.json")"
+require_json_value "$OBSERVED_ROLE_ID" "observed role id"
+
+"$ARCWELL_BIN" job role-add \
+  --company "Closed AI" \
+  --role-title "Developer Tools Lead" \
+  --canonical-url "https://closed.example/jobs/devtools-lead" \
+  --source-family "company" \
+  --source-url "https://closed.example/jobs/devtools-lead" \
+  --source-confidence "canonical_confirmed" \
+  --date-accessed "2026-06-29T08:00:00Z" \
+  --posting-freshness "same_day" \
+  --location "London" \
+  --work-mode "remote" \
+  --company-stage-or-size "startup" \
+  --role-seniority "lead" \
+  --requirement "developer tools" \
+  --implied-business-problem "Improve developer workflows." \
+  --why-they-might-need-user "Public cloud tooling evidence maps to the role." \
+  --evidence-card-id "$EVIDENCE_ID" \
+  --cluster "developer-tools" \
+  --current-status "live" \
+  >"$ARTIFACT_DIR/role-closed.json"
+CLOSED_ROLE_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/role-closed.json")"
+require_json_value "$CLOSED_ROLE_ID" "closed role id"
+
+"$ARCWELL_BIN" job role-add \
+  --company "Stale AI" \
+  --role-title "Staff Platform Engineer" \
+  --canonical-url "https://stale.example/jobs/staff-platform" \
+  --source-family "company" \
+  --source-url "https://stale.example/jobs/staff-platform" \
+  --source-confidence "canonical_confirmed" \
+  --date-accessed "2026-06-29T08:00:00Z" \
+  --posting-freshness "same_day" \
+  --location "London" \
+  --work-mode "hybrid" \
+  --company-stage-or-size "startup" \
+  --role-seniority "staff" \
+  --requirement "platform engineering" \
+  --implied-business-problem "Build developer-facing systems." \
+  --why-they-might-need-user "Agent tooling evidence maps to the role." \
+  --evidence-card-id "$EVIDENCE_ID" \
+  --cluster "agent-platform" \
+  --current-status "live" \
+  >"$ARTIFACT_DIR/role-stale.json"
+STALE_ROLE_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/role-stale.json")"
+require_json_value "$STALE_ROLE_ID" "stale role id"
+
+"$ARCWELL_BIN" job score-add "$OBSERVED_ROLE_ID" \
+  --profile-id "$PROFILE_ID" \
+  --role-fit 5 \
+  --domain-fit 5 \
+  --evidence-fit 5 \
+  --geo-work-fit 5 \
+  --stage-fit 4.5 \
+  --practical-odds 4.5 \
+  --interest-energy 5 \
+  --evidence-card-id "$EVIDENCE_ID" \
+  --explanation "Strong controlled fit fixture for operational audit proof." \
+  >"$ARTIFACT_DIR/score.json"
+
+"$ARCWELL_BIN" job score-add "$CLOSED_ROLE_ID" \
+  --profile-id "$PROFILE_ID" \
+  --role-fit 4 \
+  --domain-fit 4 \
+  --evidence-fit 4 \
+  --geo-work-fit 5 \
+  --stage-fit 4 \
+  --practical-odds 3 \
+  --interest-energy 3 \
+  --evidence-card-id "$EVIDENCE_ID" \
+  --explanation "Controlled target-profile application-history fixture." \
+  >"$ARTIFACT_DIR/score-closed.json"
+
+"$ARCWELL_BIN" job source-health-add "$SOURCE_ID" \
+  --status "healthy" \
+  --http-status 200 \
+  --fetched-count 1 \
+  --accepted-count 1 \
+  --rejected-count 0 \
+  --note "Initial controlled refresh." \
+  >"$ARTIFACT_DIR/source-health-first.json"
+FIRST_HEALTH_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/source-health-first.json")"
+require_json_value "$FIRST_HEALTH_ID" "first source health id"
+
+"$ARCWELL_BIN" job refresh "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --observed-role-id "$OBSERVED_ROLE_ID" \
+  --source-health-id "$FIRST_HEALTH_ID" \
+  --proof-level "local_proof" \
+  >"$ARTIFACT_DIR/refresh-first.json"
+
+"$ARCWELL_BIN" job source-health-add "$SOURCE_ID" \
+  --status "partial" \
+  --http-status 200 \
+  --error-code "controlled_partial" \
+  --fetched-count 3 \
+  --accepted-count 1 \
+  --rejected-count 2 \
+  --note "Second controlled refresh with stale and closed roles." \
+  >"$ARTIFACT_DIR/source-health-second.json"
+SECOND_HEALTH_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/source-health-second.json")"
+require_json_value "$SECOND_HEALTH_ID" "second source health id"
+
+"$ARCWELL_BIN" job refresh "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --observed-role-id "$OBSERVED_ROLE_ID" \
+  --stale-role-id "$STALE_ROLE_ID" \
+  --closed-role-id "$CLOSED_ROLE_ID" \
+  --source-health-id "$SECOND_HEALTH_ID" \
+  --proof-level "local_proof" \
+  >"$ARTIFACT_DIR/refresh-second.json"
+
+"$ARCWELL_BIN" job packet-create "$OBSERVED_ROLE_ID" \
+  --profile-id "$PROFILE_ID" \
+  --evidence-card-id "$EVIDENCE_ID" \
+  --resume-emphasis "Lead with public developer tooling and agent systems." \
+  --tailored-bullet "Built public cloud developer tooling." \
+  --outreach-note "Example AI appears to need reliable agent tooling discipline." \
+  --proof-links-json '{"github":"https://github.com/chrischabot/opencloud"}' \
+  --likely-objection "No direct company-specific evidence yet." \
+  --interview-story "Public project technical story." \
+  --question-to-ask "Where do agent workflows fail today?" \
+  >"$ARTIFACT_DIR/packet-draft.json"
+PACKET_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/packet-draft.json")"
+require_json_value "$PACKET_ID" "packet id"
+
+"$ARCWELL_BIN" job packet-approve "$PACKET_ID" \
+  --reviewer-note "Reviewed for local operational audit proof." \
+  >"$ARTIFACT_DIR/packet-approved.json"
+
+"$ARCWELL_BIN" job contact-add \
+  --name "Known Staff Engineer" \
+  --role-title "Staff Engineer" \
+  --public-profile-url "https://example.com/team/known-staff-engineer" \
+  --source-url "https://example.com/team" \
+  --relationship-status "known" \
+  --relevance "engineer" \
+  --note "User confirmed this contact can route a relevant intro." \
+  >"$ARTIFACT_DIR/contact-known.json"
+CONTACT_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/contact-known.json")"
+require_json_value "$CONTACT_ID" "contact id"
+
+"$ARCWELL_BIN" job intro-add "$OBSERVED_ROLE_ID" \
+  --contact-id "$CONTACT_ID" \
+  --path-type "mutual" \
+  --confidence "confirmed" \
+  --next-action "Ask for an intro using the approved packet." \
+  --status "ask" \
+  >"$ARTIFACT_DIR/intro-known.json"
+
+"$ARCWELL_BIN" job application-record "$CLOSED_ROLE_ID" \
+  --status "rejected" \
+  --applied-at "2026-06-20" \
+  --outcome-note "Controlled local operational audit fixture." \
+  >"$ARTIFACT_DIR/application-history.json"
+
+"$ARCWELL_BIN" job weekly-report "$PROFILE_ID" --scope "$SCOPE" >"$ARTIFACT_DIR/weekly-report.json"
+REPORT_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/weekly-report.json")"
+require_json_value "$REPORT_ID" "weekly report id"
+
+"$ARCWELL_BIN" email authorize jobs@example.com --send >"$ARTIFACT_DIR/email-authorization.json"
+cat >"$ARCWELL_HOME/arcwell-policy.toml" <<'POLICY'
+[[rules]]
+id = "allow-job-operational-audit-email-send"
+effect = "allow"
+action = "channel.send"
+package = "arcwell-email"
+provider = "cloudflare_email"
+source = "job_weekly_report_delivery"
+channel = "email"
+subject = "email:jobs@example.com"
+target = "jobs@example.com"
+reason = "allow controlled operational audit weekly job report email send"
+priority = 10
+
+[[rules]]
+id = "allow-job-operational-audit-radar-replay-enqueue"
+effect = "allow"
+action = "worker.enqueue"
+package = "arcwell-job-hunting"
+source = "job_radar_refresh"
+reason = "allow controlled operational audit replay job radar enqueue"
+priority = 10
+POLICY
+
+"$ARCWELL_BIN" job weekly-report-delivery-prepare "$REPORT_ID" \
+  --channel email \
+  --subject jobs@example.com \
+  --target jobs@example.com \
+  --idempotency-key job-operational-audit-prepared \
+  >"$ARTIFACT_DIR/delivery-prepared.json"
+assert_json "$ARTIFACT_DIR/delivery-prepared.json" '.delivery.status == "prepared"' "delivery preparation status"
+PREPARED_DELIVERY_ID="$(jq -r '.delivery.id // empty' "$ARTIFACT_DIR/delivery-prepared.json")"
+require_json_value "$PREPARED_DELIVERY_ID" "prepared delivery id"
+
+"$ARCWELL_BIN" job operational-audit "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --min-elapsed-hours 0 \
+  >"$ARTIFACT_DIR/operational-audit-before-provider.json"
+
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" '.decision == "block"' "pre-provider operational audit blocks"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" '.refresh_audit.minimum_elapsed_hours == 24' "pre-provider operational audit keeps one-day gate"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" '.outreach_readiness.ready_count == 1' "pre-provider outreach readiness local slice"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" '.weekly_delivery_status_counts.prepared == 1' "pre-provider delivery preparation counted"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" '.weekly_report_delivery_attempt_count == 0' "pre-provider delivery attempt count"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" 'any(.gates[]; .name == "outreach_readiness" and .decision == "pass")' "pre-provider outreach gate passes"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" 'any(.gates[]; .name == "delivery_preparation" and .decision == "pass")' "pre-provider delivery prep gate passes"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" 'any(.gates[]; .name == "weekly_refresh" and .decision == "block")' "pre-provider weekly refresh gate blocks"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" 'any(.gates[]; .name == "provider_delivery" and .decision == "block")' "pre-provider provider delivery gate blocks"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" 'any(.gates[]; .name == "scheduled_radar" and .decision == "block")' "pre-provider scheduled radar gate blocks"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" 'any(.operational_blockers[]; contains("not at least 24 hours apart"))' "pre-provider one-day blocker present"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" 'any(.operational_blockers[]; contains("No successful provider delivery attempt"))' "pre-provider provider delivery blocker present"
+assert_json "$ARTIFACT_DIR/operational-audit-before-provider.json" 'any(.operational_blockers[]; contains("repeated completed job_radar_refresh"))' "pre-provider scheduled radar blocker present"
+
+assert_sql_count "SELECT COUNT(*) FROM channel_delivery_attempts;" "0" "provider delivery attempt count"
+
+PROVIDER_PORT_FILE="$ARTIFACT_DIR/mock-provider-port.txt"
+PROVIDER_REQUEST_LOG="$ARTIFACT_DIR/mock-provider-request.jsonl"
+python3 - "$PROVIDER_PORT_FILE" "$PROVIDER_REQUEST_LOG" <<'PY' &
+import json
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+port_file, request_log = sys.argv[1], sys.argv[2]
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("content-length", "0") or "0")
+        body = self.rfile.read(length).decode("utf-8", "replace")
+        with open(request_log, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps({
+                "method": "POST",
+                "path": self.path,
+                "authorization": self.headers.get("authorization"),
+                "body": body,
+            }) + "\n")
+        payload = b'{"success":true,"result":{"id":"job_operational_audit_email_ok"}}'
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *_args):
+        return
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+with open(port_file, "w", encoding="utf-8") as handle:
+    handle.write(str(server.server_port))
+server.handle_request()
+PY
+PROVIDER_PID="$!"
+for _ in $(seq 1 50); do
+  if [ -s "$PROVIDER_PORT_FILE" ]; then
+    break
+  fi
+  sleep 0.1
+done
+PROVIDER_PORT="$(cat "$PROVIDER_PORT_FILE" 2>/dev/null || true)"
+require_json_value "$PROVIDER_PORT" "mock provider port"
+PROVIDER_API_BASE="http://127.0.0.1:$PROVIDER_PORT"
+
+"$ARCWELL_BIN" job weekly-report-delivery-send "$PREPARED_DELIVERY_ID" \
+  --email-account-id acct123 \
+  --email-api-token TOKEN \
+  --email-from agent@example.com \
+  --api-base "$PROVIDER_API_BASE" \
+  >"$ARTIFACT_DIR/delivery-sent.json"
+for _ in $(seq 1 50); do
+  if ! kill -0 "$PROVIDER_PID" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+if kill -0 "$PROVIDER_PID" >/dev/null 2>&1; then
+  kill "$PROVIDER_PID" >/dev/null 2>&1 || true
+  PROVIDER_PID=""
+  fail "mock provider was not called by weekly-report-delivery-send"
+fi
+wait "$PROVIDER_PID" 2>/dev/null || true
+PROVIDER_PID=""
+assert_json "$ARTIFACT_DIR/delivery-sent.json" '.delivery.status == "sent"' "provider-send delivery status"
+assert_json "$ARTIFACT_DIR/delivery-sent.json" '.channel_message.status == "sent"' "provider-send channel message status"
+assert_json "$ARTIFACT_DIR/delivery-sent.json" '.channel_delivery_attempt.ok == true' "provider-send attempt ok"
+assert_sql_count "SELECT COUNT(*) FROM channel_delivery_attempts;" "1" "provider-send delivery attempt count"
+if ! grep -q "/accounts/acct123/email/sending/send" "$PROVIDER_REQUEST_LOG"; then
+  fail "mock provider request did not hit the expected Cloudflare Email path"
+fi
+
+"$ARCWELL_BIN" job operational-audit "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --min-elapsed-hours 0 \
+  >"$ARTIFACT_DIR/operational-audit.json"
+
+assert_json "$ARTIFACT_DIR/operational-audit.json" '.decision == "block"' "operational audit blocks after provider send"
+assert_json "$ARTIFACT_DIR/operational-audit.json" '.refresh_audit.minimum_elapsed_hours == 24' "operational audit keeps one-day gate after provider send"
+assert_json "$ARTIFACT_DIR/operational-audit.json" '.outreach_readiness.ready_count == 1' "outreach readiness local slice after provider send"
+assert_json "$ARTIFACT_DIR/operational-audit.json" '.weekly_delivery_status_counts.sent == 1' "sent delivery counted"
+assert_json "$ARTIFACT_DIR/operational-audit.json" '.weekly_report_delivery_attempt_count == 1' "provider delivery attempt counted"
+assert_json "$ARTIFACT_DIR/operational-audit.json" 'any(.gates[]; .name == "provider_delivery" and .decision == "pass")' "provider delivery gate passes after provider send"
+assert_json "$ARTIFACT_DIR/operational-audit.json" 'any(.gates[]; .name == "weekly_refresh" and .decision == "block")' "weekly refresh still blocks after provider send"
+assert_json "$ARTIFACT_DIR/operational-audit.json" 'any(.gates[]; .name == "scheduled_radar" and .decision == "block")' "scheduled radar still blocks after provider send"
+assert_json "$ARTIFACT_DIR/operational-audit.json" 'any(.operational_blockers[]; contains("not at least 24 hours apart"))' "one-day blocker still present"
+assert_json "$ARTIFACT_DIR/operational-audit.json" '([.operational_blockers[] | select(contains("No successful provider delivery attempt"))] | length) == 0' "provider delivery blocker cleared"
+assert_json "$ARTIFACT_DIR/operational-audit.json" 'any(.operational_blockers[]; contains("repeated completed job_radar_refresh"))' "scheduled radar blocker still present"
+assert_json "$ARTIFACT_DIR/operational-audit.json" 'any(.non_claims[]; contains("not wall-clock recurrence proof"))' "recurrence non-claim present"
+
+cat >"$ARTIFACT_DIR/radar-snapshot-body.html" <<'HTML'
+<main>
+  <h1>Example Careers</h1>
+  <p>Agent infrastructure and developer tooling roles in London.</p>
+  <a href="/careers/staff-agent-platform-engineer">Staff Agent Platform Engineer - London hybrid</a>
+</main>
+HTML
+
+jq -n \
+  --arg source_id "$SOURCE_ID" \
+  --rawfile body "$ARTIFACT_DIR/radar-snapshot-body.html" \
+  '{($source_id): {fetched_url: "https://example.com/careers", body: $body}}' \
+  >"$ARTIFACT_DIR/radar-source-snapshots.json"
+
+"$ARCWELL_BIN" job radar-enqueue "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --source-id "$SOURCE_ID" \
+  --source-snapshots-path "$ARTIFACT_DIR/radar-source-snapshots.json" \
+  >"$ARTIFACT_DIR/radar-enqueue-1.json"
+
+"$ARCWELL_BIN" job radar-enqueue "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --source-id "$SOURCE_ID" \
+  --source-snapshots-path "$ARTIFACT_DIR/radar-source-snapshots.json" \
+  >"$ARTIFACT_DIR/radar-enqueue-2.json"
+
+"$ARCWELL_BIN" worker run-once --max-jobs 10 >"$ARTIFACT_DIR/radar-worker-run-once.json"
+
+assert_json "$ARTIFACT_DIR/radar-worker-run-once.json" '
+  .completed >= 2
+  and .failed == 0
+  and .dead_lettered == 0
+  and ([.jobs[] | select(
+    .kind == "job_radar_refresh"
+    and .status == "completed"
+    and .input_json.profile_id == "'"$PROFILE_ID"'"
+    and .input_json.scope == "'"$SCOPE"'"
+    and .input_json.fetch_live == false
+    and .input_json.proof_level == "local_proof"
+    and .result_json.action == "job_radar_refresh"
+    and .result_json.scope == "'"$SCOPE"'"
+    and .result_json.fetch_live == false
+    and .result_json.proof_level == "local_proof"
+    and .result_json.source_count == 1
+    and .result_json.error_count == 0
+  )] | length) >= 2
+' "two replay-backed radar jobs completed"
+
+"$ARCWELL_BIN" job operational-audit "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --min-elapsed-hours 0 \
+  >"$ARTIFACT_DIR/operational-audit-after-radar.json"
+
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" '.decision == "block"' "operational audit still blocks after radar jobs"
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" '.refresh_audit.minimum_elapsed_hours == 24' "operational audit keeps one-day gate after radar jobs"
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" '.weekly_report_delivery_attempt_count == 1' "provider delivery attempt still counted after radar jobs"
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" '.job_radar_completed_count >= 2' "scheduled radar completed count after radar jobs"
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" '.job_radar_dead_lettered_count == 0' "scheduled radar dead-letter count after radar jobs"
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" 'any(.gates[]; .name == "provider_delivery" and .decision == "pass")' "provider delivery gate still passes after radar jobs"
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" 'any(.gates[]; .name == "scheduled_radar" and .decision == "pass")' "scheduled radar gate passes after radar jobs"
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" 'any(.gates[]; .name == "weekly_refresh" and .decision == "block")' "weekly refresh still blocks after radar jobs"
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" 'any(.operational_blockers[]; contains("not at least 24 hours apart"))' "one-day blocker still present after radar jobs"
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" '([.operational_blockers[] | select(contains("No successful provider delivery attempt"))] | length) == 0' "provider delivery blocker remains cleared"
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" '([.operational_blockers[] | select(contains("repeated completed job_radar_refresh"))] | length) == 0' "scheduled radar blocker cleared"
+assert_json "$ARTIFACT_DIR/operational-audit-after-radar.json" 'any(.non_claims[]; contains("not wall-clock recurrence proof"))' "recurrence non-claim remains present after radar jobs"
+
+jq -n \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg arcwell_home "$ARCWELL_HOME" \
+  --arg profile_id "$PROFILE_ID" \
+  --arg report_id "$REPORT_ID" \
+  --slurpfile before_provider "$ARTIFACT_DIR/operational-audit-before-provider.json" \
+  --slurpfile sent "$ARTIFACT_DIR/delivery-sent.json" \
+  --slurpfile audit "$ARTIFACT_DIR/operational-audit.json" \
+  --slurpfile radar_worker "$ARTIFACT_DIR/radar-worker-run-once.json" \
+  --slurpfile audit_after_radar "$ARTIFACT_DIR/operational-audit-after-radar.json" \
+  '{
+    feature: "job_operational_audit",
+    status: "controlled_local_proof",
+    proof_root: $proof_root,
+    arcwell_home: $arcwell_home,
+    profile_id: $profile_id,
+    report_id: $report_id,
+    user_visible_claim: "Arcwell can compile a read-only operational readiness audit from durable job-hunting state, recognize a successful controlled provider delivery attempt plus two completed replay-backed job_radar_refresh worker jobs, and still block operational promotion on the real one-day refresh gate.",
+    before_provider_gate: ($before_provider[0].gates | map(select(.name == "provider_delivery")) | .[0]),
+    before_radar_gate: ($audit[0].gates | map(select(.name == "scheduled_radar")) | .[0]),
+    controlled_provider_delivery: $sent[0].delivery,
+    controlled_provider_attempt: $sent[0].channel_delivery_attempt,
+    controlled_radar_worker: $radar_worker[0],
+    after_radar_gate: ($audit_after_radar[0].gates | map(select(.name == "scheduled_radar")) | .[0]),
+    audit_decision: $audit_after_radar[0].decision,
+    gates: ($audit_after_radar[0].gates | map({name, decision, missing_requirements})),
+    counts: {
+      weekly_report_count: $audit_after_radar[0].weekly_report_count,
+      weekly_report_delivery_attempt_count: $audit_after_radar[0].weekly_report_delivery_attempt_count,
+      outreach_ready_count: $audit_after_radar[0].outreach_readiness.ready_count,
+      job_radar_completed_count: $audit_after_radar[0].job_radar_completed_count,
+      job_radar_dead_lettered_count: $audit_after_radar[0].job_radar_dead_lettered_count,
+      job_radar_attempt_count: $audit_after_radar[0].job_radar_attempt_count
+    },
+    operational_blockers: $audit_after_radar[0].operational_blockers,
+    non_claims: $audit_after_radar[0].non_claims
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"
+log "PASS"

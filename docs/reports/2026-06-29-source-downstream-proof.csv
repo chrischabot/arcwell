@@ -1,0 +1,101 @@
+cluster_id,topic,cluster_status,cluster_source_refs,cluster_updated_at,report_id,report_status,report_updated_at
+kcl-99265a40c66f3d28,"Philschmid: MCP and agent infrastructure",candidate,2,2026-06-29T12:03:47.261038+00:00,krpt-2de64e3990c99b28,draft,2026-06-29T12:48:40.606297+00:00
+kcl-99265a40c66f3d28,"Philschmid: MCP and agent infrastructure",candidate,2,2026-06-29T12:03:47.261038+00:00,krpt-774010cd43664bb4,draft,2026-06-29T12:03:47.262565+00:00
+kcl-4e3b86dcac9fc965,"Ollama: release and launch activity",candidate,2,2026-06-29T12:03:47.070032+00:00,krpt-73300066285bfda4,draft,2026-06-29T12:46:31.917208+00:00
+kcl-4e3b86dcac9fc965,"Ollama: release and launch activity",candidate,2,2026-06-29T12:03:47.070032+00:00,krpt-055858f7fe9d220b,draft,2026-06-29T12:03:47.071548+00:00
+kcl-89694347c77d6c64,"Nomic Ai: model release activity",candidate,2,2026-06-29T12:03:46.877657+00:00,krpt-bdb7312791ad3564,draft,2026-06-29T12:48:40.653089+00:00
+kcl-89694347c77d6c64,"Nomic Ai: model release activity",candidate,2,2026-06-29T12:03:46.877657+00:00,krpt-b7445d905c736e78,draft,2026-06-29T12:03:46.879066+00:00
+kcl-bc5c9a8a52404661,"Nomic Ai: benchmarks and evaluation",candidate,2,2026-06-29T12:03:46.680030+00:00,krpt-bb147f43100bf3e4,draft,2026-06-29T12:48:40.897223+00:00
+kcl-bc5c9a8a52404661,"Nomic Ai: benchmarks and evaluation",candidate,2,2026-06-29T12:03:46.680030+00:00,krpt-e1d80a35cdd82e8b,draft,2026-06-29T12:03:46.681529+00:00
+kcl-f09f96f488dade0b,"Neuml: benchmarks and evaluation",candidate,2,2026-06-29T12:03:46.455514+00:00,krpt-2f236ea11f28bec8,draft,2026-06-29T12:50:48.274391+00:00
+kcl-f09f96f488dade0b,"Neuml: benchmarks and evaluation",candidate,2,2026-06-29T12:03:46.455514+00:00,krpt-0eca1a02459858ed,draft,2026-06-29T12:03:46.457193+00:00
+kcl-4202608b762183e1,"Mozilla Ai: model release activity",candidate,2,2026-06-29T12:03:46.224839+00:00,krpt-944884584608ab1f,draft,2026-06-29T12:45:25.845297+00:00
+kcl-4202608b762183e1,"Mozilla Ai: model release activity",candidate,2,2026-06-29T12:03:46.224839+00:00,krpt-96696ec327d521cc,draft,2026-06-29T12:03:46.226251+00:00
+kcl-5d18319ab13e912c,"Modelscope: benchmarks and evaluation",candidate,2,2026-06-29T12:03:46.026979+00:00,krpt-642c128dbbcc3e94,draft,2026-06-29T12:45:25.987863+00:00
+kcl-5d18319ab13e912c,"Modelscope: benchmarks and evaluation",candidate,2,2026-06-29T12:03:46.026979+00:00,krpt-dcacc49dfbba5762,draft,2026-06-29T12:03:46.028602+00:00
+kcl-e91da5c561a2be2f,"Modal Labs: model release activity",candidate,2,2026-06-29T12:03:45.824048+00:00,krpt-6756525eedd03d82,draft,2026-06-29T12:51:53.765950+00:00
+kcl-e91da5c561a2be2f,"Modal Labs: model release activity",candidate,2,2026-06-29T12:03:45.824048+00:00,krpt-76c2499ed607620f,draft,2026-06-29T12:03:45.825555+00:00
+kcl-84b433bb405763bf,"Mlabonne: model release activity",candidate,2,2026-06-29T12:03:45.629087+00:00,krpt-92095a50226ff175,draft,2026-06-29T12:48:40.695733+00:00
+kcl-84b433bb405763bf,"Mlabonne: model release activity",candidate,2,2026-06-29T12:03:45.629087+00:00,krpt-357c9df71cae5798,draft,2026-06-29T12:03:45.630579+00:00
+kcl-fd8d9b1e7bd8cc59,"Ml Explore: model release activity",candidate,2,2026-06-29T12:03:45.430165+00:00,krpt-b1cd139118077db1,draft,2026-06-29T12:03:45.431628+00:00
+kcl-5921464bef277063,"Milvus Io: model release activity",candidate,2,2026-06-29T12:03:45.221187+00:00,krpt-bf709a4d5569d4bd,draft,2026-06-29T12:03:45.222787+00:00
+kcl-809a1b2593cadcb1,"Mem0ai: model release activity",candidate,2,2026-06-29T12:03:45.014286+00:00,krpt-765b90f36fd97bf0,draft,2026-06-29T12:46:32.010653+00:00
+kcl-809a1b2593cadcb1,"Mem0ai: model release activity",candidate,2,2026-06-29T12:03:45.014286+00:00,krpt-a92656c186b76618,draft,2026-06-29T12:03:45.015785+00:00
+kcl-00c43cd5020fec04,"Mckaywrigley: AI usage practices",candidate,2,2026-06-29T12:03:44.793803+00:00,krpt-9eae72f0f32a59c5,draft,2026-06-29T12:03:44.795266+00:00
+kcl-be74186f4ac431c9,"Teknium1: AI usage practices",candidate,3,2026-06-29T12:03:44.599754+00:00,krpt-b9829f5684081b1b,draft,2026-06-29T12:48:40.938106+00:00
+kcl-be74186f4ac431c9,"Teknium1: AI usage practices",candidate,3,2026-06-29T12:03:44.599754+00:00,krpt-09bee111cbc4ee51,draft,2026-06-29T12:03:44.602291+00:00
+kcl-2f5b56966468e148,"Stanford Crfm: benchmarks and evaluation",candidate,3,2026-06-29T12:03:44.319476+00:00,krpt-5aa2dc14279d225d,draft,2026-06-29T12:43:17.939888+00:00
+kcl-2f5b56966468e148,"Stanford Crfm: benchmarks and evaluation",candidate,3,2026-06-29T12:03:44.319476+00:00,krpt-53fe8d73dfbfe963,draft,2026-06-29T12:03:44.322122+00:00
+kcl-c0f092fda9bec199,"Rasbt: model release activity",candidate,3,2026-06-29T12:03:44.029864+00:00,krpt-411a99f10f817f0f,draft,2026-06-29T12:49:42.381598+00:00
+kcl-c0f092fda9bec199,"Rasbt: model release activity",candidate,3,2026-06-29T12:03:44.029864+00:00,krpt-6cc2948147de8e32,draft,2026-06-29T12:03:44.032608+00:00
+kcl-d758e8c88eb23e0a,"Princeton Nlp: benchmarks and evaluation",candidate,3,2026-06-29T12:03:43.739806+00:00,krpt-0e199aac56d1e4db,draft,2026-06-29T12:03:43.748777+00:00
+kcl-17d2e0735d5aafb6,"Plandex Ai: AI usage practices",candidate,3,2026-06-29T12:03:43.442217+00:00,krpt-0b55b0ca7392b2c3,draft,2026-06-29T12:03:43.444918+00:00
+kcl-4733c5ae731a50c7,"Modelscope: model release activity",candidate,3,2026-06-29T12:03:43.154415+00:00,krpt-f00bf86a245a6a6f,draft,2026-06-29T12:45:25.887697+00:00
+kcl-4733c5ae731a50c7,"Modelscope: model release activity",candidate,3,2026-06-29T12:03:43.154415+00:00,krpt-51b86067945fed3a,draft,2026-06-29T12:03:43.157375+00:00
+kcl-ec10d381869b2703,"Marqo Ai: benchmarks and evaluation",candidate,3,2026-06-29T12:03:42.847540+00:00,krpt-fffa32e6a7923925,draft,2026-06-29T12:50:48.229592+00:00
+kcl-ec10d381869b2703,"Marqo Ai: benchmarks and evaluation",candidate,3,2026-06-29T12:03:42.847540+00:00,krpt-a996213fe5bf3c6c,draft,2026-06-29T12:03:42.850340+00:00
+kcl-7a04370635bc2227,"Sgl Project: model release activity",candidate,4,2026-06-29T12:03:42.543699+00:00,krpt-af589e51e2606701,draft,2026-06-29T12:03:42.554265+00:00
+kcl-1c84cb515d243010,"Promptfoo: AI usage practices",candidate,4,2026-06-29T12:03:42.154106+00:00,krpt-4a849f65dc1b0f56,draft,2026-06-29T12:03:42.158220+00:00
+kcl-7e776c1f1e62159d,"Predibase: model release activity",candidate,4,2026-06-29T12:03:41.764031+00:00,krpt-83eefe753b784919,draft,2026-06-29T12:46:31.961626+00:00
+kcl-7e776c1f1e62159d,"Predibase: model release activity",candidate,4,2026-06-29T12:03:41.764031+00:00,krpt-e76bff532b07ebd1,draft,2026-06-29T12:03:41.768104+00:00
+kcl-aa9c6aa8669288e5,"Modelscope: release and launch activity",candidate,4,2026-06-29T12:03:41.372062+00:00,krpt-2c0b2d2243f4731e,draft,2026-06-29T12:48:40.844215+00:00
+kcl-aa9c6aa8669288e5,"Modelscope: release and launch activity",candidate,4,2026-06-29T12:03:41.372062+00:00,krpt-7ec97f4bb854bdeb,draft,2026-06-29T12:03:41.376446+00:00
+kcl-2d7fdc48a9ffb0b5,"Meta Llama: model release activity",candidate,4,2026-06-29T12:03:40.978428+00:00,krpt-119ab3c6c9433b42,draft,2026-06-29T12:03:40.982654+00:00
+kcl-31f04d228d159309,"Mem0ai: release and launch activity",candidate,4,2026-06-29T12:03:40.603908+00:00,krpt-af2d6a8681345ef3,draft,2026-06-29T12:43:17.980370+00:00
+kcl-31f04d228d159309,"Mem0ai: release and launch activity",candidate,4,2026-06-29T12:03:40.603908+00:00,krpt-6e75bba5fdaf7b82,draft,2026-06-29T12:03:40.607953+00:00
+kcl-a189f289df4d525f,"Reka Ai: release and launch activity",candidate,5,2026-06-29T12:03:40.227560+00:00,krpt-98c6242bd12e9fd5,draft,2026-06-29T12:48:40.795993+00:00
+kcl-a189f289df4d525f,"Reka Ai: release and launch activity",candidate,5,2026-06-29T12:03:40.227560+00:00,krpt-1f67e8f33c136af8,draft,2026-06-29T12:03:40.233761+00:00
+kcl-67e308af39fbdba4,"Princeton Nlp: release and launch activity",candidate,5,2026-06-29T12:03:39.736710+00:00,krpt-52d2943df3101b39,draft,2026-06-29T12:03:39.742865+00:00
+kcl-87f024c68e5cfacb,"Predibase: release and launch activity",candidate,5,2026-06-29T12:03:39.244072+00:00,krpt-40321f77a6e37d37,draft,2026-06-29T12:03:39.249961+00:00
+kcl-8acaf47d3afd5b1f,"Tensorzero: release and launch activity",candidate,6,2026-06-29T12:03:38.763634+00:00,krpt-e6570edd21e8b61e,draft,2026-06-29T12:46:32.058807+00:00
+kcl-8acaf47d3afd5b1f,"Tensorzero: release and launch activity",candidate,6,2026-06-29T12:03:38.763634+00:00,krpt-b9146215f410d5c2,draft,2026-06-29T12:03:38.772438+00:00
+kcl-e8611344bca77892,"Sgl Project: release and launch activity",candidate,6,2026-06-29T12:03:38.171606+00:00,krpt-e34487d82b97d215,draft,2026-06-29T12:03:38.180985+00:00
+kcl-c03e5ac02f11aa8a,"Rasbt: release and launch activity",candidate,6,2026-06-29T12:03:37.550273+00:00,krpt-0dd46380214f59e3,draft,2026-06-29T12:48:40.980653+00:00
+kcl-c03e5ac02f11aa8a,"Rasbt: release and launch activity",candidate,6,2026-06-29T12:03:37.550273+00:00,krpt-708d105669febb2d,draft,2026-06-29T12:03:37.559453+00:00
+kcl-e0dfd78b4c0f91b6,"Philschmid: release and launch activity",candidate,6,2026-06-29T12:03:36.952359+00:00,krpt-f464447450c19282,draft,2026-06-29T12:03:36.961266+00:00
+kcl-c0e7412b541533dd,"Teknium1: release and launch activity",candidate,7,2026-06-29T12:03:36.359019+00:00,krpt-7933f2611b35d6f7,draft,2026-06-29T12:48:41.031355+00:00
+kcl-c0e7412b541533dd,"Teknium1: release and launch activity",candidate,7,2026-06-29T12:03:36.359019+00:00,krpt-169dc7741c58a7c1,draft,2026-06-29T12:03:36.371291+00:00
+kcl-53677ea3586a57ad,"Stanford Crfm: release and launch activity",candidate,7,2026-06-29T12:03:35.630277+00:00,krpt-10213f7f9c96618d,draft,2026-06-29T12:03:35.646828+00:00
+kcl-7c03a440072ea0dd,"Smallcloudai: release and launch activity",candidate,7,2026-06-29T12:03:34.946131+00:00,krpt-3231f3d3826fa658,draft,2026-06-29T12:45:26.091202+00:00
+kcl-7c03a440072ea0dd,"Smallcloudai: release and launch activity",candidate,7,2026-06-29T12:03:34.946131+00:00,krpt-9755116ff5bb2e58,draft,2026-06-29T12:03:34.959293+00:00
+kcl-177ce915c96bcef2,"Qdrant: release and launch activity",candidate,7,2026-06-29T12:03:34.251766+00:00,krpt-1bff692476bd4c65,draft,2026-06-29T12:03:34.263574+00:00
+kcl-fa43f6145f9c9be7,"Pydantic: release and launch activity",candidate,7,2026-06-29T12:03:33.608700+00:00,krpt-7918a4815d880533,draft,2026-06-29T12:03:33.623262+00:00
+kcl-e7f29d6302174e83,"Pinecone Io: release and launch activity",candidate,7,2026-06-29T12:03:32.949014+00:00,krpt-9ebe1eebab7b6742,draft,2026-06-29T12:03:32.962058+00:00
+kcl-cff46b35aba54e4a,"Togethercomputer: release and launch activity",candidate,9,2026-06-29T12:03:32.237897+00:00,krpt-c6d6ae8461f51d0b,draft,2026-06-29T12:49:42.428683+00:00
+kcl-cff46b35aba54e4a,"Togethercomputer: release and launch activity",candidate,9,2026-06-29T12:03:32.237897+00:00,krpt-068c383f333f1864,draft,2026-06-29T12:03:32.259714+00:00
+kcl-909474e6a0cd7e09,"Tailscale: release and launch activity",candidate,9,2026-06-29T12:03:31.325291+00:00,krpt-c2f37d17844fdf8c,draft,2026-06-29T12:03:31.356987+00:00
+kcl-9a1d91717def42e9,"Swyxio: release and launch activity",candidate,9,2026-06-29T12:03:30.483308+00:00,krpt-550bb017c4cce85e,draft,2026-06-29T12:48:40.741076+00:00
+kcl-9a1d91717def42e9,"Swyxio: release and launch activity",candidate,9,2026-06-29T12:03:30.483308+00:00,krpt-246b4cea19c6692d,draft,2026-06-29T12:03:30.511918+00:00
+kcl-4a1bf6bdc4bb4508,"Sweepai: release and launch activity",candidate,9,2026-06-29T12:03:29.625091+00:00,krpt-b8eac132912d7ed3,draft,2026-06-29T12:45:25.935977+00:00
+kcl-4a1bf6bdc4bb4508,"Sweepai: release and launch activity",candidate,9,2026-06-29T12:03:29.625091+00:00,krpt-2791746d31b6abc7,draft,2026-06-29T12:03:29.650451+00:00
+kcl-d9c64101e90ebdea,"Supabase: release and launch activity",candidate,9,2026-06-29T12:03:28.826138+00:00,krpt-10994461c5a8c0d3,draft,2026-06-29T12:03:28.844747+00:00
+kcl-dc10453a7d202460,"Stanfordnlp: release and launch activity",candidate,9,2026-06-29T12:03:28.026342+00:00,krpt-c27fc451a22644a2,draft,2026-06-29T12:50:48.174910+00:00
+kcl-dc10453a7d202460,"Stanfordnlp: release and launch activity",candidate,9,2026-06-29T12:03:28.026342+00:00,krpt-00ea91fbaad0bf66,draft,2026-06-29T12:03:28.044373+00:00
+kcl-295c1ca4d86beb8f,"Smol Ai: release and launch activity",candidate,9,2026-06-29T12:03:27.250305+00:00,krpt-a69ead64b533ac8b,draft,2026-06-29T12:03:27.268810+00:00
+kcl-967179233446269a,"Simonw: release and launch activity",candidate,9,2026-06-29T12:03:26.465894+00:00,krpt-2cfe419c5060c498,draft,2026-06-29T12:03:26.483944+00:00
+kcl-945581a50e802aec,"Replit: release and launch activity",candidate,9,2026-06-29T12:03:25.689990+00:00,krpt-2be071b356f46609,draft,2026-06-29T12:03:25.708498+00:00
+kcl-fbd5b6d1d99aabd4,"Replicate: release and launch activity",candidate,9,2026-06-29T12:03:24.885830+00:00,krpt-98a18f8c12fb5841,draft,2026-06-29T12:03:24.904782+00:00
+kcl-67d51d66cdd75769,"Sourcegraph: release and launch activity",candidate,10,2026-06-29T12:03:24.108721+00:00,krpt-b80bc60b6ea67314,draft,2026-06-29T12:45:26.032669+00:00
+kcl-67d51d66cdd75769,"Sourcegraph: release and launch activity",candidate,10,2026-06-29T12:03:24.108721+00:00,krpt-3cc888b62e32174f,draft,2026-06-29T12:03:24.138659+00:00
+kcl-57f2e99b74eed2ab,"OpenAI: release and launch activity",candidate,6,2026-06-29T11:46:46.373071+00:00,krpt-29e2ff8aa9804737,draft,2026-06-29T11:46:46.381560+00:00
+kcl-ae57bdffb9f862cf,"Nomic Ai: release and launch activity",candidate,6,2026-06-29T11:46:45.885558+00:00,krpt-c6b943f1ab0b0aa5,draft,2026-06-29T12:29:56.104518+00:00
+kcl-ae57bdffb9f862cf,"Nomic Ai: release and launch activity",candidate,6,2026-06-29T11:46:45.885558+00:00,krpt-c6fc6fb90592140e,draft,2026-06-29T11:46:45.894217+00:00
+kcl-de5a909faa438f6a,"Mozilla Ai: release and launch activity",candidate,6,2026-06-29T11:46:45.422991+00:00,krpt-5358803743d4e29e,draft,2026-06-29T11:46:45.431547+00:00
+kcl-91830fa87bde5af2,"Meta Llama: release and launch activity",candidate,6,2026-06-29T11:46:44.947162+00:00,krpt-4da7d8c04ca41a27,draft,2026-06-29T11:46:44.955738+00:00
+kcl-1117f2732c230ecd,"Lmstudio Ai: release and launch activity",candidate,6,2026-06-29T11:46:44.485077+00:00,krpt-7b40ac8771e41c6b,draft,2026-06-29T12:31:03.398296+00:00
+kcl-1117f2732c230ecd,"Lmstudio Ai: release and launch activity",candidate,6,2026-06-29T11:46:44.485077+00:00,krpt-33033ab09c678028,draft,2026-06-29T11:46:44.493322+00:00
+kcl-11e8b43e747c7e0f,"Langflow Ai: release and launch activity",candidate,6,2026-06-29T11:46:44.017706+00:00,krpt-0507fcdf66434dc9,draft,2026-06-29T11:46:44.026142+00:00
+kcl-d6083d4c0117e365,"Langchain Ai: release and launch activity",candidate,6,2026-06-29T11:46:43.557483+00:00,krpt-6aaf6510d857718a,draft,2026-06-29T11:46:43.566236+00:00
+kcl-982322fb7eaa9465,"Lancedb: release and launch activity",candidate,6,2026-06-29T11:46:43.098658+00:00,krpt-1895e83c5540a9c7,draft,2026-06-29T12:31:03.451457+00:00
+kcl-982322fb7eaa9465,"Lancedb: release and launch activity",candidate,6,2026-06-29T11:46:43.098658+00:00,krpt-fc8890aed2daf148,draft,2026-06-29T11:46:43.106861+00:00
+kcl-e46c0f93e6fb761b,"Guardrails Ai: release and launch activity",candidate,6,2026-06-29T11:46:42.625506+00:00,krpt-70a2e284d04ce04d,draft,2026-06-29T11:46:42.646453+00:00
+kcl-2aca0d46733b00e0,"Google: release and launch activity",candidate,6,2026-06-29T11:46:42.157379+00:00,krpt-4475894a83cd018d,draft,2026-06-29T11:46:42.165946+00:00
+kcl-cddd5bdcf18b040e,"Neuml: release and launch activity",candidate,7,2026-06-29T11:45:20.864167+00:00,krpt-933ed24d08d71f87,draft,2026-06-29T12:18:11.436687+00:00
+kcl-cddd5bdcf18b040e,"Neuml: release and launch activity",candidate,7,2026-06-29T11:45:20.864167+00:00,krpt-8301ac448f53077e,draft,2026-06-29T11:45:20.875097+00:00
+kcl-3d5f60d5dddcada9,"Mlabonne: release and launch activity",candidate,7,2026-06-29T11:45:20.316829+00:00,krpt-994cce84d276d3f9,draft,2026-06-29T12:18:11.494493+00:00
+kcl-3d5f60d5dddcada9,"Mlabonne: release and launch activity",candidate,7,2026-06-29T11:45:20.316829+00:00,krpt-8536280fe38ab4c9,draft,2026-06-29T11:45:20.328190+00:00
+kcl-1d3af746ee9d803d,"Milvus Io: release and launch activity",candidate,7,2026-06-29T11:45:19.778782+00:00,krpt-10277530243aafad,draft,2026-06-29T11:45:19.795997+00:00
+kcl-01472bcb742fa9f2,"Microsoft: release and launch activity",candidate,7,2026-06-29T11:45:19.250628+00:00,krpt-46e38ece7ef05d17,draft,2026-06-29T11:45:19.261933+00:00
+kcl-befc2bdc9fd98156,"Marqo Ai: release and launch activity",candidate,7,2026-06-29T11:45:18.718408+00:00,krpt-ad04efc0e58c707d,draft,2026-06-29T12:18:11.549667+00:00
+kcl-befc2bdc9fd98156,"Marqo Ai: release and launch activity",candidate,7,2026-06-29T11:45:18.718408+00:00,krpt-64a02ecc261ae7d0,draft,2026-06-29T11:45:18.729408+00:00
+kcl-4306e5174f73d3f2,"Letta Ai: release and launch activity",candidate,7,2026-06-29T11:45:18.191710+00:00,krpt-8498cbdca5f4c94e,draft,2026-06-29T11:45:18.208146+00:00

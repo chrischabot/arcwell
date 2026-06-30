@@ -258,6 +258,14 @@ pub(crate) fn job_packet_export_tool_properties() -> Value {
     })
 }
 
+pub(crate) fn job_packet_export_set_tool_properties() -> Value {
+    json!({
+        "profile_id": string_schema("Job candidate profile id. Every packet must belong to this profile."),
+        "packet_ids": array_schema("Approved application packet ids to export as one local review set.", string_schema("Application packet id.")),
+        "out_dir": string_schema("Local output directory for the generated Markdown packets and manifest.")
+    })
+}
+
 pub(crate) fn job_application_tool_properties() -> Value {
     json!({
         "role_id": string_schema("Job role card id."),
@@ -314,6 +322,13 @@ pub(crate) fn job_company_targets_tool_properties() -> Value {
     })
 }
 
+pub(crate) fn job_outreach_readiness_tool_properties() -> Value {
+    json!({
+        "profile_id": string_schema("Job candidate profile id."),
+        "limit": integer_schema("Maximum scored role entries to classify, clamped to 1..100. This does not send outreach.")
+    })
+}
+
 pub(crate) fn job_manual_refresh_tool_properties() -> Value {
     json!({
         "profile_id": string_schema("Job candidate profile id."),
@@ -332,6 +347,41 @@ pub(crate) fn job_refresh_audit_tool_properties() -> Value {
         "profile_id": string_schema("Job candidate profile id."),
         "scope": string_schema("Refresh scope label."),
         "min_elapsed_hours": number_schema("Minimum elapsed hours required between the first and latest completed run. Use 24 for the operational one-day gate.")
+    })
+}
+
+pub(crate) fn job_operational_audit_tool_properties() -> Value {
+    json!({
+        "profile_id": string_schema("Job candidate profile id."),
+        "scope": string_schema("Operational audit scope label."),
+        "min_elapsed_hours": number_schema("Minimum elapsed hours required for the one-day refresh gate. Values below 24 are raised to 24 for this operational audit.")
+    })
+}
+
+pub(crate) fn job_weekly_report_delivery_prepare_tool_properties() -> Value {
+    json!({
+        "report_id": string_schema("Job weekly report id."),
+        "channel": enum_schema("Prepared delivery channel. No provider send is attempted.", &["email", "telegram"]),
+        "subject": string_schema("Authorized channel subject, such as email:user@example.com or telegram:chat:123."),
+        "target": string_schema("Delivery target/destination for the prepared message."),
+        "idempotency_key": string_schema("Optional stable key for deliberate replays. Defaults from report/channel/subject/target.")
+    })
+}
+
+pub(crate) fn job_weekly_report_delivery_send_tool_properties() -> Value {
+    json!({
+        "delivery_id": string_schema("Prepared weekly job report delivery id."),
+        "telegram_bot_token": string_schema("Telegram bot token for telegram deliveries."),
+        "email_account_id": string_schema("Cloudflare account id for email deliveries."),
+        "email_api_token": string_schema("Cloudflare Email API token for email deliveries."),
+        "email_from": string_schema("Verified sender address for email deliveries."),
+        "api_base": string_schema("Optional provider API base for controlled local proof or configured provider override.")
+    })
+}
+
+pub(crate) fn job_weekly_report_deliveries_tool_properties() -> Value {
+    json!({
+        "report_id": string_schema("Optional job weekly report id filter.")
     })
 }
 

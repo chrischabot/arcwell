@@ -230,6 +230,42 @@ typing part of the name. Use the displayed command name from the picker.
   stale evidence, contradictions, uncited model answers, or untrusted sources.
 - `/import-claude` uses `arcwell import claude`.
 
+### Job Hunting
+
+- `$arcwell-codex:job-hunting` uses the local-proof job-hunting ledger and the
+  manual `arcwell job ...` / MCP surfaces when durable state is needed.
+- Job MCP tools now include `job_profile_add`, `job_profiles`,
+  `job_import_batch`, `job_evidence_add`, `job_evidence_list`,
+  `job_evidence_review_report`, `job_privacy_check`, `job_role_add`,
+  `job_roles`, `job_score_add`, `job_shortlist`,
+  `job_outreach_readiness`, `job_company_targets`, `job_packet_create`,
+  `job_packet_approve`, `job_packet_export`, `job_packet_export_set`,
+  `job_application_record`, `job_source_refresh`, `job_radar_schedule`,
+  `job_radar_enqueue`, `job_refresh_manual`, `job_refresh_audit`,
+  `job_operational_audit`, `job_weekly_report`,
+  `job_weekly_report_delivery_prepare`, `job_weekly_report_delivery_send`,
+  and `job_weekly_report_deliveries`.
+- These tools record and score manually supplied evidence/roles, enforce
+  privacy and source-confidence gates, compile local evidence-readiness reports,
+  create application packets, approve privacy-passing packet drafts before
+  packet-backed application records, export approved privacy-passing packets
+  to local Markdown, export approved packet sets to local Markdown plus a
+  manifest without recording sent/applied status, track application status,
+  import reviewed JSON packets, refresh one configured job source from
+  supplied page text/html or explicit live fetch, schedule or enqueue
+  replay-backed job-radar refresh jobs, compile local-proof company-target
+  scouting reports from durable company cards, reconcile caller-supplied
+  refresh observations, audit durable refresh history against the two-refresh
+  elapsed-time transition gate, compile local weekly reports, prepare
+  weekly-report channel messages after channel-send authorization and privacy
+  checks, and explicitly send prepared weekly-report messages through a
+  provider path that records delivery attempts.
+- They do not prove exhaustive live role discovery, broad market coverage,
+  operational scheduled recurrence, broad source-health recurrence, or
+  operational job radar. Weekly-report provider-send is still not recurrence,
+  live source discovery, application submission, or proof that any employer was
+  contacted.
+
 ### Watch Sources And Adapters
 
 - `/watch-rss` uses `wiki_enqueue_rss`.
@@ -329,7 +365,8 @@ Skills are the primary reusable behavior surface. In Codex they appear as `$...`
 - `$arcwell-codex:deep-research`: run the deep-only research workflow: source-map, gather, extract, refute, synthesize, audit, and write back.
 - `$arcwell-codex:research-audit`: adversarially check sources, claims, provenance, and uncertainty.
 - `$arcwell-codex:anti-mirage`: prevent fake-done status by requiring explicit claims, refutation tests, production-data proof gates, ops visibility, and honest promotion language for substantial features; trigger it before substantial work that adopts external/reference-product lessons, changes Arcwell capability claims, real-data pipelines, scheduled operation, delivery, reports, or done/production status.
-- `$arcwell-codex:technical-blog-content`: write, rewrite, audit, and select technical blog posts using artifact-first evidence, normal technical titles, public-shelf gates, explicit limitations, and no marketing-style credibility shortcuts.
+- `$arcwell-codex:technical-blog-content`: write, rewrite, audit, and select technical blog posts by identifying the real claim first, using receipts that prove that claim to readers, and rejecting test/build/clone chatter when it is not the subject.
+- `$arcwell-codex:job-hunting`: run a job-intelligence workflow for roles that match the user's senior developer-facing AI/devtools/platform profile, using live openings, role source cards, market clusters, explicit evidence mapping, skeptic passes, and concentric market logic across London, Europe, and global companies.
 - `$arcwell-codex:research-brief`: render concise artifacts from already-collected wiki/source-card evidence.
 - `$arcwell-codex:x-research`: import, search, report, and evaluate X evidence safely.
 - `$arcwell-codex:tidal-control`: list, inspect, create, and update TIDAL playlists, add resolved tracks, and favorite tracks/playlists from an existing authenticated TIDAL desktop session.

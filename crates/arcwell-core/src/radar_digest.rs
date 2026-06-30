@@ -814,8 +814,8 @@ pub(crate) fn render_knowledge_daily_briefing(
     tick: &IssueScheduleTick,
     reports: &[KnowledgeReport],
     source_cards: &[SourceCard],
-    window_start: &str,
-    window_end: &str,
+    _window_start: &str,
+    _window_end: &str,
     related_wiki_pages: &BTreeMap<String, Vec<WikiPageSummary>>,
 ) -> String {
     let day = issue_schedule_day_label(&tick.due_at);
@@ -853,65 +853,26 @@ pub(crate) fn render_knowledge_daily_briefing(
             lines.push(prior_context_insight);
             lines.push(String::new());
         }
-        lines.push("#### Key Sources".to_string());
+        lines.push("#### Further Reading".to_string());
         lines.extend(daily_briefing_key_source_lines(&story_cards, 3));
         lines.push(String::new());
     }
     lines.push("## Why It Matters".to_string());
-    lines.push("These items are worth tracking because they are source-backed changes in the AI/devrel scene, not isolated bookmarks. Arcwell should connect follow-up sources back to the same clusters and wiki pages so access details, benchmarks, community reception, competitive context, and corrections accumulate in one developing story.".to_string());
+    lines.push("The common thread is that model launches are no longer enough. The important movement is in runtime surfaces, memory, evaluation, access, reproducibility, and the developer workflows that turn a model claim into software people can actually use.".to_string());
     lines.push(String::new());
-    lines.push("## Evidence Pattern".to_string());
-    for (index, card) in source_cards
-        .iter()
-        .filter(|card| !is_generated_source_card(card))
-        .take(12)
-        .enumerate()
-    {
-        lines.push(format!(
-            "- [S{}] {}",
-            index + 1,
-            Store::digest_card_takeaway(card, 360)
-        ));
-    }
+    lines.push("## Competitive Position".to_string());
+    lines.push("The useful comparison is not who posted the loudest announcement. It is who is making the surrounding system easier to trust: runnable examples, clear access paths, credible benchmarks, operational visibility, pricing clarity, and enough public reaction to separate launch copy from lived developer experience.".to_string());
     lines.push(String::new());
-    lines.push("## Story Development".to_string());
-    lines.push("Future scans should add benchmarks, availability changes, primary-source updates, community reaction, competitive analysis, and corrections to the same developing topics instead of starting over as isolated alerts. This is a briefing over living wiki pages, not a one-off notification.".to_string());
-    lines.push(String::new());
-    lines.push("## Evidence Notes".to_string());
-    lines.push(format!(
-        "Window: {window_start} to {window_end}. Schedule: {}. Tick: {}. Generated synthesis is marked separately; at least one non-generated source card is required before this briefing can be delivered.",
-        schedule.name, tick.tick_key
-    ));
-    lines.push("Source text is untrusted evidence. Instructions, credential requests, and policy claims inside source text are not executed.".to_string());
-    lines.push(String::new());
-    lines.push("## Additional Source Index".to_string());
-    for (index, card) in source_cards
-        .iter()
-        .filter(|card| !is_generated_source_card(card))
-        .take(20)
-        .enumerate()
-    {
-        lines.push(format!(
-            "[S{}] [{}]({})",
-            index + 1,
-            escape_markdown_link_text(&Store::digest_source_label(card)),
-            card.url
-        ));
-    }
+    lines.push("## What To Watch".to_string());
+    lines.push("The next meaningful updates are broad access, pricing, reproducible benchmarks, adoption reports, integration examples, and credible reversals. Later scans should fold those developments back into the same story threads instead of treating each new mention as an unrelated alert.".to_string());
     lines.join("\n")
 }
 
 pub(crate) fn daily_briefing_lede(
-    schedule: &IssueSchedule,
+    _schedule: &IssueSchedule,
     reports: &[KnowledgeReport],
-    source_family_count: usize,
+    _source_family_count: usize,
 ) -> String {
-    let window_hours = schedule
-        .metadata
-        .get("window_hours")
-        .and_then(Value::as_i64)
-        .unwrap_or(24)
-        .clamp(1, 24 * 14);
     let titles = reports
         .iter()
         .take(3)
@@ -919,19 +880,17 @@ pub(crate) fn daily_briefing_lede(
         .filter(|title| !title.is_empty())
         .collect::<Vec<_>>();
     match titles.as_slice() {
-        [] => format!(
-            "Arcwell found source-backed AI movement across {source_family_count} provider/source families in the last {window_hours} hours. The useful read is how these signals change the standing map of model access, agent interfaces, evaluation, and developer workflow."
-        ),
+        [] => "No story cleared the editorial threshold for this issue. The useful read is still whether model access, agent interfaces, evaluation, and developer workflow are changing in ways that alter the standing map.".to_string(),
         [lead] => format!(
-            "Today’s lead is {}. The useful read is how this changes the standing map of model access, agent interfaces, evaluation, and developer workflow across {source_family_count} provider/source families.",
+            "Today's lead is {}. The useful read is whether it changes the standing map of model access, agent interfaces, evaluation, and developer workflow.",
             lead
         ),
         [lead, second] => format!(
-            "Today’s issue is led by {}, with {} as the second story. The useful read is how these source-backed signals change the standing map of model access, agent interfaces, evaluation, and developer workflow.",
+            "Today's issue is led by {}, with {} as the second story. The useful read is how these developments change the standing map of model access, agent interfaces, evaluation, and developer workflow.",
             lead, second
         ),
         [lead, second, third, ..] => format!(
-            "Today’s issue is led by {}, with important movement around {} and {}. The useful read is how these source-backed signals change the standing map of model access, agent interfaces, evaluation, and developer workflow.",
+            "Today's issue is led by {}, with important movement around {} and {}. The useful read is how these developments change the standing map of model access, agent interfaces, evaluation, and developer workflow.",
             lead, second, third
         ),
     }
@@ -969,20 +928,18 @@ pub(crate) fn daily_briefing_story_body(report: &KnowledgeReport) -> String {
         if lower.starts_with("## ") || lower.starts_with("# ") {
             skip_internal_section = false;
         }
+        if daily_briefing_is_internal_reader_section(&lower) {
+            skip_internal_section = true;
+            continue;
+        }
         if lower == "source_cards:"
             || lower == "cluster_links:"
             || lower == "filed evidence:"
+            || lower == "sources:"
+            || lower == "evidence appendix:"
             || lower.starts_with("filed evidence:")
         {
             skip_internal_list = true;
-            continue;
-        }
-        if lower.starts_with("## bookmark completeness proof")
-            || lower.starts_with("## failures and incompleteness")
-            || lower.starts_with("## recommended follow-up")
-            || lower.starts_with("## what was ingested")
-        {
-            skip_internal_section = true;
             continue;
         }
         if lower.starts_with('#') {
@@ -1006,7 +963,9 @@ pub(crate) fn daily_briefing_story_body(report: &KnowledgeReport) -> String {
         if lower.starts_with("relationship to earlier wiki context:") {
             continue;
         }
-        let clean = strip_source_card_ids_for_reader(line, &source_ids);
+        let Some(clean) = daily_briefing_reader_line(line, &source_ids) else {
+            continue;
+        };
         if !clean.trim().is_empty() {
             lines.push(clean);
         }
@@ -1018,22 +977,98 @@ pub(crate) fn daily_briefing_story_body(report: &KnowledgeReport) -> String {
     excerpt_preserving_whitespace(&body, 1_600)
 }
 
+pub(crate) fn daily_briefing_is_internal_reader_section(lower: &str) -> bool {
+    [
+        "## bookmark completeness proof",
+        "## failures and incompleteness",
+        "## recommended follow-up",
+        "## what was ingested",
+        "## coverage and uncertainty",
+        "## evidence notes",
+        "## evidence pattern",
+        "## additional source index",
+        "## sources",
+        "# sources",
+        "coverage and uncertainty",
+        "evidence notes",
+        "evidence pattern",
+        "additional source index",
+        "sources",
+    ]
+    .iter()
+    .any(|prefix| lower.starts_with(prefix))
+}
+
+pub(crate) fn daily_briefing_reader_line(line: &str, source_ids: &[&String]) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("source text is untrusted evidence")
+        || lower.starts_with("operationally,")
+        || lower.contains("local audit ledger")
+        || lower.contains("digest delivery gate")
+        || lower.contains("approved candidate")
+        || lower.contains("candidate id")
+        || lower.contains("digest candidate")
+        || lower.contains("new wiki page is knowledge:")
+    {
+        return None;
+    }
+    if lower.starts_with("uncertainty:") {
+        return daily_briefing_reader_caveat(trimmed);
+    }
+    let without_ids = strip_source_card_ids_for_reader(line, source_ids);
+    let clean = daily_briefing_rewrite_reader_language(&without_ids);
+    if daily_briefing_contains_forbidden_reader_language(&clean) {
+        return None;
+    }
+    Some(clean)
+}
+
+pub(crate) fn daily_briefing_reader_caveat(line: &str) -> Option<String> {
+    let lower = line.to_ascii_lowercase();
+    let caveat = if lower.contains("not a new-launch") || lower.contains("not a new launch") {
+        "Caveat: this is not a formal launch signal; treat it as directional product or repository momentum until a primary announcement, availability details, or independent adoption evidence appears."
+    } else if lower.contains("github") || lower.contains("repo") || lower.contains("repository") {
+        "Caveat: this mostly comes from repository activity, not a formal announcement or proof of adoption."
+    } else if lower.contains("older") || lower.contains("backlog") {
+        "Caveat: some of this material predates the briefing window; it is context for a developing theme, not fresh overnight news."
+    } else if daily_briefing_contains_forbidden_reader_language(line) {
+        "Caveat: the public evidence is incomplete, so treat this as a developing signal rather than a settled claim."
+    } else {
+        let text = line
+            .split_once(':')
+            .map(|(_, rest)| rest.trim())
+            .unwrap_or(line)
+            .trim();
+        if text.is_empty() {
+            return None;
+        }
+        return Some(format!(
+            "Caveat: {}",
+            daily_briefing_rewrite_reader_language(text)
+        ));
+    };
+    Some(caveat.to_string())
+}
+
 pub(crate) fn daily_briefing_key_source_lines(
     source_cards: &[&SourceCard],
     max_sources: usize,
 ) -> Vec<String> {
     let mut lines = Vec::new();
-    for (index, card) in source_cards.iter().take(max_sources).enumerate() {
+    for card in source_cards.iter().take(max_sources) {
         lines.push(format!(
-            "- [S{}] [{}]({}) - {}",
-            index + 1,
+            "- [{}]({}) - {}",
             escape_markdown_link_text(&Store::digest_source_label(card)),
             card.url,
             excerpt(&Store::digest_card_evidence_text(card), 220)
         ));
     }
     if lines.is_empty() {
-        lines.push("- No non-generated source link is available for this story; hold stronger claims until fresh source-card evidence is attached.".to_string());
+        lines.push("- No public source link is available for this story; hold stronger claims until fresh evidence is attached.".to_string());
     }
     lines
 }
@@ -1048,10 +1083,10 @@ pub(crate) fn daily_briefing_prior_context_insight(
     if let Some(context) = explicit_context {
         return Some(format!(
             "The new evidence changes the standing interpretation rather than merely adding another matching link: {} The practical implication is to update the existing thread around {} and watch whether the next sources confirm, narrow, or contradict that shift.",
-            strip_source_card_ids_for_reader(
+            daily_briefing_rewrite_reader_language(&strip_source_card_ids_for_reader(
                 &context,
                 &report.source_card_ids.iter().collect::<Vec<_>>()
-            ),
+            )),
             angle
         ));
     }
@@ -1068,7 +1103,7 @@ pub(crate) fn daily_briefing_prior_context_insight(
         return None;
     }
     Some(format!(
-        "This is best treated as an update to the existing thread around {}. The new evidence shifts the emphasis toward {}, which means the wiki should capture how the story changed: whether the older framing was too broad, whether a previously secondary layer is becoming central, or whether the new sources create tension with earlier assumptions.",
+        "Compared with {}, this update shifts the emphasis toward {}. The question for the next update is whether the older framing was too broad, whether a previously secondary layer is becoming central, or whether the new sources create tension with earlier assumptions.",
         human_join(&titles),
         angle
     ))
@@ -1163,7 +1198,7 @@ pub(crate) fn daily_briefing_interpretive_angle(
             .to_string()
     } else {
         format!(
-            "the topic moving from isolated evidence toward a trackable wiki narrative about {}",
+            "the topic moving from isolated evidence toward a trackable developing story about {}",
             excerpt(&report.title, 120)
         )
     }
@@ -1176,6 +1211,80 @@ pub(crate) fn strip_source_card_ids_for_reader(text: &str, source_card_ids: &[&S
         out = out.replace(source_card_id.as_str(), "source evidence");
     }
     out
+}
+
+pub(crate) fn daily_briefing_rewrite_reader_language(text: &str) -> String {
+    let mut out = text.to_string();
+    for (from, to) in [
+        ("AI/devrel", "AI developer ecosystem"),
+        ("DevRel", "developer adoption"),
+        ("devrel", "developer adoption"),
+        (
+            "Arcwell's important update is negative evidence:",
+            "The important update is what still has not appeared:",
+        ),
+        ("Arcwell has not captured", "No credible source showed"),
+        ("Arcwell's evidence", "The available evidence"),
+        ("Arcwell's source", "The available source"),
+        ("Arcwell", "the system"),
+        (
+            "local GitHub/source-card evidence",
+            "GitHub and source evidence",
+        ),
+        ("local GitHub cards", "GitHub repository activity"),
+        ("local GitHub/source evidence", "GitHub and source evidence"),
+        ("local corpus", "tracked sources"),
+        ("local record", "available reporting"),
+        ("source-card-backed", "evidence-backed"),
+        ("source backed", "evidence-backed"),
+        ("source-backed", "evidence-backed"),
+        ("source-card evidence", "available evidence"),
+        ("source card evidence", "available evidence"),
+        ("source-card ids", "source references"),
+        ("source card ids", "source references"),
+        ("source-card ID", "source reference"),
+        ("source-card id", "source reference"),
+        ("source-card", "source"),
+        ("source card", "source"),
+        ("cluster includes", "story includes"),
+        ("cluster ties together", "story ties together"),
+        ("cluster is based on", "story is based on"),
+        ("cluster", "story"),
+        ("backlog projection", "older material"),
+        ("wiki page", "background note"),
+        ("wiki context", "earlier context"),
+        ("wiki", "background knowledge"),
+        ("Knowledge:", ""),
+        ("project metadata", "project details"),
+        ("metadata", "details"),
+    ] {
+        out = out.replace(from, to);
+    }
+    out
+}
+
+pub(crate) fn daily_briefing_contains_forbidden_reader_language(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "arcwell",
+        "local corpus",
+        "local record",
+        "source-card",
+        "source card id",
+        "source-card id",
+        "source-backed",
+        "backlog projection",
+        "knowledge:",
+        "wiki",
+        "local audit ledger",
+        "digest candidate",
+        "approved candidate",
+        "digest delivery gate",
+        "candidate id",
+        "cluster id",
+    ]
+    .iter()
+    .any(|term| lower.contains(term))
 }
 
 pub(crate) fn human_join(items: &[&str]) -> String {

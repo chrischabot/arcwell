@@ -278,11 +278,18 @@ impl Store {
         let mut imported_items = Vec::new();
         let mut skipped_duplicates = 0;
         let mut rejected = 0;
+        let mut rejected_errors = Vec::new();
         for item in items {
             match parse_x_item_input(item).and_then(|input| self.insert_x_item(input)) {
                 Ok(Some(item)) => imported_items.push(item),
                 Ok(None) => skipped_duplicates += 1,
-                Err(_) => rejected += 1,
+                Err(error) => {
+                    rejected += 1;
+                    if rejected_errors.len() < 10 {
+                        rejected_errors
+                            .push(excerpt(&redact_secret_like_text(&error.to_string()), 500));
+                    }
+                }
             }
         }
         let report = XImportReport {
@@ -290,6 +297,7 @@ impl Store {
             imported: imported_items.len(),
             skipped_duplicates,
             rejected,
+            rejected_errors,
             pages_fetched: None,
             requested_limit: None,
             exhausted: None,

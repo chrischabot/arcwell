@@ -1,0 +1,443 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in jq sqlite3; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the job application pipeline proof." >&2
+    exit 2
+  fi
+done
+
+DEFAULT_SOURCE_PROOF="$REPO_ROOT/.arcwell-dev/proofs/job-company-target-expanded-packet-export-proof-20260629T052450Z-51935"
+SOURCE_PROOF="${ARCWELL_JOB_APPLICATION_PIPELINE_SOURCE_PROOF:-$DEFAULT_SOURCE_PROOF}"
+SOURCE_HOME="$SOURCE_PROOF/home"
+SOURCE_PACKET="$SOURCE_PROOF/artifacts/proof-packet.json"
+
+if [ ! -f "$SOURCE_HOME/arcwell.sqlite3" ]; then
+  cat >&2 <<EOF
+BLOCKED: source proof home not found: $SOURCE_HOME
+Set ARCWELL_JOB_APPLICATION_PIPELINE_SOURCE_PROOF to an expanded packet-export proof.
+EOF
+  exit 2
+fi
+
+if [ ! -f "$SOURCE_PACKET" ]; then
+  echo "BLOCKED: source proof packet not found: $SOURCE_PACKET" >&2
+  exit 2
+fi
+
+RUN_STAMP="${ARCWELL_JOB_APPLICATION_PIPELINE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_APPLICATION_PIPELINE_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-application-pipeline-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_JOB_APPLICATION_PIPELINE_HOME:-$PROOF_ROOT/home}"
+DB="$ARCWELL_HOME/arcwell.sqlite3"
+SCOPE="Controlled application pipeline proof"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[job-application-pipeline-proof] %s\n' "$*"
+}
+
+fail() {
+  printf '[job-application-pipeline-proof] BLOCKED: %s\n' "$*" >&2
+  exit 2
+}
+
+sql_value() {
+  sqlite3 "$DB" "$1"
+}
+
+record_application() {
+  local role_id="$1"
+  local packet_id="$2"
+  local status="$3"
+  local applied_at="$4"
+  local follow_up_at="$5"
+  local outcome_note="$6"
+
+  cmd=("$ARCWELL_BIN" job application-record "$role_id" --status "$status")
+  if [ -n "$packet_id" ]; then
+    cmd+=(--packet-id "$packet_id")
+  fi
+  if [ -n "$applied_at" ]; then
+    cmd+=(--applied-at "$applied_at")
+  fi
+  if [ -n "$follow_up_at" ]; then
+    cmd+=(--follow-up-at "$follow_up_at")
+  fi
+  if [ -n "$outcome_note" ]; then
+    cmd+=(--outcome-note "$outcome_note")
+  fi
+  "${cmd[@]}"
+}
+
+require_json_value() {
+  local value="$1"
+  local label="$2"
+  if [ -z "$value" ] || [ "$value" = "null" ]; then
+    fail "missing $label"
+  fi
+}
+
+log "proof root: $PROOF_ROOT"
+log "source proof: $SOURCE_PROOF"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+
+cp -R "$SOURCE_HOME/." "$ARCWELL_HOME/"
+printf '%s\n' "$SOURCE_PROOF" >"$ARTIFACT_DIR/source-proof.txt"
+printf '%s\n' "$SOURCE_HOME" >"$ARTIFACT_DIR/source-home.txt"
+
+"$ARCWELL_BIN" job profiles >"$ARTIFACT_DIR/profiles.json"
+PROFILE_ID="$(jq -r '.[0].id // empty' "$ARTIFACT_DIR/profiles.json")"
+require_json_value "$PROFILE_ID" "profile id"
+
+"$ARCWELL_BIN" job shortlist "$PROFILE_ID" >"$ARTIFACT_DIR/shortlist-before.json"
+sqlite3 -json "$DB" "
+  SELECT p.id AS packet_id, p.role_id, p.status, r.company, r.role_title
+  FROM job_application_packets p
+  JOIN job_role_cards r ON r.id = p.role_id
+  WHERE p.status = 'approved'
+  ORDER BY lower(r.company), lower(r.role_title), p.id;
+" >"$ARTIFACT_DIR/approved-packets.json"
+sqlite3 -json "$DB" "
+  SELECT p.id AS packet_id, p.role_id, p.status, r.company, r.role_title
+  FROM job_application_packets p
+  JOIN job_role_cards r ON r.id = p.role_id
+  WHERE p.status = 'draft'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM job_application_packets ap
+      JOIN job_role_cards ar ON ar.id = ap.role_id
+      WHERE ap.status = 'approved'
+        AND lower(ar.company) = lower(r.company)
+    )
+  ORDER BY lower(r.company), lower(r.role_title), p.id;
+" >"$ARTIFACT_DIR/draft-only-packets.json"
+
+APPROVED_COUNT="$(jq 'length' "$ARTIFACT_DIR/approved-packets.json")"
+DRAFT_ONLY_COUNT="$(jq 'length' "$ARTIFACT_DIR/draft-only-packets.json")"
+if [ "$APPROVED_COUNT" -lt 3 ]; then
+  fail "expected at least 3 approved packets, found $APPROVED_COUNT"
+fi
+if [ "$DRAFT_ONLY_COUNT" -lt 3 ]; then
+  fail "expected at least 3 draft-only packets from companies without approved packets, found $DRAFT_ONLY_COUNT"
+fi
+
+APPROVED_0_PACKET="$(jq -r '.[0].packet_id' "$ARTIFACT_DIR/approved-packets.json")"
+APPROVED_0_ROLE="$(jq -r '.[0].role_id' "$ARTIFACT_DIR/approved-packets.json")"
+APPROVED_1_PACKET="$(jq -r '.[1].packet_id' "$ARTIFACT_DIR/approved-packets.json")"
+APPROVED_1_ROLE="$(jq -r '.[1].role_id' "$ARTIFACT_DIR/approved-packets.json")"
+APPROVED_2_PACKET="$(jq -r '.[2].packet_id' "$ARTIFACT_DIR/approved-packets.json")"
+APPROVED_2_ROLE="$(jq -r '.[2].role_id' "$ARTIFACT_DIR/approved-packets.json")"
+DRAFT_0_PACKET="$(jq -r '.[0].packet_id' "$ARTIFACT_DIR/draft-only-packets.json")"
+DRAFT_0_ROLE="$(jq -r '.[0].role_id' "$ARTIFACT_DIR/draft-only-packets.json")"
+DRAFT_1_ROLE="$(jq -r '.[1].role_id' "$ARTIFACT_DIR/draft-only-packets.json")"
+DRAFT_2_ROLE="$(jq -r '.[2].role_id' "$ARTIFACT_DIR/draft-only-packets.json")"
+
+APPLICATIONS_BEFORE="$(sql_value "SELECT COUNT(*) FROM job_applications;")"
+printf '%s\n' "$APPLICATIONS_BEFORE" >"$ARTIFACT_DIR/applications-before-count.txt"
+
+log "proving applied status rejects a draft packet"
+set +e
+record_application "$DRAFT_0_ROLE" "$DRAFT_0_PACKET" "applied" "2026-06-29" "2026-07-03" \
+  "Negative gate probe: draft packet must not support an applied status." \
+  >"$ARTIFACT_DIR/draft-applied-denial.json" 2>"$ARTIFACT_DIR/draft-applied-denial.err"
+DENIAL_EXIT=$?
+set -e
+printf '%s\n' "$DENIAL_EXIT" >"$ARTIFACT_DIR/draft-applied-denial.exit"
+if [ "$DENIAL_EXIT" -eq 0 ]; then
+  fail "draft packet unexpectedly supported applied status"
+fi
+if ! grep -q "requires an approved application packet" "$ARTIFACT_DIR/draft-applied-denial.err"; then
+  fail "draft-packet denial did not name the approved-packet requirement"
+fi
+APPLICATIONS_AFTER_DENIAL="$(sql_value "SELECT COUNT(*) FROM job_applications;")"
+if [ "$APPLICATIONS_AFTER_DENIAL" != "$APPLICATIONS_BEFORE" ]; then
+  fail "draft-packet denial changed application rows"
+fi
+
+: >"$ARTIFACT_DIR/application-records.jsonl"
+
+log "recording approved-packet application statuses"
+record_application "$APPROVED_0_ROLE" "$APPROVED_0_PACKET" "applied" "2026-06-29" "2026-07-03" \
+  "Controlled proof row: application recorded after local export review; not sent by Arcwell." \
+  >>"$ARTIFACT_DIR/application-records.jsonl"
+record_application "$APPROVED_1_ROLE" "$APPROVED_1_PACKET" "intro_requested" "2026-06-29" "2026-07-02" \
+  "Controlled proof row: intro request status recorded; no warm intro is claimed." \
+  >>"$ARTIFACT_DIR/application-records.jsonl"
+record_application "$APPROVED_2_ROLE" "$APPROVED_2_PACKET" "interview" "2026-06-29" "2026-07-08" \
+  "Controlled proof row: interview status recorded as user-supplied pipeline state, not conversion prediction." \
+  >>"$ARTIFACT_DIR/application-records.jsonl"
+
+log "recording non-sent planning and terminal outcome statuses without approved packets"
+record_application "$DRAFT_0_ROLE" "" "planned" "" "2026-07-01" \
+  "Controlled proof row: planned follow-up only; no application sent." \
+  >>"$ARTIFACT_DIR/application-records.jsonl"
+record_application "$DRAFT_1_ROLE" "" "rejected" "2026-06-20" "" \
+  "Controlled proof row: rejected outcome retained as one data point, not a score rule." \
+  >>"$ARTIFACT_DIR/application-records.jsonl"
+record_application "$DRAFT_2_ROLE" "" "withdrawn" "2026-06-21" "" \
+  "Controlled proof row: withdrawn outcome retained for follow-up context only." \
+  >>"$ARTIFACT_DIR/application-records.jsonl"
+
+APPLICATIONS_AFTER="$(sql_value "SELECT COUNT(*) FROM job_applications;")"
+APPLICATION_DELTA="$((APPLICATIONS_AFTER - APPLICATIONS_BEFORE))"
+if [ "$APPLICATION_DELTA" != "6" ]; then
+  fail "expected 6 application rows after proof, got before/after $APPLICATIONS_BEFORE/$APPLICATIONS_AFTER"
+fi
+
+sqlite3 -json "$DB" "
+  SELECT status, COUNT(*) AS count
+  FROM job_applications
+  GROUP BY status
+  ORDER BY status;
+" >"$ARTIFACT_DIR/application-status-counts.json"
+if ! jq -e '
+  map({key:.status,value:.count}) | from_entries
+  | .applied == 1
+  and .intro_requested == 1
+  and .interview == 1
+  and .planned == 1
+  and .rejected == 1
+  and .withdrawn == 1
+' "$ARTIFACT_DIR/application-status-counts.json" >/dev/null; then
+  fail "application status counts did not match the controlled pipeline"
+fi
+
+sqlite3 -json "$DB" "
+  SELECT a.id, a.role_id, r.company, r.role_title, a.packet_id, a.status,
+         a.applied_at, a.follow_up_at, a.outcome_note
+  FROM job_applications a
+  JOIN job_role_cards r ON r.id = a.role_id
+  ORDER BY a.status, r.company;
+" >"$ARTIFACT_DIR/applications-after.json"
+
+log "recording public-only intro path for weekly report visibility"
+"$ARCWELL_BIN" job contact-add \
+  --name "Controlled Proof Hiring Manager" \
+  --role-title "Engineering Manager" \
+  --public-profile-url "https://example.com/job-application-pipeline-proof/hiring-manager" \
+  --source-url "https://example.com/job-application-pipeline-proof/team" \
+  --relationship-status public_only \
+  --relevance hiring_manager \
+  --note "Source evidence: controlled proof team page lists this profile as hiring manager; public-only/no warm-intro claim." \
+  >"$ARTIFACT_DIR/intro-contact.json"
+INTRO_CONTACT_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/intro-contact.json")"
+require_json_value "$INTRO_CONTACT_ID" "intro contact id"
+
+"$ARCWELL_BIN" job intro-add "$APPROVED_0_ROLE" \
+  --contact-id "$INTRO_CONTACT_ID" \
+  --path-type unknown \
+  --confidence weak \
+  --next-action "Look for a real mutual path before asking for an introduction." \
+  --status identify \
+  >"$ARTIFACT_DIR/intro-path.json"
+
+log "recording controlled role-status change for weekly report visibility"
+"$ARCWELL_BIN" job search-run-add "$PROFILE_ID" \
+  --scope "$SCOPE" \
+  --proof-level local_proof \
+  --source-count 1 \
+  --role-count 1 \
+  --new-role-count 0 \
+  --stale-role-count 1 \
+  --error-count 0 \
+  --completed-at "2026-06-29T06:36:00Z" \
+  >"$ARTIFACT_DIR/role-status-run.json"
+ROLE_STATUS_RUN_ID="$(jq -r '.id // empty' "$ARTIFACT_DIR/role-status-run.json")"
+require_json_value "$ROLE_STATUS_RUN_ID" "role status run id"
+
+"$ARCWELL_BIN" job role-status-add "$APPROVED_0_ROLE" \
+  --run-id "$ROLE_STATUS_RUN_ID" \
+  --status stale \
+  --previous-tier tier_1 \
+  --current-tier blocked \
+  --note "Controlled proof row: copied-home refresh evidence marked this role stale; weekly report must remove it from apply-now until refreshed." \
+  >"$ARTIFACT_DIR/role-status-event.json"
+
+"$ARCWELL_BIN" job shortlist "$PROFILE_ID" >"$ARTIFACT_DIR/shortlist-after.json"
+"$ARCWELL_BIN" job weekly-report "$PROFILE_ID" --scope "$SCOPE" >"$ARTIFACT_DIR/weekly-report.json"
+
+if ! jq -e '.metadata.application_count == 6' "$ARTIFACT_DIR/weekly-report.json" >/dev/null; then
+  fail "weekly report did not record six application rows"
+fi
+if ! jq -e '.metadata.intro_path_count == 1' "$ARTIFACT_DIR/weekly-report.json" >/dev/null; then
+  fail "weekly report did not record the public-only intro path"
+fi
+if ! jq -e '.metadata.role_status_event_count >= 1' "$ARTIFACT_DIR/weekly-report.json" >/dev/null; then
+  fail "weekly report did not record any role-status events"
+fi
+if ! jq -e '
+  .body
+  | contains("applied: 1")
+  and contains("intro_requested: 1")
+  and contains("interview: 1")
+  and contains("planned: 1")
+  and contains("rejected: 1")
+  and contains("withdrawn: 1")
+' "$ARTIFACT_DIR/weekly-report.json" >/dev/null; then
+  fail "weekly report body does not surface all application status counts"
+fi
+if ! jq -e '
+  .body
+  | contains("## Role Changes")
+  and contains("- stale:")
+  and contains("tier_1 -> blocked")
+  and contains("weekly report must remove it from apply-now until refreshed")
+' "$ARTIFACT_DIR/weekly-report.json" >/dev/null; then
+  fail "weekly report body does not surface role-status changes"
+fi
+if ! jq -e '
+  .body
+  | contains("## Intro Status")
+  and contains("warm_intro_ready: 0")
+  and contains("identify: 1")
+  and contains("## Next Actions")
+  and contains("Look for a real mutual path before asking for an introduction.")
+  and contains("Controlled Proof Hiring Manager")
+  and contains("follow up by 2026-07-03")
+' "$ARTIFACT_DIR/weekly-report.json" >/dev/null; then
+  fail "weekly report body does not surface intro status and next actions"
+fi
+if ! jq -e '
+  [.entries[].outcome_warnings[]?] as $warnings
+  | any($warnings[]; contains("already has application status"))
+  and any($warnings[]; contains("already has a planned application"))
+  and any($warnings[]; contains("already has outcome"))
+' "$ARTIFACT_DIR/shortlist-after.json" >/dev/null; then
+  fail "shortlist does not expose planned/live/terminal application warnings"
+fi
+
+sqlite3 -json "$DB" "
+  SELECT tier, COUNT(*) AS count
+  FROM job_fit_scores
+  GROUP BY tier
+  ORDER BY tier;
+" >"$ARTIFACT_DIR/fit-score-tier-counts.json"
+
+jq -n \
+  --arg feature "controlled job application pipeline proof" \
+  --arg status "Controlled Local Proof over production-data input" \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg source_proof "$SOURCE_PROOF" \
+  --arg source_packet "$SOURCE_PACKET" \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg copied_home "$ARCWELL_HOME" \
+  --arg profile_id "$PROFILE_ID" \
+  --arg scope "$SCOPE" \
+  --argjson applications_before "$APPLICATIONS_BEFORE" \
+  --argjson applications_after "$APPLICATIONS_AFTER" \
+  --argjson application_delta "$APPLICATION_DELTA" \
+  --argjson denial_exit "$DENIAL_EXIT" \
+  --slurpfile approved_packets "$ARTIFACT_DIR/approved-packets.json" \
+  --slurpfile draft_only_packets "$ARTIFACT_DIR/draft-only-packets.json" \
+  --slurpfile application_records "$ARTIFACT_DIR/application-records.jsonl" \
+  --slurpfile applications "$ARTIFACT_DIR/applications-after.json" \
+  --slurpfile intro_contact "$ARTIFACT_DIR/intro-contact.json" \
+  --slurpfile intro_path "$ARTIFACT_DIR/intro-path.json" \
+  --slurpfile role_status_run "$ARTIFACT_DIR/role-status-run.json" \
+  --slurpfile role_status_event "$ARTIFACT_DIR/role-status-event.json" \
+  --slurpfile status_counts "$ARTIFACT_DIR/application-status-counts.json" \
+  --slurpfile fit_tier_counts "$ARTIFACT_DIR/fit-score-tier-counts.json" \
+  --slurpfile weekly_report "$ARTIFACT_DIR/weekly-report.json" \
+  '{
+    feature: $feature,
+    status: $status,
+    created_at: $created_at,
+    skill_gates: ["arc:anti-mirage", "arc:job-hunting"],
+    user_visible_claim: "Starting from controlled, privacy-checked application packets over real role input, Arcwell can track user-supplied application pipeline statuses, require approved packets for applied-like states, surface application status in shortlist warnings, surface application status plus public-only intro status, next actions, and role-status changes in weekly-report output, and avoid changing fit scores or claiming real delivery, live freshness, or warm intros.",
+    non_claims: [
+      "This is not proof that any application was sent, submitted, or delivered.",
+      "This is not user approval for real applications.",
+      "This is not proof over the user operational Arcwell home.",
+      "This is not Google Docs draft creation.",
+      "This is not warm-intro proof.",
+      "This is not outcome-learning or conversion prediction.",
+      "This is not proof of live role freshness or operational recurrence.",
+      "This is not source freshness beyond the source proof being copied."
+    ],
+    inputs: {
+      source_proof: $source_proof,
+      source_packet: $source_packet,
+      profile_id: $profile_id,
+      scope: $scope
+    },
+    negative_gate: {
+      draft_packet_applied_exit: $denial_exit,
+      error_artifact: "artifacts/draft-applied-denial.err",
+      expected: "draft packet cannot support applied status and writes no application row"
+    },
+    outputs: {
+      proof_root: $proof_root,
+      copied_home: $copied_home,
+      applications_before: $applications_before,
+      applications_after: $applications_after,
+      application_delta: $application_delta,
+      application_status_counts: $status_counts[0],
+      fit_score_tier_counts_after: $fit_tier_counts[0],
+      weekly_report: {
+        id: $weekly_report[0].id,
+        proof_level: $weekly_report[0].metadata.proof_level,
+        application_count: $weekly_report[0].metadata.application_count,
+        intro_path_count: $weekly_report[0].metadata.intro_path_count,
+        role_status_event_count: $weekly_report[0].metadata.role_status_event_count
+      }
+    },
+    intro_contact: $intro_contact[0],
+    intro_path: $intro_path[0],
+    role_status_run: $role_status_run[0],
+    role_status_event: $role_status_event[0],
+    approved_packets_available: $approved_packets[0],
+    draft_only_packets_available: $draft_only_packets[0],
+    application_records: $application_records,
+    applications_after: $applications[0],
+    durable_state_written: [
+      "six copied-home job_applications rows across planned, applied, intro_requested, interview, rejected, and withdrawn",
+      "one copied-home public-only job_intro_path row with identify status and next action",
+      "one copied-home job_role_status_event row linked to a controlled search run",
+      "one copied-home weekly report with application status counts",
+      "one copied-home weekly report with intro status and next-action sections",
+      "one copied-home weekly report with the controlled role-status change visible among copied source-proof role-status history",
+      "no score-tier changes required to surface application state"
+    ],
+    durable_state_not_written: [
+      "no provider delivery rows",
+      "no sent/submitted evidence",
+      "no Google Docs drafts",
+      "no writes to the source proof home",
+      "no writes to the user operational home"
+    ],
+    commands_run: [
+      "scripts/job-application-pipeline-proof"
+    ],
+    adversarial_review_judgment: "Promote only as controlled Local Proof for application pipeline state over copied production-data input. Hold real user application, delivery, Google Docs, warm-intro, operational-home, and outcome-learning claims.",
+    remaining_risks: [
+      {
+        risk: "Statuses are proof-controlled rows, not real user-submitted applications.",
+        next_action: "Record real operational application events only after user confirmation and current role refresh."
+      },
+      {
+        risk: "Outcome notes are explicit context, not predictive conversion learning.",
+        next_action: "Require enough real application history before considering any scoring adjustment."
+      },
+      {
+        risk: "The proof uses copied state from a bounded source proof.",
+        next_action: "Keep current-source refresh and one-day recurrence gates separate."
+      }
+    ]
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"
+log "job application pipeline proof passed"

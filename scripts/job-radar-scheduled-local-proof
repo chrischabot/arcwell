@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUN_STAMP="${ARCWELL_JOB_RADAR_SCHEDULED_LOCAL_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_RADAR_SCHEDULED_LOCAL_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-radar-scheduled-local-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+
+for required in cargo date jq shasum; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the scheduled job-radar local proof." >&2
+    exit 2
+  fi
+done
+
+mkdir -p "$ARTIFACT_DIR"
+TEST_RESULTS="$ARTIFACT_DIR/test-results.jsonl"
+: >"$TEST_RESULTS"
+
+log() {
+  printf '[job-radar-scheduled-local-proof] %s\n' "$*"
+}
+
+run_check() {
+  local name="$1"
+  shift
+  local stdout="$ARTIFACT_DIR/$name.stdout"
+  local stderr="$ARTIFACT_DIR/$name.stderr"
+  local status="pass"
+  local exit_code=0
+
+  log "running $*"
+  set +e
+  "$@" >"$stdout" 2>"$stderr"
+  exit_code=$?
+  set -e
+  if [ "$exit_code" -ne 0 ]; then
+    status="fail"
+  fi
+
+  jq -n \
+    --arg name "$name" \
+    --arg command "$*" \
+    --arg status "$status" \
+    --arg stdout "${stdout#$REPO_ROOT/}" \
+    --arg stderr "${stderr#$REPO_ROOT/}" \
+    --arg stdout_sha256 "$(shasum -a 256 "$stdout" | awk '{print $1}')" \
+    --arg stderr_sha256 "$(shasum -a 256 "$stderr" | awk '{print $1}')" \
+    --argjson exit_code "$exit_code" \
+    '{
+      name: $name,
+      command: $command,
+      status: $status,
+      exit_code: $exit_code,
+      stdout: $stdout,
+      stderr: $stderr,
+      stdout_sha256: $stdout_sha256,
+      stderr_sha256: $stderr_sha256
+    }' >>"$TEST_RESULTS"
+
+  [ "$status" = "pass" ]
+}
+
+FAILED=0
+run_check "core-scheduled-radar" \
+  cargo test -p arcwell-core severe_job_radar_schedule -- --nocapture || FAILED=1
+run_check "mcp-job-hunting-radar" \
+  cargo test --bin arcwell severe_mcp_job_hunting_round_trips_local_proof_workflow -- --nocapture || FAILED=1
+
+STATUS="local_proof"
+DECISION="promote_local_slice"
+if [ "$FAILED" != "0" ]; then
+  STATUS="blocked_current_tree"
+  DECISION="block"
+fi
+
+jq -n \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg artifact_dir "$ARTIFACT_DIR" \
+  --arg status "$STATUS" \
+  --arg decision "$DECISION" \
+  --slurpfile tests "$TEST_RESULTS" \
+  '{
+    feature: "job_hunting_scheduled_job_radar",
+    status: $status,
+    audit_decision: $decision,
+    created_at: $created_at,
+    proof_root: $proof_root,
+    artifact_dir: $artifact_dir,
+    user_visible_claim: "A job_radar watch source can enqueue and execute a replay-backed job_radar_refresh worker job, write source-health/search-run/weekly-report state, and surface missing-snapshot failure health. This is Local Proof only.",
+    proof_level: "Local Proof",
+    tests: $tests,
+    durable_state_under_test: [
+      "job_radar watch source",
+      "job_radar_refresh wiki job",
+      "job source health",
+      "profile-level radar source health",
+      "job search run",
+      "job weekly report",
+      "MCP schedule/enqueue surfaces"
+    ],
+    non_claims: [
+      "No live job source fetch is performed by this proof.",
+      "No wall-clock recurrence is proven by this proof.",
+      "No one-day refresh gate is satisfied by this proof.",
+      "No applications, outreach, or external delivery are sent."
+    ],
+    adversarial_review_judgment: (
+      if $status == "local_proof"
+      then "Promote this slice only as rerunnable Local Proof for replay-backed scheduled job-radar orchestration. Hold live freshness and operational claims for the live-fetch, live-recurrence, and one-day gates."
+      else "Block. The current tree did not pass the replay-backed scheduled job-radar local tests."
+      end
+    ),
+    next_actions: (
+      if $status == "local_proof"
+      then [
+        "Keep this proof separate from fetch_live recurrence.",
+        "Use scripts/job-radar-live-recurrence-proof for the controlled live-radar recurrence gate.",
+        "Use scripts/job-refresh-one-day-proof for the real one-day refresh gate."
+      ]
+      else [
+        "Inspect the captured stdout/stderr artifacts and repair the current tree before promoting the local scheduled-radar slice."
+      ]
+      end
+    )
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"
+log "status: $STATUS"
+
+if [ "$FAILED" != "0" ]; then
+  exit 2
+fi

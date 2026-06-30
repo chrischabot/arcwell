@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+REPORT_PATH=""
+DB_PATH="${ARCWELL_X_WATCH_DB:-${ARCWELL_HOME:-$HOME/.arcwell}/arcwell.sqlite3}"
+OUT_PATH=""
+MAX_EXCLUDES=200
+MAX_KEEP_RULES=250
+REVIEWED_BY="codex-x-watch-curation-candidate-generator"
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/x-watch-curation-generate-reviewed-candidates \
+  --report latest-curation-report.json \
+  --out reviewed-rules.json \
+  [--db /path/to/arcwell.sqlite3] \
+  [--max-excludes 200] \
+  [--max-keep-rules 250] \
+  [--reviewed-by name]
+
+Generates a conservative reviewed-candidate manual-rule JSON file from a
+curation report plus local X profile evidence. It does not mutate Arcwell state.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --report)
+      REPORT_PATH="${2:?missing value for --report}"
+      shift 2
+      ;;
+    --db)
+      DB_PATH="${2:?missing value for --db}"
+      shift 2
+      ;;
+    --out)
+      OUT_PATH="${2:?missing value for --out}"
+      shift 2
+      ;;
+    --max-excludes)
+      MAX_EXCLUDES="${2:?missing value for --max-excludes}"
+      shift 2
+      ;;
+    --max-keep-rules)
+      MAX_KEEP_RULES="${2:?missing value for --max-keep-rules}"
+      shift 2
+      ;;
+    --reviewed-by)
+      REVIEWED_BY="${2:?missing value for --reviewed-by}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'unknown argument: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+[[ -n "$REPORT_PATH" ]] || { usage >&2; exit 2; }
+[[ -n "$OUT_PATH" ]] || { usage >&2; exit 2; }
+[[ -f "$REPORT_PATH" ]] || { printf 'missing report: %s\n' "$REPORT_PATH" >&2; exit 1; }
+[[ -f "$DB_PATH" ]] || { printf 'missing DB: %s\n' "$DB_PATH" >&2; exit 1; }
+
+mkdir -p "$(dirname "$OUT_PATH")"
+
+python3 - "$REPORT_PATH" "$DB_PATH" "$OUT_PATH" "$MAX_EXCLUDES" "$MAX_KEEP_RULES" "$REVIEWED_BY" <<'PY'
+import json
+import re
+import sqlite3
+import sys
+from pathlib import Path
+
+report_path = Path(sys.argv[1])
+db_path = Path(sys.argv[2])
+out_path = Path(sys.argv[3])
+max_excludes = int(sys.argv[4])
+max_keep_rules = int(sys.argv[5])
+reviewed_by = sys.argv[6]
+
+report = json.loads(report_path.read_text())
+conn = sqlite3.connect(db_path)
+
+def profile_for(handle):
+    row = conn.execute(
+        """
+        SELECT display_name, description
+        FROM x_profiles
+        WHERE lower(handle)=lower(?1)
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (handle,),
+    ).fetchone()
+    if not row:
+        return "", "", False
+    return row[0] or "", row[1] or "", True
+
+def norm(text):
+    return re.sub(r"\s+", " ", (text or "").lower()).strip()
+
+TECH_PROTECT = [
+    "openai", "anthropic", "deepmind", "hugging face", "huggingface",
+    "nvidia", "vercel", "cloudflare", "github", "gitlab", "cursor",
+    "claude", "codex", "llm", "ai", "machine learning", "developer",
+    "developers", "devrel", "developer relations", "developer experience",
+    "sdk", "api", "software", "engineer", "engineering", "programming",
+    "code", "coding", "linux", "database", "postgres", "kubernetes",
+    "docker", "browser", "frontend", "backend", "compiler", "runtime",
+    "framework", "platformer", "hard fork", "techcrunch", "the verge",
+    "wired", "stratechery", "flickr", "smugmug", "css", "javascript",
+    "newsletter", "analyst",
+]
+
+OFF_TOPIC = [
+    ("inactive_x_account", [
+        "no longer active", "account retired", "not active", "no longer use twitter",
+        "no longer using twitter", "moved to mastodon", "follow us on mastodon",
+        "posting on bluesky", "inactive account",
+    ]),
+    ("general_politics", [
+        "president", "senator", "congress", "parliament", "prime minister",
+        "campaign", "political", "democrat", "republican", "labour party",
+        "conservative party", "white house",
+    ]),
+    ("general_news_or_media", [
+        "latest news", "breaking news", "newsroom", "newspaper", "magazine",
+        "reporter in", "reporters in", "weather", "sports",
+    ]),
+    ("entertainment_lifestyle", [
+        "comedian", "actor", "actress", "singer", "podcast host", "novelist",
+        "author of", "screenwriter", "fashion", "beauty", "food", "restaurant",
+        "travel photographer", "movie", "tv show", "gaming news",
+    ]),
+    ("personal_non_tech", [
+        "adhd", "mental health", "climate scientist", "climate activist",
+        "gardening", "parenting", "grandmother", "grandfather",
+    ]),
+]
+
+SEED_KEEP = {
+    "openai", "openaidevs", "anthropicai", "claudeai", "googledeepmind",
+    "deepmind", "nvidiaai", "github", "githubnext", "vercel",
+    "cloudflare", "cursor_ai", "cognition", "huggingface", "simonw",
+    "karpathy", "asahilinux", "dialogflow", "engineering", "caseynewton",
+    "benedictevans", "joshwcomeau", "rich_harris", "gergelyorosz",
+}
+
+rules = []
+summary = {
+    "report": str(report_path),
+    "db": str(db_path),
+    "reviewed_by": reviewed_by,
+    "source_run_id": report.get("run", {}).get("id"),
+    "input_decisions": len(report.get("decisions", [])),
+    "keeps": 0,
+    "excludes": 0,
+    "skipped": {
+        "weak_evidence": 0,
+        "tech_protected": 0,
+        "not_drop_leaning": 0,
+        "no_offtopic_signal": 0,
+    },
+    "non_claims": [
+        "This is a reviewed-candidate ruleset, not real-home apply approval.",
+        "Generated exclude candidates still require copied-home proof before any live status mutation.",
+        "No watch source is paused or modified by this generator.",
+    ],
+}
+
+def add_rule(handle, decision, category, reason, metadata):
+    rules.append({
+        "handle": handle,
+        "decision": decision,
+        "category": category,
+        "reason": reason,
+        "metadata": {
+            **metadata,
+            "reviewed_by": reviewed_by,
+            "source": "x-watch-curation-generate-reviewed-candidates",
+            "source_run_id": summary["source_run_id"],
+        },
+    })
+
+for decision in sorted(
+    report.get("decisions", []),
+    key=lambda d: (-int(d.get("score") or 0), d.get("handle", "").lower()),
+):
+    if summary["keeps"] >= max_keep_rules:
+        break
+    handle = decision.get("handle") or ""
+    evidence = decision.get("evidence") or {}
+    bookmarked = int(evidence.get("bookmarked_items") or 0)
+    tech_hits = int(evidence.get("tech_tweet_hits") or 0)
+    score = int(decision.get("score") or 0)
+    if (
+        decision.get("recommendation") == "keep"
+        or handle.lower() in SEED_KEEP
+        or score >= 10
+        or bookmarked >= 3
+        or tech_hits >= 3
+    ):
+        add_rule(
+            handle,
+            "manual_always_keep",
+            decision.get("category") or "developer_tools",
+            f"Reviewed keep candidate from curation evidence: {decision.get('reason') or 'positive technical signal'}.",
+            {
+                "candidate_rule_kind": "strong_keep",
+                "score": score,
+                "bookmarked_items": bookmarked,
+                "tech_tweet_hits": tech_hits,
+            },
+        )
+        summary["keeps"] += 1
+
+for decision in sorted(
+    report.get("decisions", []),
+    key=lambda d: (int(d.get("score") or 0), d.get("handle", "").lower()),
+):
+    if summary["excludes"] >= max_excludes:
+        break
+    if decision.get("recommendation") != "review_drop_leaning":
+        summary["skipped"]["not_drop_leaning"] += 1
+        continue
+    handle = decision.get("handle") or ""
+    evidence = decision.get("evidence") or {}
+    score = int(decision.get("score") or 0)
+    bookmarked = int(evidence.get("bookmarked_items") or 0)
+    tech_hits = int(evidence.get("tech_tweet_hits") or 0)
+    local_tweets = int(evidence.get("local_tweets") or 0)
+    display, desc, has_profile = profile_for(handle)
+    combined = norm(" ".join([handle, display, desc]))
+    if handle.lower() in SEED_KEEP or any(term in combined for term in TECH_PROTECT):
+        summary["skipped"]["tech_protected"] += 1
+        continue
+    if score > 0 or bookmarked > 0 or tech_hits > 0 or not has_profile:
+        summary["skipped"]["weak_evidence"] += 1
+        continue
+    matched = None
+    for category, terms in OFF_TOPIC:
+        hit = next((term for term in terms if term in combined), None)
+        if hit:
+            matched = (category, hit)
+            break
+    if not matched:
+        summary["skipped"]["no_offtopic_signal"] += 1
+        continue
+    category, term = matched
+    add_rule(
+        handle,
+        "manual_always_exclude",
+        category,
+        f"Reviewed exclude candidate: profile/local evidence has no AI/software/devrel signal and matches off-topic signal '{term}'.",
+        {
+            "candidate_rule_kind": "explicit_offtopic_exclude",
+            "matched_signal": term,
+            "score": score,
+            "bookmarked_items": bookmarked,
+            "tech_tweet_hits": tech_hits,
+            "local_tweets": local_tweets,
+            "profile_present": has_profile,
+        },
+    )
+    summary["excludes"] += 1
+
+if summary["excludes"] == 0:
+    raise SystemExit("no conservative exclude candidates were generated")
+if summary["keeps"] == 0:
+    raise SystemExit("no keep candidates were generated")
+
+out_path.write_text(json.dumps(rules, indent=2, sort_keys=True) + "\n")
+summary_path = out_path.with_suffix(out_path.suffix + ".summary.json")
+summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+print(json.dumps({"rules": str(out_path), "summary": str(summary_path), **summary}, indent=2, sort_keys=True))
+PY

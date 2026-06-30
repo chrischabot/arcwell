@@ -1,0 +1,274 @@
+#!/usr/bin/env node
+
+const fs = require("fs");
+const path = require("path");
+
+const wikiRoot = process.env.ARCWELL_WIKI_ROOT || "/Users/chabotc/.arcwell/wiki/pages";
+const proofDir = process.argv.includes("--proof-dir")
+  ? process.argv[process.argv.indexOf("--proof-dir") + 1]
+  : null;
+const write = process.argv.includes("--write");
+
+if (!proofDir) {
+  console.error("usage: scripts/wiki-link-lint-repair --proof-dir <dir> [--write]");
+  process.exit(2);
+}
+
+function walk(dir) {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walk(full));
+    else if (entry.isFile() && entry.name.endsWith(".md")) out.push(full);
+  }
+  return out;
+}
+
+function rel(file) {
+  return path.relative(wikiRoot, file).split(path.sep).join("/");
+}
+
+function decodeHref(href) {
+  try {
+    return decodeURIComponent(href);
+  } catch {
+    return href;
+  }
+}
+
+function splitTarget(raw) {
+  const hashAt = raw.indexOf("#");
+  const queryAt = raw.indexOf("?");
+  const cutAt = [hashAt, queryAt].filter((idx) => idx >= 0).sort((a, b) => a - b)[0];
+  if (cutAt === undefined) return { pathPart: raw, suffix: "" };
+  return { pathPart: raw.slice(0, cutAt), suffix: raw.slice(cutAt) };
+}
+
+function normalizeKey(value) {
+  return decodeHref(value)
+    .replace(/\.md$/i, "")
+    .replace(/-[0-9a-f]{8}$/i, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+}
+
+function tokenKey(value) {
+  const tokens = normalizeKey(value)
+    .split("_")
+    .filter(Boolean)
+    .sort();
+  return tokens.join("_");
+}
+
+function addMap(map, key, value) {
+  if (!key) return;
+  if (!map.has(key)) map.set(key, new Set());
+  map.get(key).add(value);
+}
+
+function parseFrontmatter(text) {
+  const meta = {};
+  if (!text.startsWith("---\n")) return meta;
+  const end = text.indexOf("\n---", 4);
+  if (end < 0) return meta;
+  for (const line of text.slice(4, end).split(/\r?\n/)) {
+    const match = line.match(/^([A-Za-z0-9_ -]+):\s*"?([^"]*)"?\s*$/);
+    if (match) meta[match[1].trim()] = match[2].trim();
+  }
+  return meta;
+}
+
+function sourceSlug(source) {
+  if (!source) return "";
+  try {
+    const url = new URL(source);
+    return path.posix.basename(url.pathname);
+  } catch {
+    return "";
+  }
+}
+
+function linkDestination(fromRel, rawHref) {
+  const { pathPart } = splitTarget(rawHref);
+  const decoded = decodeHref(pathPart);
+  if (!decoded || /^[a-z][a-z0-9+.-]*:/i.test(decoded) || decoded.startsWith("#")) return null;
+  if (!decoded.toLowerCase().endsWith(".md")) return null;
+  const fromDir = path.posix.dirname(fromRel);
+  return path.posix.normalize(path.posix.join(fromDir === "." ? "" : fromDir, decoded));
+}
+
+function existsAndNonempty(relPath, sizes) {
+  return sizes.has(relPath) && sizes.get(relPath) > 0;
+}
+
+function existingCandidates(candidateSet, sizes) {
+  if (!candidateSet) return [];
+  return [...new Set([...candidateSet])].filter((candidate) => existsAndNonempty(candidate, sizes));
+}
+
+function duplicateIdentityChoice(candidates, pageInfo, sizes) {
+  const identities = new Set();
+  for (const candidate of candidates) {
+    const info = pageInfo.get(candidate);
+    if (!info) return null;
+    const identity = [info.pageId, info.title, info.sourceBase].map(normalizeKey).join("|");
+    if (identity === "||") return null;
+    identities.add(identity);
+  }
+  if (identities.size !== 1) return null;
+  return candidates
+    .slice()
+    .sort((a, b) => (sizes.get(b) || 0) - (sizes.get(a) || 0) || a.localeCompare(b))[0];
+}
+
+function firstUniqueCandidate(candidateSets, sizes) {
+  for (const candidateSet of candidateSets) {
+    const candidates = existingCandidates(candidateSet, sizes);
+    if (candidates.length === 1) return candidates[0];
+    const duplicateChoice = duplicateIdentityChoice(candidates, pageInfo, sizes);
+    if (duplicateChoice) return duplicateChoice;
+  }
+  return null;
+}
+
+function relativeHref(fromRel, toRel) {
+  const fromDir = path.posix.dirname(fromRel);
+  let href = path.posix.relative(fromDir === "." ? "" : fromDir, toRel);
+  if (!href.startsWith(".") && !href.startsWith("/")) href = href;
+  return href || path.posix.basename(toRel);
+}
+
+fs.mkdirSync(proofDir, { recursive: true });
+
+const files = walk(wikiRoot);
+const sizes = new Map(files.map((file) => [rel(file), fs.statSync(file).size]));
+const pages = [];
+const byKey = new Map();
+const byToken = new Map();
+const pageInfo = new Map();
+
+for (const file of files) {
+  const relPath = rel(file);
+  const size = sizes.get(relPath);
+  if (size === 0) continue;
+  const text = fs.readFileSync(file, "utf8");
+  const meta = parseFrontmatter(text);
+  const titleMatch = text.match(/^#\s+(.+)$/m);
+  const title = meta.title || (titleMatch ? titleMatch[1].trim() : "");
+  const pageId = meta.page_id || "";
+  const stem = path.posix.basename(relPath, ".md");
+  const cleanStem = stem.replace(/-[0-9a-f]{8}$/i, "");
+  const source = meta.source || "";
+  const sourceBase = sourceSlug(source);
+  pages.push({ relPath, title, pageId, stem, cleanStem, sourceBase });
+  pageInfo.set(relPath, { title, pageId, sourceBase });
+  for (const key of [pageId, title, stem, cleanStem, sourceBase].map(normalizeKey)) {
+    addMap(byKey, key, relPath);
+  }
+  for (const key of [pageId, title, cleanStem, sourceBase].map(tokenKey)) {
+    addMap(byToken, key, relPath);
+  }
+}
+
+const repairs = [];
+const unresolved = [];
+const broken = [];
+const modified = new Map();
+
+const linkRe = /(?<!!)\[([^\]\n]+)\]\(([^)\n]+)\)/g;
+
+for (const file of files) {
+  const fromRel = rel(file);
+  const text = fs.readFileSync(file, "utf8");
+  let nextText = text;
+  let offset = 0;
+  for (const match of text.matchAll(linkRe)) {
+    const [full, label, rawHref] = match;
+    const destination = linkDestination(fromRel, rawHref.trim());
+    if (!destination) continue;
+    if (existsAndNonempty(destination, sizes)) continue;
+    broken.push({ from: fromRel, label, href: rawHref, destination, state: sizes.has(destination) ? "empty" : "missing" });
+    const { pathPart, suffix } = splitTarget(rawHref.trim());
+    const basename = path.posix.basename(decodeHref(pathPart), ".md");
+    const candidateSets = [
+      byKey.get(normalizeKey(basename)),
+      byKey.get(normalizeKey(label)),
+      byToken.get(tokenKey(basename)),
+      byToken.get(tokenKey(label)),
+    ].filter(Boolean);
+    const candidate = firstUniqueCandidate(candidateSets, sizes);
+    const candidates = candidateSets.flatMap((set) => existingCandidates(set, sizes));
+    if (!candidate) {
+      unresolved.push({ from: fromRel, label, href: rawHref, destination, candidates: [...new Set(candidates)].slice(0, 10) });
+      continue;
+    }
+    const newHref = relativeHref(fromRel, candidate) + suffix;
+    const replacement = `[${label}](${newHref})`;
+    const start = match.index + offset;
+    const end = start + full.length;
+    nextText = nextText.slice(0, start) + replacement + nextText.slice(end);
+    offset += replacement.length - full.length;
+    repairs.push({ from: fromRel, label, old_href: rawHref, new_href: newHref, target: candidate, old_state: sizes.has(destination) ? "empty" : "missing" });
+  }
+  if (nextText !== text) modified.set(file, { relPath: fromRel, before: text, after: nextText });
+}
+
+const report = {
+  wikiRoot,
+  write,
+  files_scanned: files.length,
+  nonempty_pages_indexed: pages.length,
+  broken_links: broken.length,
+  repairs: repairs.length,
+  unresolved: unresolved.length,
+  modified_files: modified.size,
+  zero_byte_files: [...sizes.entries()].filter(([, size]) => size === 0).map(([relPath]) => relPath),
+  unresolved_examples: unresolved.slice(0, 100),
+  repairs_examples: repairs.slice(0, 100),
+};
+
+fs.writeFileSync(path.join(proofDir, "wiki-link-lint-report.json"), JSON.stringify(report, null, 2));
+fs.writeFileSync(path.join(proofDir, "wiki-link-repairs.jsonl"), repairs.map((item) => JSON.stringify(item)).join("\n") + (repairs.length ? "\n" : ""));
+fs.writeFileSync(path.join(proofDir, "wiki-link-unresolved.jsonl"), unresolved.map((item) => JSON.stringify(item)).join("\n") + (unresolved.length ? "\n" : ""));
+
+if (write) {
+  const backupRoot = path.join(proofDir, "backups");
+  for (const [file, change] of modified.entries()) {
+    const backupPath = path.join(backupRoot, change.relPath);
+    fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+    fs.writeFileSync(backupPath, change.before);
+    fs.writeFileSync(file, change.after);
+  }
+}
+
+const markdown = [
+  "# Wiki Link Lint Repair",
+  "",
+  `- Wiki root: \`${wikiRoot}\``,
+  `- Mode: ${write ? "write" : "dry-run"}`,
+  `- Files scanned: ${files.length}`,
+  `- Broken internal markdown links found: ${broken.length}`,
+  `- Repairs ${write ? "applied" : "available"}: ${repairs.length}`,
+  `- Modified files: ${modified.size}`,
+  `- Unresolved broken links: ${unresolved.length}`,
+  `- Zero-byte markdown files: ${report.zero_byte_files.length}`,
+  "",
+  "## Zero-Byte Files",
+  "",
+  ...report.zero_byte_files.slice(0, 50).map((item) => `- \`${item}\``),
+  "",
+  "## Sample Repairs",
+  "",
+  ...repairs.slice(0, 50).map((item) => `- \`${item.from}\`: \`${item.old_href}\` -> \`${item.new_href}\``),
+  "",
+  "## Sample Unresolved",
+  "",
+  ...unresolved.slice(0, 50).map((item) => `- \`${item.from}\`: \`${item.href}\` (${item.state || "missing/ambiguous"})`),
+  "",
+];
+fs.writeFileSync(path.join(proofDir, "wiki-link-lint-report.md"), markdown.join("\n"));
+
+console.log(JSON.stringify(report, null, 2));

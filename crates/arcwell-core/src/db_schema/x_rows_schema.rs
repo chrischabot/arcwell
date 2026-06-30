@@ -754,6 +754,94 @@ pub(crate) fn ensure_knowledge_schema_on(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn ensure_x_watch_curation_schema_on(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS x_watch_manual_rules (
+          handle TEXT PRIMARY KEY,
+          decision TEXT NOT NULL,
+          category TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS x_watch_curation_runs (
+          id TEXT PRIMARY KEY,
+          classifier_version TEXT NOT NULL,
+          mode TEXT NOT NULL,
+          status TEXT NOT NULL,
+          input_count INTEGER NOT NULL DEFAULT 0,
+          keep_count INTEGER NOT NULL DEFAULT 0,
+          review_keep_leaning_count INTEGER NOT NULL DEFAULT 0,
+          review_drop_leaning_count INTEGER NOT NULL DEFAULT 0,
+          needs_profile_enrichment_count INTEGER NOT NULL DEFAULT 0,
+          pause_candidate_count INTEGER NOT NULL DEFAULT 0,
+          paused_count INTEGER NOT NULL DEFAULT 0,
+          restored_count INTEGER NOT NULL DEFAULT 0,
+          error TEXT,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          completed_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS x_watch_curation_decisions (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          watch_source_id TEXT NOT NULL,
+          handle TEXT NOT NULL,
+          previous_status TEXT NOT NULL,
+          proposed_status TEXT NOT NULL,
+          recommendation TEXT NOT NULL,
+          category TEXT NOT NULL,
+          score INTEGER NOT NULL DEFAULT 0,
+          confidence REAL NOT NULL DEFAULT 0,
+          reason TEXT NOT NULL,
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          applied_at TEXT,
+          FOREIGN KEY(run_id) REFERENCES x_watch_curation_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(watch_source_id) REFERENCES watch_sources(id) ON DELETE CASCADE,
+          UNIQUE(run_id, watch_source_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_x_watch_curation_decisions_run
+        ON x_watch_curation_decisions(run_id, recommendation, score DESC);
+        CREATE INDEX IF NOT EXISTS idx_x_watch_curation_decisions_handle
+        ON x_watch_curation_decisions(handle, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS x_watch_curation_evidence (
+          id TEXT PRIMARY KEY,
+          decision_id TEXT NOT NULL,
+          evidence_kind TEXT NOT NULL,
+          evidence_value TEXT NOT NULL,
+          weight INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(decision_id) REFERENCES x_watch_curation_decisions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_x_watch_curation_evidence_decision
+        ON x_watch_curation_evidence(decision_id);
+
+        CREATE TABLE IF NOT EXISTS x_watch_restore_snapshots (
+          run_id TEXT NOT NULL,
+          watch_source_id TEXT NOT NULL,
+          previous_status TEXT NOT NULL,
+          previous_label TEXT NOT NULL,
+          previous_cadence TEXT NOT NULL,
+          previous_metadata_json TEXT NOT NULL DEFAULT '{}',
+          restored_at TEXT,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(run_id, watch_source_id),
+          FOREIGN KEY(run_id) REFERENCES x_watch_curation_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(watch_source_id) REFERENCES watch_sources(id) ON DELETE CASCADE
+        );
+        "#,
+    )?;
+    Ok(())
+}
+
 pub(crate) fn ensure_column_on(
     conn: &Connection,
     table: &str,

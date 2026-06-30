@@ -1,0 +1,547 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUN_STAMP="${ARCWELL_SOURCE_INGESTION_POLICY_REPAIR_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_SOURCE_INGESTION_POLICY_REPAIR_DIR:-$REPO_ROOT/.arcwell-dev/proofs/source-ingestion-policy-repair-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+POLICY_FILE="${ARCWELL_SOURCE_INGESTION_POLICY_FILE:-${ARCWELL_HOME:-$HOME/.arcwell}/arcwell-policy.toml}"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+APPLY=0
+INCLUDE_X=0
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/source-ingestion-policy-repair [--apply] [--include-x] [--policy-file PATH]
+
+Creates a reviewable policy repair packet for scheduled source ingestion.
+
+Default behavior is dry-run only. It proposes narrow non-X rules for:
+  - rss_fetch worker enqueue, provider network, and source-card writes
+  - github_owner/github_repo worker enqueue, provider network, and source-card writes
+  - arxiv_search worker enqueue, provider network, and source-card writes
+
+X rules are intentionally excluded unless --include-x is passed, because X also
+needs rate-limit/sharding cleanup before regular freshness can be claimed.
+
+Options:
+  --apply             Back up the policy file and append missing rules.
+  --include-x         Include X bookmark and X handle monitor policy rules.
+  --policy-file PATH  Override the target policy file.
+  -h, --help          Show this help.
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --apply)
+      APPLY=1
+      shift
+      ;;
+    --include-x)
+      INCLUDE_X=1
+      shift
+      ;;
+    --policy-file)
+      POLICY_FILE="${2:-}"
+      if [ -z "$POLICY_FILE" ]; then
+        echo "BLOCKED: --policy-file requires a path" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "BLOCKED: unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+for required in cp date grep jq mkdir printf; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for source ingestion policy repair." >&2
+    exit 2
+  fi
+done
+
+mkdir -p "$ARTIFACT_DIR"
+
+log() {
+  printf '[source-ingestion-policy-repair] %s\n' "$*"
+}
+
+POLICY_DIR="$(cd "$(dirname "$POLICY_FILE")" 2>/dev/null && pwd || true)"
+if [ -z "$POLICY_DIR" ]; then
+  POLICY_DIR="$(dirname "$POLICY_FILE")"
+fi
+
+CURRENT_POLICY="$ARTIFACT_DIR/current-policy.toml"
+if [ -f "$POLICY_FILE" ]; then
+  cp "$POLICY_FILE" "$CURRENT_POLICY"
+else
+  : >"$CURRENT_POLICY"
+fi
+
+ALL_RULES="$ARTIFACT_DIR/all-selected-repair-rules.toml"
+MISSING_RULES="$ARTIFACT_DIR/proposed-missing-rules.toml"
+PROPOSED_POLICY="$ARTIFACT_DIR/proposed-policy.toml"
+WARNINGS="$ARTIFACT_DIR/warnings.txt"
+: >"$ALL_RULES"
+: >"$MISSING_RULES"
+: >"$WARNINGS"
+
+MISSING_COUNT=0
+EXISTING_COUNT=0
+SELECTED_COUNT=0
+
+rule_exists() {
+  grep -Fq "id = \"$1\"" "$CURRENT_POLICY"
+}
+
+emit_rule_block() {
+  local file="$1"
+  local id="$2"
+  local action="$3"
+  local reason="$4"
+  local package="$5"
+  local provider="$6"
+  local source="$7"
+  local priority="$8"
+
+  {
+    printf '\n[[rules]]\n'
+    printf 'id = "%s"\n' "$id"
+    printf 'effect = "allow"\n'
+    printf 'action = "%s"\n' "$action"
+    printf 'reason = "%s"\n' "$reason"
+    printf 'package = "%s"\n' "$package"
+    if [ -n "$provider" ]; then
+      printf 'provider = "%s"\n' "$provider"
+    fi
+    if [ -n "$source" ]; then
+      printf 'source = "%s"\n' "$source"
+    fi
+    printf 'priority = %s\n' "$priority"
+  } >>"$file"
+}
+
+select_rule() {
+  local id="$1"
+  local action="$2"
+  local reason="$3"
+  local package="$4"
+  local provider="$5"
+  local source="$6"
+  local priority="${7:-32}"
+
+  SELECTED_COUNT=$((SELECTED_COUNT + 1))
+  emit_rule_block "$ALL_RULES" "$id" "$action" "$reason" "$package" "$provider" "$source" "$priority"
+  if rule_exists "$id"; then
+    EXISTING_COUNT=$((EXISTING_COUNT + 1))
+  else
+    MISSING_COUNT=$((MISSING_COUNT + 1))
+    emit_rule_block "$MISSING_RULES" "$id" "$action" "$reason" "$package" "$provider" "$source" "$priority"
+  fi
+}
+
+select_rule \
+  "allow-scheduled-rss-fetch-worker-enqueue" \
+  "worker.enqueue" \
+  "allow configured RSS watch sources to enqueue scheduled fetch jobs" \
+  "arcwell-llm-wiki" \
+  "rss" \
+  "rss_fetch"
+
+select_rule \
+  "allow-scheduled-rss-fetch-provider-network" \
+  "provider.network" \
+  "allow configured RSS watch source jobs to fetch feed content" \
+  "arcwell-llm-wiki" \
+  "rss" \
+  "rss_fetch"
+
+select_rule \
+  "allow-scheduled-rss-source-card-write" \
+  "source.write" \
+  "allow configured RSS watch source jobs to write auditable source cards" \
+  "arcwell-llm-wiki" \
+  "rss" \
+  "source_card_add"
+
+select_rule \
+  "allow-scheduled-github-owner-worker-enqueue" \
+  "worker.enqueue" \
+  "allow configured GitHub owner watch sources to enqueue scheduled repo-discovery jobs" \
+  "arcwell-llm-wiki" \
+  "github" \
+  "github_owner"
+
+select_rule \
+  "allow-scheduled-github-owner-provider-network" \
+  "provider.network" \
+  "allow configured GitHub owner watch source jobs to call the GitHub API" \
+  "arcwell-llm-wiki" \
+  "github" \
+  "github_owner"
+
+select_rule \
+  "allow-scheduled-github-repo-worker-enqueue" \
+  "worker.enqueue" \
+  "allow direct GitHub repo watch jobs to enqueue scheduled release or commit checks" \
+  "arcwell-llm-wiki" \
+  "github" \
+  "github_repo"
+
+select_rule \
+  "allow-scheduled-github-repo-provider-network" \
+  "provider.network" \
+  "allow direct GitHub repo watch jobs to call the GitHub API" \
+  "arcwell-llm-wiki" \
+  "github" \
+  "github_repo"
+
+select_rule \
+  "allow-scheduled-github-source-card-write" \
+  "source.write" \
+  "allow configured GitHub source jobs to write auditable source cards" \
+  "arcwell-llm-wiki" \
+  "github" \
+  "source_card_add"
+
+select_rule \
+  "allow-scheduled-arxiv-search-worker-enqueue" \
+  "worker.enqueue" \
+  "allow configured arXiv watch sources to enqueue scheduled search jobs" \
+  "arcwell-llm-wiki" \
+  "arxiv" \
+  "arxiv_search"
+
+select_rule \
+  "allow-scheduled-arxiv-search-provider-network" \
+  "provider.network" \
+  "allow configured arXiv watch source jobs to fetch search results" \
+  "arcwell-llm-wiki" \
+  "arxiv" \
+  "arxiv_search"
+
+select_rule \
+  "allow-scheduled-arxiv-source-card-write" \
+  "source.write" \
+  "allow configured arXiv source jobs to write auditable source cards" \
+  "arcwell-llm-wiki" \
+  "arxiv" \
+  "source_card_add"
+
+if [ "$INCLUDE_X" -eq 1 ]; then
+  select_rule \
+    "allow-scheduled-x-bookmarks-worker-enqueue" \
+    "worker.enqueue" \
+    "allow configured X bookmark watch source to enqueue bookmark import jobs" \
+    "arcwell-x" \
+    "x" \
+    "x_import_bookmarks"
+
+  select_rule \
+    "allow-scheduled-x-bookmarks-provider-network" \
+    "provider.network" \
+    "allow configured X bookmark import jobs to call the X API" \
+    "arcwell-x" \
+    "x" \
+    "x_import_bookmarks"
+
+  select_rule \
+    "allow-scheduled-x-monitor-worker-enqueue" \
+    "worker.enqueue" \
+    "allow configured X handle watch sources to enqueue bounded monitor jobs" \
+    "arcwell-x" \
+    "x" \
+    "x_monitor_watch_source"
+
+  select_rule \
+    "allow-scheduled-x-monitor-provider-network" \
+    "provider.network" \
+    "allow configured X handle monitor jobs to call the X API" \
+    "arcwell-x" \
+    "x" \
+    "x_monitor"
+
+  select_rule \
+    "allow-scheduled-x-source-card-write" \
+    "source.write" \
+    "allow X import and monitor jobs to write auditable source-card projections" \
+    "arcwell-llm-wiki" \
+    "x" \
+    "source_card_add"
+else
+  cat >"$WARNINGS" <<'EOF'
+X policy rules were not selected. This is intentional by default.
+
+The source ingestion audit showed X is not just policy-blocked; it also has
+rate-limit and failed-source-health pressure. Use --include-x only after the X
+watch list is capped or sharded enough that a policy repair will not create an
+unbounded retry/rate-limit loop.
+EOF
+fi
+
+cp "$CURRENT_POLICY" "$PROPOSED_POLICY"
+cat "$MISSING_RULES" >>"$PROPOSED_POLICY"
+
+run_policy_explains() {
+  local home="$1"
+  local out="$2"
+  local err="$3"
+  local source_policy="$4"
+
+  : >"$out"
+  : >"$err"
+  if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+    printf 'arcwell binary not available; skipped policy explain\n' >"$err"
+    return 0
+  fi
+
+  mkdir -p "$home"
+  local policy_dest="$home/arcwell-policy.toml"
+  if [ "$source_policy" != "$policy_dest" ]; then
+    cp "$source_policy" "$policy_dest"
+  fi
+
+  explain_one() {
+    local label="$1"
+    shift
+    local tmp="$ARTIFACT_DIR/policy-explain-$label.json"
+    if ARCWELL_HOME="$home" "$ARCWELL_BIN" policy explain "$@" >"$tmp" 2>>"$err"; then
+      jq -c --arg label "$label" '{label: $label, explain: .}' "$tmp" >>"$out"
+    else
+      printf 'policy explain failed for %s\n' "$label" >>"$err"
+    fi
+  }
+
+  explain_one rss_fetch_enqueue \
+    --action worker.enqueue \
+    --package arcwell-llm-wiki \
+    --provider rss \
+    --source rss_fetch \
+    --target https://example.com/feed.xml \
+    --projected-usd 0.001 \
+    --metadata-json '{"kind":"rss_fetch","input":{"url":"https://example.com/feed.xml"}}'
+
+  explain_one rss_fetch_network \
+    --action provider.network \
+    --package arcwell-llm-wiki \
+    --provider rss \
+    --source rss_fetch \
+    --target https://example.com/feed.xml \
+    --projected-usd 0.001 \
+    --metadata-json '{"source_key":"rss:https://example.com/feed.xml"}'
+
+  explain_one rss_source_write \
+    --action source.write \
+    --package arcwell-llm-wiki \
+    --provider rss \
+    --source source_card_add \
+    --target https://example.com/post \
+    --metadata-json '{"source_type":"rss","claims":0}'
+
+  explain_one github_owner_enqueue \
+    --action worker.enqueue \
+    --package arcwell-llm-wiki \
+    --provider github \
+    --source github_owner \
+    --target openai \
+    --projected-usd 0.001 \
+    --metadata-json '{"kind":"github_owner","input":{"owner":"openai","limit":10}}'
+
+  explain_one github_owner_network \
+    --action provider.network \
+    --package arcwell-llm-wiki \
+    --provider github \
+    --source github_owner \
+    --target https://api.github.com/users/openai/repos \
+    --projected-usd 0.001 \
+    --metadata-json '{"owner":"openai","limit":10}'
+
+  explain_one github_repo_enqueue \
+    --action worker.enqueue \
+    --package arcwell-llm-wiki \
+    --provider github \
+    --source github_repo \
+    --target openai/codex \
+    --projected-usd 0.001 \
+    --metadata-json '{"kind":"github_repo","input":{"owner":"openai","repo":"codex","mode":"releases","limit":10}}'
+
+  explain_one github_repo_network \
+    --action provider.network \
+    --package arcwell-llm-wiki \
+    --provider github \
+    --source github_repo \
+    --target https://api.github.com/repos/openai/codex/releases \
+    --projected-usd 0.001 \
+    --metadata-json '{"owner":"openai","repo":"codex","mode":"releases","limit":10}'
+
+  explain_one github_source_write \
+    --action source.write \
+    --package arcwell-llm-wiki \
+    --provider github \
+    --source source_card_add \
+    --target https://github.com/openai/codex \
+    --metadata-json '{"source_type":"github_repo","claims":0}'
+
+  explain_one arxiv_search_enqueue \
+    --action worker.enqueue \
+    --package arcwell-llm-wiki \
+    --provider arxiv \
+    --source arxiv_search \
+    --target cat:cs.AI \
+    --projected-usd 0.001 \
+    --metadata-json '{"kind":"arxiv_search","input":{"query":"cat:cs.AI","limit":10}}'
+
+  explain_one arxiv_search_network \
+    --action provider.network \
+    --package arcwell-llm-wiki \
+    --provider arxiv \
+    --source arxiv_search \
+    --target https://export.arxiv.org/api/query \
+    --projected-usd 0.001 \
+    --metadata-json '{"query":"cat:cs.AI","limit":10}'
+
+  explain_one arxiv_source_write \
+    --action source.write \
+    --package arcwell-llm-wiki \
+    --provider arxiv \
+    --source source_card_add \
+    --target https://arxiv.org/abs/2601.00001 \
+    --metadata-json '{"source_type":"arxiv","claims":0}'
+
+  if [ "$INCLUDE_X" -eq 1 ]; then
+    explain_one x_bookmarks_enqueue \
+      --action worker.enqueue \
+      --package arcwell-x \
+      --provider x \
+      --source x_import_bookmarks \
+      --target bookmarks \
+      --projected-usd 0.01 \
+      --metadata-json '{"kind":"x_import_bookmarks","input":{"max_bookmarks":100}}'
+
+    explain_one x_bookmarks_network \
+      --action provider.network \
+      --package arcwell-x \
+      --provider x \
+      --source x_import_bookmarks \
+      --target https://api.x.com \
+      --projected-usd 0.01 \
+      --metadata-json '{"max_bookmarks":100}'
+
+    explain_one x_monitor_enqueue \
+      --action worker.enqueue \
+      --package arcwell-x \
+      --provider x \
+      --source x_monitor_watch_source \
+      --target openai \
+      --projected-usd 0.01 \
+      --metadata-json '{"kind":"x_monitor_watch_source","input":{"handle":"openai","max_results":20}}'
+
+    explain_one x_monitor_network \
+      --action provider.network \
+      --package arcwell-x \
+      --provider x \
+      --source x_monitor \
+      --target https://api.x.com \
+      --projected-usd 0.01 \
+      --metadata-json '{"max_sources":1,"max_results_per_source":20}'
+  fi
+}
+
+run_policy_explains \
+  "$ARTIFACT_DIR/current-home" \
+  "$ARTIFACT_DIR/policy-explain-current.jsonl" \
+  "$ARTIFACT_DIR/policy-explain-current.err" \
+  "$CURRENT_POLICY"
+
+run_policy_explains \
+  "$ARTIFACT_DIR/proposed-home" \
+  "$ARTIFACT_DIR/policy-explain-proposed.jsonl" \
+  "$ARTIFACT_DIR/policy-explain-proposed.err" \
+  "$PROPOSED_POLICY"
+
+APPLIED=0
+BACKUP_FILE=""
+if [ "$APPLY" -eq 1 ]; then
+  mkdir -p "$(dirname "$POLICY_FILE")"
+  if [ ! -f "$POLICY_FILE" ]; then
+    : >"$POLICY_FILE"
+  fi
+  if [ "$MISSING_COUNT" -gt 0 ]; then
+    BACKUP_FILE="$POLICY_FILE.$RUN_STAMP.bak"
+    cp "$POLICY_FILE" "$BACKUP_FILE"
+    cat "$MISSING_RULES" >>"$POLICY_FILE"
+    APPLIED="$MISSING_COUNT"
+    run_policy_explains \
+      "$POLICY_DIR" \
+      "$ARTIFACT_DIR/policy-explain-applied.jsonl" \
+      "$ARTIFACT_DIR/policy-explain-applied.err" \
+      "$POLICY_FILE"
+  fi
+fi
+
+cat >"$ARTIFACT_DIR/proof-packet.json" <<EOF
+{
+  "feature": "scheduled-source-ingestion-policy-repair",
+  "status": "$([ "$APPLY" -eq 1 ] && echo "applied_or_already_present" || echo "dry_run")",
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "policy_file": "$POLICY_FILE",
+  "backup_file": "$BACKUP_FILE",
+  "include_x": $([ "$INCLUDE_X" -eq 1 ] && echo true || echo false),
+  "selected_rule_count": $SELECTED_COUNT,
+  "existing_rule_count": $EXISTING_COUNT,
+  "missing_rule_count": $MISSING_COUNT,
+  "applied_rule_count": $APPLIED,
+  "artifacts": {
+    "current_policy": "$CURRENT_POLICY",
+    "all_selected_rules": "$ALL_RULES",
+    "proposed_missing_rules": "$MISSING_RULES",
+    "proposed_policy": "$PROPOSED_POLICY",
+    "policy_explain_current": "$ARTIFACT_DIR/policy-explain-current.jsonl",
+    "policy_explain_proposed": "$ARTIFACT_DIR/policy-explain-proposed.jsonl",
+    "warnings": "$WARNINGS"
+  },
+  "non_claims": [
+    "This does not run scheduled source ingestion.",
+    "This does not prove source health recovery.",
+    "This does not replay dead-lettered jobs.",
+    "This does not make X robust unless --include-x is used and a separate X rate-limit/sharding proof passes."
+  ],
+  "next_proof_gate": [
+    "Run this script with --apply for the selected non-X rules.",
+    "Run a bounded worker pass after policy repair.",
+    "Rerun scripts/source-ingestion-audit-proof and verify policy-deferred due rows drop for RSS, GitHub, and arXiv.",
+    "Treat X as a separate repair after watch-list capping or sharding."
+  ]
+}
+EOF
+
+log "proof root: $PROOF_ROOT"
+log "policy file: $POLICY_FILE"
+log "selected rules: $SELECTED_COUNT"
+log "existing rules: $EXISTING_COUNT"
+log "missing rules: $MISSING_COUNT"
+if [ "$APPLY" -eq 1 ]; then
+  log "applied rules: $APPLIED"
+  if [ -n "$BACKUP_FILE" ]; then
+    log "backup: $BACKUP_FILE"
+  fi
+else
+  log "dry run only; rerun with --apply to append missing non-X rules"
+fi
+if [ "$INCLUDE_X" -eq 0 ]; then
+  log "X rules were not selected; use --include-x only after X rate-limit/sharding cleanup"
+fi
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"

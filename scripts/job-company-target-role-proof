@@ -1,0 +1,399 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in jq sqlite3 shasum; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the company-target role proof." >&2
+    exit 2
+  fi
+done
+
+DEFAULT_SOURCE_PROOF="$REPO_ROOT/.arcwell-dev/proofs/job-hunting-london-startup-map-20260628T222016Z-20346"
+SOURCE_PROOF="${ARCWELL_JOB_COMPANY_TARGET_ROLE_SOURCE_PROOF:-$DEFAULT_SOURCE_PROOF}"
+SOURCE_HOME="$SOURCE_PROOF/home"
+
+if [ ! -f "$SOURCE_HOME/arcwell.sqlite3" ]; then
+  cat >&2 <<EOF
+BLOCKED: source proof home not found: $SOURCE_HOME
+Set ARCWELL_JOB_COMPANY_TARGET_ROLE_SOURCE_PROOF to the London company-map proof.
+EOF
+  exit 2
+fi
+
+RUN_STAMP="${ARCWELL_JOB_COMPANY_TARGET_ROLE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_COMPANY_TARGET_ROLE_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-company-target-role-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_JOB_COMPANY_TARGET_ROLE_HOME:-$PROOF_ROOT/home}"
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME"
+
+log() {
+  printf '[job-company-target-role-proof] %s\n' "$*"
+}
+
+run_arcwell() {
+  "$ARCWELL_BIN" "$@"
+}
+
+sql_value() {
+  sqlite3 "$ARCWELL_HOME/arcwell.sqlite3" "$1"
+}
+
+evidence_id_by_title() {
+  local title="$1"
+  local id
+  id="$(sqlite3 "$ARCWELL_HOME/arcwell.sqlite3" "SELECT id FROM job_evidence_cards WHERE title = '$title' LIMIT 1;")"
+  if [ -z "$id" ]; then
+    echo "BLOCKED: evidence card not found: $title" >&2
+    exit 2
+  fi
+  printf '%s\n' "$id"
+}
+
+role_id_by_company_title_like() {
+  local company="$1"
+  local title_like="$2"
+  local id
+  id="$(sqlite3 "$ARCWELL_HOME/arcwell.sqlite3" "SELECT id FROM job_role_cards WHERE company = '$company' AND role_title LIKE '$title_like' AND source_confidence = 'canonical_confirmed' AND current_status = 'live' ORDER BY created_at DESC LIMIT 1;")"
+  if [ -z "$id" ]; then
+    echo "BLOCKED: confirmed role not found for $company / $title_like" >&2
+    exit 2
+  fi
+  printf '%s\n' "$id"
+}
+
+score_role() {
+  local role_id="$1"
+  local explanation="$2"
+  local role_fit="$3"
+  local domain_fit="$4"
+  local evidence_fit="$5"
+  local geo_work_fit="$6"
+  local stage_fit="$7"
+  local practical_odds="$8"
+  local interest_energy="$9"
+  shift 9
+  local args=(
+    job score-add "$role_id"
+    --profile-id "$PROFILE_ID"
+    --scorer company_target_role_confirmation_v1
+    --role-fit "$role_fit"
+    --domain-fit "$domain_fit"
+    --evidence-fit "$evidence_fit"
+    --geo-work-fit "$geo_work_fit"
+    --stage-fit "$stage_fit"
+    --practical-odds "$practical_odds"
+    --interest-energy "$interest_energy"
+    --explanation "$explanation"
+  )
+  for evidence_id in "$@"; do
+    args+=(--evidence-card-id "$evidence_id")
+  done
+  run_arcwell "${args[@]}" >>"$ARTIFACT_DIR/scores.jsonl"
+  printf '%s\n' "$role_id" >>"$ARTIFACT_DIR/scored-role-ids.txt"
+}
+
+log "proof root: $PROOF_ROOT"
+log "source proof: $SOURCE_PROOF"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+
+cp -R "$SOURCE_HOME/." "$ARCWELL_HOME/"
+cat >"$ARCWELL_HOME/arcwell-policy.toml" <<'EOF'
+[[rules]]
+id = "allow-job-source-refresh-live-proof"
+effect = "allow"
+action = "provider.network"
+package = "arcwell-job-hunting"
+provider = "web"
+source = "job_source_refresh"
+reason = "controlled proof of live role confirmation from London company targets"
+priority = 20
+EOF
+
+printf '%s\n' "$SOURCE_PROOF" >"$ARTIFACT_DIR/source-proof.txt"
+printf '%s\n' "$SOURCE_HOME" >"$ARTIFACT_DIR/source-home.txt"
+
+run_arcwell job profiles >"$ARTIFACT_DIR/profiles.json"
+PROFILE_ID="$(jq -r '.[0].id // empty' "$ARTIFACT_DIR/profiles.json")"
+if [ -z "$PROFILE_ID" ]; then
+  echo "BLOCKED: source proof home has no job candidate profile" >&2
+  exit 2
+fi
+
+run_arcwell job company-targets "$PROFILE_ID" --market london >"$ARTIFACT_DIR/company-targets-before.json"
+
+AGENT_PLATFORM_ID="$(evidence_id_by_title "Current AI developer-platform leadership")"
+DEVREL_ID="$(evidence_id_by_title "DevRel and DevEx leadership scope")"
+PLATFORM_ENGINEERING_ID="$(evidence_id_by_title "Hands-on platform engineering range")"
+ARWELL_ID="$(evidence_id_by_title "Arcwell local-first assistant services")"
+OPEN_CLOUD_ID="$(evidence_id_by_title "open-cloud local Cloudflare platform")"
+CODE_SEARCH_ID="$(evidence_id_by_title "code-search BM25 repository search")"
+MEMORY_ID="$(evidence_id_by_title "mem0-rs Rust agent memory port")"
+
+: >"$ARTIFACT_DIR/sources.jsonl"
+: >"$ARTIFACT_DIR/refreshes.jsonl"
+: >"$ARTIFACT_DIR/scores.jsonl"
+: >"$ARTIFACT_DIR/scored-role-ids.txt"
+
+add_and_refresh_source() {
+  local family="$1"
+  local name="$2"
+  local url="$3"
+  local market="$4"
+  log "live refreshing $name"
+  local source_json source_id refresh_json
+  source_json="$(run_arcwell job source-add \
+    --source-family "$family" \
+    --name "$name" \
+    --url "$url" \
+    --market-scope "$market" \
+    --refresh-policy manual_review_before_apply \
+    --metadata-json "{\"proof_scope\":\"company_target_role_confirmation\",\"source_proof\":\"$SOURCE_PROOF\"}")"
+  printf '%s\n' "$source_json" >>"$ARTIFACT_DIR/sources.jsonl"
+  source_id="$(printf '%s\n' "$source_json" | jq -r '.id')"
+  printf '%s\n' "$source_id" >>"$ARTIFACT_DIR/source-ids.txt"
+  refresh_json="$(run_arcwell job source-refresh "$source_id" --fetch-live)"
+  printf '%s\n' "$refresh_json" >>"$ARTIFACT_DIR/refreshes.jsonl"
+}
+
+add_and_refresh_source "company_careers" "Northflank careers" "https://northflank.com/careers" "london"
+add_and_refresh_source "company_ats" "Ably Greenhouse" "https://job-boards.eu.greenhouse.io/ably30" "london"
+add_and_refresh_source "company_ats" "Encord Ashby" "https://jobs.ashbyhq.com/encord/4d2a2e89-6464-425e-8edc-b159561f8108" "london"
+add_and_refresh_source "company_careers" "Tracebit careers" "https://tracebit.com/careers" "london"
+add_and_refresh_source "company_careers" "tldraw careers" "https://tldraw.dev/careers" "london"
+
+BAD_ROLE_COUNT="$(sqlite3 "$ARCWELL_HOME/arcwell.sqlite3" "
+  SELECT COUNT(DISTINCT r.id)
+  FROM job_role_cards r
+  JOIN job_role_source_links l ON l.role_id = r.id
+  JOIN job_sources src ON src.id = l.source_id
+  WHERE src.metadata_json LIKE '%company_target_role_confirmation%'
+    AND (
+      r.role_title LIKE '%<%'
+      OR r.role_title LIKE '%>%'
+      OR lower(r.role_title) LIKE '%fetch(%'
+      OR r.source_url LIKE 'https://northflank.com/product/%'
+      OR r.source_url LIKE 'https://northflank.com/features/%'
+      OR r.source_url = 'https://northflank.com/security'
+    );
+")"
+if [ "$BAD_ROLE_COUNT" != "0" ]; then
+  echo "BLOCKED: live refresh imported parser-noise roles: $BAD_ROLE_COUNT" >&2
+  sqlite3 "$ARCWELL_HOME/arcwell.sqlite3" "
+    SELECT DISTINCT r.company, r.role_title, r.source_url
+    FROM job_role_cards r
+    JOIN job_role_source_links l ON l.role_id = r.id
+    JOIN job_sources src ON src.id = l.source_id
+    WHERE src.metadata_json LIKE '%company_target_role_confirmation%'
+      AND (
+        r.role_title LIKE '%<%'
+        OR r.role_title LIKE '%>%'
+        OR lower(r.role_title) LIKE '%fetch(%'
+        OR r.source_url LIKE 'https://northflank.com/product/%'
+        OR r.source_url LIKE 'https://northflank.com/features/%'
+        OR r.source_url = 'https://northflank.com/security'
+      );
+  " >&2
+  exit 2
+fi
+
+CONFIRMED_ROLE_COUNT="$(sqlite3 "$ARCWELL_HOME/arcwell.sqlite3" "
+  SELECT COUNT(DISTINCT r.id)
+  FROM job_role_cards r
+  JOIN job_role_source_links l ON l.role_id = r.id
+  JOIN job_sources src ON src.id = l.source_id
+  WHERE src.metadata_json LIKE '%company_target_role_confirmation%'
+    AND r.source_confidence = 'canonical_confirmed'
+    AND r.current_status = 'live'
+    AND r.posting_freshness = 'same_day';
+")"
+if [ "$CONFIRMED_ROLE_COUNT" -lt 8 ]; then
+  echo "BLOCKED: expected at least 8 live canonical-confirmed roles from company targets, found $CONFIRMED_ROLE_COUNT" >&2
+  exit 2
+fi
+
+NORTHFLANK_EVANGELIST_ID="$(role_id_by_company_title_like "Northflank" "Cloud Infrastructure Evangelist%")"
+NORTHFLANK_BACKEND_ID="$(role_id_by_company_title_like "Northflank" "Backend Software Engineer%")"
+NORTHFLANK_INFRA_ID="$(role_id_by_company_title_like "Northflank" "Cloud Infrastructure Engineer%")"
+ABLY_WRITER_ID="$(role_id_by_company_title_like "Ably" "Senior Developer Experience Writer%")"
+ABLY_LEAD_ID="$(role_id_by_company_title_like "Ably" "Technical Lead, Developer Experience%")"
+ABLY_DEVREL_ID="$(role_id_by_company_title_like "Ably" "Developer Relations Manager%")"
+ENCORD_INFRA_ID="$(role_id_by_company_title_like "Encord" "Senior Software Engineer, Infrastructure%")"
+
+score_role "$NORTHFLANK_EVANGELIST_ID" \
+  "Live Northflank role combines cloud infrastructure, technical communication, and developer-platform positioning; evidence maps to DevRel leadership, hands-on platform engineering, open-cloud, and Arcwell." \
+  4.8 4.8 4.7 4.6 4.4 4.2 4.4 \
+  "$DEVREL_ID" "$PLATFORM_ENGINEERING_ID" "$OPEN_CLOUD_ID" "$ARWELL_ID"
+
+score_role "$NORTHFLANK_BACKEND_ID" \
+  "Live Northflank backend role is infrastructure-heavy and developer-platform adjacent; evidence is strong on Rust/platform/local-first systems but less exact on the company's backend stack." \
+  4.0 4.5 4.2 4.4 4.1 3.8 3.9 \
+  "$PLATFORM_ENGINEERING_ID" "$ARWELL_ID" "$CODE_SEARCH_ID" "$OPEN_CLOUD_ID"
+
+score_role "$NORTHFLANK_INFRA_ID" \
+  "Live Northflank infrastructure role maps to platform engineering, local Cloudflare tooling, and systems work; it is a technical fit with less explicit DevRel leverage." \
+  4.3 4.6 4.3 4.5 4.2 3.9 4.0 \
+  "$PLATFORM_ENGINEERING_ID" "$OPEN_CLOUD_ID" "$ARWELL_ID"
+
+score_role "$ABLY_WRITER_ID" \
+  "Live Ably developer-experience writing role maps directly to senior DevRel/DevEx leadership, public technical writing, and developer-platform evidence, but the day-to-day may be more writing-heavy than engineering-heavy." \
+  4.3 4.6 4.8 5.0 4.4 4.2 4.0 \
+  "$DEVREL_ID" "$AGENT_PLATFORM_ID" "$ARWELL_ID"
+
+score_role "$ABLY_LEAD_ID" \
+  "Live Ably technical lead role is one of the strongest matches: senior developer experience scope, London remote fit, platform/API audience, and direct evidence from DevRel leadership plus hands-on platform systems." \
+  4.9 4.9 4.9 5.0 4.6 4.5 4.7 \
+  "$DEVREL_ID" "$AGENT_PLATFORM_ID" "$PLATFORM_ENGINEERING_ID" "$ARWELL_ID"
+
+score_role "$ABLY_DEVREL_ID" \
+  "Live Ably DevRel manager role maps cleanly to DevRel leadership and API/platform ecosystem work, with strong geography and audience fit; score is held just below the technical-lead role because management scope needs manual review." \
+  4.6 4.8 4.8 5.0 4.5 4.3 4.3 \
+  "$DEVREL_ID" "$AGENT_PLATFORM_ID" "$PLATFORM_ENGINEERING_ID"
+
+score_role "$ENCORD_INFRA_ID" \
+  "Live Encord infrastructure role is a credible technical platform fit through backend/infrastructure, search, memory, and large-data systems evidence; it is less developer-facing than the Ably/Northflank roles." \
+  4.2 4.4 4.4 4.4 4.2 3.8 3.9 \
+  "$PLATFORM_ENGINEERING_ID" "$CODE_SEARCH_ID" "$MEMORY_ID" "$ARWELL_ID"
+
+SCORED_ROLE_COUNT="$(wc -l <"$ARTIFACT_DIR/scored-role-ids.txt" | tr -d '[:space:]')"
+if [ "$SCORED_ROLE_COUNT" != "7" ]; then
+  echo "BLOCKED: expected 7 scored confirmed roles, found $SCORED_ROLE_COUNT" >&2
+  exit 2
+fi
+
+SCORER_COUNT="$(sqlite3 "$ARCWELL_HOME/arcwell.sqlite3" "SELECT COUNT(*) FROM job_fit_scores WHERE scorer = 'company_target_role_confirmation_v1';")"
+if [ "$SCORER_COUNT" != "7" ]; then
+  echo "BLOCKED: expected 7 company-target role-confirmation scores, found $SCORER_COUNT" >&2
+  exit 2
+fi
+
+run_arcwell job shortlist "$PROFILE_ID" >"$ARTIFACT_DIR/shortlist-after-role-confirmation.json"
+run_arcwell job company-targets "$PROFILE_ID" --market london >"$ARTIFACT_DIR/company-targets-after.json"
+
+sqlite3 -json "$ARCWELL_HOME/arcwell.sqlite3" "
+  SELECT DISTINCT r.id, r.company, r.role_title, r.source_confidence,
+         r.posting_freshness, r.current_status, r.source_url, src.name AS refreshed_source
+  FROM job_role_cards r
+  JOIN job_role_source_links l ON l.role_id = r.id
+  JOIN job_sources src ON src.id = l.source_id
+  WHERE src.metadata_json LIKE '%company_target_role_confirmation%'
+  ORDER BY r.company, r.role_title;
+" >"$ARTIFACT_DIR/confirmed-roles.json"
+
+sqlite3 -json "$ARCWELL_HOME/arcwell.sqlite3" "
+  SELECT r.company, r.role_title, s.weighted_score, s.tier, s.explanation, r.source_url
+  FROM job_fit_scores s
+  JOIN job_role_cards r ON r.id = s.role_id
+  WHERE s.scorer = 'company_target_role_confirmation_v1'
+  ORDER BY s.weighted_score DESC, r.company, r.role_title;
+" >"$ARTIFACT_DIR/scored-confirmed-roles.json"
+
+sqlite3 -json "$ARCWELL_HOME/arcwell.sqlite3" "
+  SELECT h.id, h.source_id, src.name AS source_name, src.url AS source_url, h.status,
+         h.fetched_count, h.accepted_count, h.rejected_count, h.note
+  FROM job_source_health h
+  JOIN job_sources src ON src.id = h.source_id
+  WHERE src.metadata_json LIKE '%company_target_role_confirmation%'
+  ORDER BY h.checked_at ASC;
+" >"$ARTIFACT_DIR/source-health.json"
+
+CONFIRMED_ROLES_SHA="$(shasum -a 256 "$ARTIFACT_DIR/confirmed-roles.json" | awk '{print $1}')"
+SCORED_ROLES_SHA="$(shasum -a 256 "$ARTIFACT_DIR/scored-confirmed-roles.json" | awk '{print $1}')"
+SOURCE_HEALTH_SHA="$(shasum -a 256 "$ARTIFACT_DIR/source-health.json" | awk '{print $1}')"
+
+jq -n \
+  --arg feature "company-target role confirmation and scoring" \
+  --arg status "Production Data Proof (bounded)" \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg source_proof "$SOURCE_PROOF" \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg home "$ARCWELL_HOME" \
+  --arg profile_id "$PROFILE_ID" \
+  --arg confirmed_roles_sha "$CONFIRMED_ROLES_SHA" \
+  --arg scored_roles_sha "$SCORED_ROLES_SHA" \
+  --arg source_health_sha "$SOURCE_HEALTH_SHA" \
+  --argjson confirmed_role_count "$CONFIRMED_ROLE_COUNT" \
+  --argjson scored_role_count "$SCORED_ROLE_COUNT" \
+  --argjson bad_role_count "$BAD_ROLE_COUNT" \
+  --slurpfile sources "$ARTIFACT_DIR/sources.jsonl" \
+  --slurpfile refreshes "$ARTIFACT_DIR/refreshes.jsonl" \
+  --slurpfile confirmed_roles "$ARTIFACT_DIR/confirmed-roles.json" \
+  --slurpfile scored_roles "$ARTIFACT_DIR/scored-confirmed-roles.json" \
+  --slurpfile source_health "$ARTIFACT_DIR/source-health.json" \
+  '{
+    feature: $feature,
+    status: $status,
+    created_at: $created_at,
+    skill_gates: ["arc:anti-mirage", "arc:job-hunting"],
+    user_visible_claim: "Starting from the controlled London company-target map, Arcwell can promote a bounded set of company targets into current role cards only when a live company/ATS page confirms the opening, then score those confirmed roles against the candidate evidence ledger.",
+    non_claims: [
+      "This is not exhaustive London startup coverage.",
+      "This is not scheduled monitoring or future freshness.",
+      "This is not proof that every company target has current openings.",
+      "This is not application-packet creation, approval, export, or sending.",
+      "This is not warm-intro proof or application outcome proof."
+    ],
+    inputs: {
+      source_proof: $source_proof,
+      copied_home: $home,
+      profile_id: $profile_id,
+      live_sources: ($sources | map({id, source_family, name, url, market_scope}))
+    },
+    outputs: {
+      proof_root: $proof_root,
+      confirmed_role_count: $confirmed_role_count,
+      scored_role_count: $scored_role_count,
+      parser_noise_role_count: $bad_role_count,
+      confirmed_roles_sha256: $confirmed_roles_sha,
+      scored_roles_sha256: $scored_roles_sha,
+      source_health_sha256: $source_health_sha
+    },
+    live_refresh_reports: $refreshes,
+    confirmed_roles: $confirmed_roles[0],
+    scored_confirmed_roles: $scored_roles[0],
+    source_health: $source_health[0],
+    durable_state_written: [
+      "copied proof home under the proof root",
+      "five live-refreshed job sources",
+      "source-health rows for those live refreshes",
+      "canonical-confirmed live role cards only where live pages yielded role evidence",
+      "seven role-level fit scores using reviewed evidence-card ids"
+    ],
+    durable_state_not_written: [
+      "no application packets",
+      "no packet approvals",
+      "no packet exports",
+      "no job_applications rows",
+      "no writes to the source proof home",
+      "no writes to the user operational home"
+    ],
+    adversarial_review_judgment: "Promote only as bounded Production Data Proof for role confirmation and scoring from selected London company targets. Keep exhaustive discovery, scheduled refresh, packet approval/export, sending, and outcomes as separate gates.",
+    remaining_risks: [
+      {
+        risk: "The proof is intentionally bounded to five live sources and seven scored roles.",
+        next_action: "Expand source coverage before claiming broad London market coverage."
+      },
+      {
+        risk: "Some useful company targets returned company-only or dynamically rendered pages without role cards.",
+        next_action: "Use browser-rendered or ATS-specific adapters before downgrading those companies."
+      },
+      {
+        risk: "Scores are deterministic and evidence-linked, but not user-reviewed application decisions.",
+        next_action: "Run packet creation, user review, and export gates separately for any role the user chooses to pursue."
+      }
+    ]
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"
+log "bounded company-target role confirmation proof passed"

@@ -1,0 +1,1344 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DB="${ARCWELL_WIKI_FRESHNESS_DB:-${ARCWELL_HOME:-$HOME/.arcwell}/arcwell.sqlite3}"
+RUN_STAMP="${ARCWELL_WIKI_FRESHNESS_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_WIKI_FRESHNESS_PROOF_DIR:-.arcwell-dev/audits/wiki-freshness-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+SINCE_DAYS="${ARCWELL_WIKI_FRESHNESS_SINCE_DAYS:-14}"
+MAX_CARDS="${ARCWELL_WIKI_FRESHNESS_MAX_CARDS:-4000}"
+MAX_CANDIDATES="${ARCWELL_WIKI_FRESHNESS_MAX_CANDIDATES:-250}"
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/wiki-freshness-scan [--db PATH] [--proof-dir DIR] [--since-days N] [--max-cards N] [--max-candidates N]
+
+Builds a read-only freshness/update triage packet from Arcwell's live wiki,
+source-card, source-health, knowledge-report, and digest-candidate tables.
+
+Artifacts:
+  wiki_freshness_candidates.csv
+  wiki_freshness_summary.json
+  update_batch.md
+  blocked_sources.md
+  blocked_sources.csv
+  github_blockers.md
+  manual_review_queues.md
+  manual_review_queues.csv
+  source_delta_summary.csv
+  safe_batch_candidates.csv
+  proof-packet.json
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --db)
+      DB="${2:-}"
+      shift 2
+      ;;
+    --proof-dir)
+      PROOF_ROOT="${2:-}"
+      ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+      shift 2
+      ;;
+    --since-days)
+      SINCE_DAYS="${2:-}"
+      shift 2
+      ;;
+    --max-cards)
+      MAX_CARDS="${2:-}"
+      shift 2
+      ;;
+    --max-candidates)
+      MAX_CANDIDATES="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "BLOCKED: unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+for required in python3 sqlite3; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for wiki freshness scanning." >&2
+    exit 2
+  fi
+done
+
+if [ ! -f "$DB" ]; then
+  echo "BLOCKED: Arcwell DB not found: $DB" >&2
+  exit 2
+fi
+
+mkdir -p "$ARTIFACT_DIR"
+
+python3 - "$DB" "$ARTIFACT_DIR" "$SINCE_DAYS" "$MAX_CARDS" "$MAX_CANDIDATES" <<'PY'
+import csv
+import json
+import math
+import re
+import sqlite3
+import sys
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+from urllib.parse import urlparse
+
+db_path = Path(sys.argv[1])
+artifact_dir = Path(sys.argv[2])
+since_days = int(sys.argv[3])
+max_cards = int(sys.argv[4])
+max_candidates = int(sys.argv[5])
+artifact_dir.mkdir(parents=True, exist_ok=True)
+
+now = datetime.now(timezone.utc)
+since = now - timedelta(days=since_days)
+
+STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "blog", "by", "code",
+    "com", "dev", "development", "docs", "for", "from", "github", "how",
+    "in", "is", "it", "llm", "llms", "news", "of", "on", "org", "release",
+    "repo", "research", "source", "the", "to", "update", "using", "vs",
+    "with", "www",
+}
+
+GENERIC_SINGLETON_TOKENS = {
+    "action", "actions", "agent", "agents", "ai", "app", "apps", "chat",
+    "cloud", "core", "data", "edge", "eval", "evals", "java", "local",
+    "locally", "model", "models", "modular", "open", "platform", "python",
+    "tools", "workflow", "workflows",
+}
+
+KEEP_SHORT_TOKENS = {
+    "3d",
+    "ai",
+    "ar",
+    "go",
+    "js",
+    "ts",
+    "ui",
+    "uv",
+    "ux",
+    "vr",
+    "x",
+}
+
+PRIMARY_DOMAINS = {
+    "anthropic.com",
+    "arxiv.org",
+    "blog.google",
+    "deepmind.google",
+    "developer.nvidia.com",
+    "github.com",
+    "huggingface.co",
+    "microsoft.com",
+    "mistral.ai",
+    "openai.com",
+    "research.google",
+}
+
+SECONDARY_DOMAINS = {
+    "alphasignalai.substack.com",
+    "cameronrwolfe.substack.com",
+    "eugeneyan.com",
+    "hamel.dev",
+    "importai.substack.com",
+    "interconnects.ai",
+    "latent.space",
+    "lilianweng.github.io",
+    "news.smol.ai",
+    "normaltech.ai",
+    "simonwillison.net",
+    "sub.thursdai.news",
+    "thecreatorsai.com",
+    "thesequence.substack.com",
+    "turingpost.substack.com",
+}
+
+POLICY_RULE_IDS_BY_SOURCE_KIND = {
+    "rss": {
+        "worker.enqueue": "allow-scheduled-rss-fetch-worker-enqueue",
+        "provider.network": "allow-scheduled-rss-fetch-provider-network",
+        "source.write": "allow-scheduled-rss-source-card-write",
+    },
+    "github_owner": {
+        "worker.enqueue": "allow-scheduled-github-owner-worker-enqueue",
+        "provider.network": "allow-scheduled-github-owner-provider-network",
+        "source.write": "allow-scheduled-github-source-card-write",
+    },
+    "github_repo": {
+        "worker.enqueue": "allow-scheduled-github-repo-worker-enqueue",
+        "provider.network": "allow-scheduled-github-repo-provider-network",
+        "source.write": "allow-scheduled-github-source-card-write",
+    },
+    "arxiv_query": {
+        "worker.enqueue": "allow-scheduled-arxiv-search-worker-enqueue",
+        "provider.network": "allow-scheduled-arxiv-search-provider-network",
+        "source.write": "allow-scheduled-arxiv-source-card-write",
+    },
+    "x_bookmarks": {
+        "worker.enqueue": "allow-scheduled-x-bookmarks-worker-enqueue",
+        "provider.network": "allow-scheduled-x-bookmarks-provider-network",
+        "source.write": "allow-scheduled-x-source-card-write",
+    },
+    "x_handle": {
+        "worker.enqueue": "allow-scheduled-x-monitor-watch-source-enqueue",
+        "provider.network": "allow-scheduled-x-monitor-provider-network",
+        "source.write": "allow-scheduled-x-source-card-write",
+    },
+}
+
+
+def load_policy_rule_ids():
+    policy_path = db_path.parent / "arcwell-policy.toml"
+    if not policy_path.exists():
+        return policy_path, set()
+    try:
+        text = policy_path.read_text(errors="replace")
+    except Exception:
+        return policy_path, set()
+    return policy_path, set(re.findall(r'^\s*id\s*=\s*"([^"]+)"', text, flags=re.MULTILINE))
+
+
+def policy_action_from_error(error):
+    lower = (error or "").lower()
+    for action in ("worker.enqueue", "provider.network", "source.write"):
+        if action in lower:
+            return action
+    return "worker.enqueue"
+
+
+def current_policy_allows_source_kind(source_kind, action, present_rule_ids):
+    rule_id = POLICY_RULE_IDS_BY_SOURCE_KIND.get(source_kind, {}).get(action)
+    return bool(rule_id and rule_id in present_rule_ids)
+
+
+def parse_time(value):
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        pass
+    try:
+        dt = parsedate_to_datetime(str(value))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def iso(dt):
+    return dt.astimezone(timezone.utc).isoformat() if dt else ""
+
+
+def load_json(value, fallback):
+    if not value:
+        return fallback
+    try:
+        return json.loads(value)
+    except Exception:
+        return fallback
+
+
+def domain(url):
+    try:
+        host = urlparse(url).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        return host
+    except Exception:
+        return ""
+
+
+def slug_text(value):
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+def tokens(value):
+    return {
+        token
+        for token in slug_text(value).split()
+        if (len(token) > 2 or token in KEEP_SHORT_TOKENS) and token not in STOPWORDS
+    }
+
+
+def compact(value, length=140):
+    text = re.sub(r"\s+", " ", value or "").strip()
+    if len(text) <= length:
+        return text
+    return text[: length - 1].rstrip() + "..."
+
+
+BLOCKER_CLASS_PRIORITY = {
+    "rate_limited": 0,
+    "no_health": 1,
+    "stale_policy_deferred_non_x": 2,
+    "failed": 3,
+    "overdue_healthy": 4,
+    "queued_due": 5,
+    "stale_policy_deferred_x": 6,
+    "policy_deferred": 7,
+    "x_policy_deferred": 8,
+    "x_no_health": 9,
+}
+
+
+def blocked_source_sort_key(row):
+    return (
+        BLOCKER_CLASS_PRIORITY.get(row["blocker_class"], 99),
+        row["source_kind"],
+        row["health_status"],
+        row["locator"].lower(),
+    )
+
+
+def source_role(card):
+    meta = card.metadata
+    role = str(meta.get("source_role") or "").lower()
+    trust = str(meta.get("trust_level") or "").lower()
+    host = card.domain
+    if card.provider == "github" or card.source_type in {"github_repo", "github_release", "github_commit", "arxiv", "official_docs"}:
+        return "primary"
+    if host in PRIMARY_DOMAINS or role == "primary" or trust == "high":
+        return "primary"
+    if card.provider in {"x", "x-import", "reddit"} or card.source_type in {"x", "reddit_post"}:
+        return "signal"
+    if host in SECONDARY_DOMAINS or card.provider in {"rss", "web", "mcp"}:
+        return "secondary"
+    return "secondary"
+
+
+@dataclass
+class Page:
+    id: str
+    title: str
+    path: str
+    source: str
+    status: str
+    created_at: datetime | None
+    updated_at: datetime | None
+    content: str = ""
+    cited_source_card_ids: set[str] = field(default_factory=set)
+    title_tokens: set[str] = field(default_factory=set)
+    source_tokens: set[str] = field(default_factory=set)
+
+
+@dataclass
+class Card:
+    id: str
+    title: str
+    url: str
+    source_type: str
+    provider: str
+    summary: str
+    retrieved_at: datetime | None
+    created_at: datetime | None
+    updated_at: datetime | None
+    wiki_page_id: str
+    metadata: dict
+    domain: str
+    role: str = "secondary"
+    text_tokens: set[str] = field(default_factory=set)
+
+
+conn = sqlite3.connect(str(db_path))
+conn.row_factory = sqlite3.Row
+policy_path, present_policy_rule_ids = load_policy_rule_ids()
+
+pages = []
+page_title_counts = Counter()
+for row in conn.execute(
+    """
+    SELECT id, title, path, source, status, created_at, updated_at
+    FROM wiki_pages
+    WHERE status = 'active'
+    """
+):
+    title = row["title"] or ""
+    source = row["source"] or ""
+    if title.startswith("Source Card:") or row["id"].startswith("source-card-"):
+        continue
+    page_title_counts[slug_text(title)] += 1
+    page = Page(
+        id=row["id"],
+        title=title,
+        path=row["path"] or "",
+        source=source,
+        status=row["status"] or "",
+        created_at=parse_time(row["created_at"]),
+        updated_at=parse_time(row["updated_at"]),
+    )
+    page.title_tokens = tokens(page.title)
+    page.source_tokens = tokens(source)
+    if page.path:
+        try:
+            page.content = Path(page.path).read_text(errors="replace")
+            page.cited_source_card_ids = set(re.findall(r"\bsrc-[a-f0-9]{16}\b", page.content))
+        except Exception:
+            page.content = ""
+            page.cited_source_card_ids = set()
+    pages.append(page)
+
+cards = []
+for row in conn.execute(
+    """
+    SELECT id, title, url, source_type, provider, summary, retrieved_at,
+           wiki_page_id, created_at, updated_at, metadata_json
+    FROM source_cards
+    ORDER BY COALESCE(datetime(retrieved_at), datetime(updated_at), datetime(created_at)) DESC
+    LIMIT ?
+    """,
+    (max_cards,),
+):
+    metadata = load_json(row["metadata_json"], {})
+    retrieved = parse_time(row["retrieved_at"]) or parse_time(row["updated_at"]) or parse_time(row["created_at"])
+    card = Card(
+        id=row["id"],
+        title=row["title"] or "",
+        url=row["url"] or "",
+        source_type=row["source_type"] or "",
+        provider=row["provider"] or "",
+        summary=row["summary"] or "",
+        retrieved_at=retrieved,
+        created_at=parse_time(row["created_at"]),
+        updated_at=parse_time(row["updated_at"]),
+        wiki_page_id=row["wiki_page_id"] or "",
+        metadata=metadata if isinstance(metadata, dict) else {},
+        domain=domain(row["url"] or ""),
+    )
+    owner = str(card.metadata.get("owner") or "")
+    name = str(card.metadata.get("name") or "")
+    full_name = ""
+    raw = card.metadata.get("raw")
+    if isinstance(raw, dict):
+        full_name = str(raw.get("full_name") or "")
+    card.text_tokens = tokens(" ".join([card.title, card.summary, card.url, owner, name, full_name]))
+    card.role = source_role(card)
+    cards.append(card)
+
+recent_cards = [card for card in cards if card.retrieved_at and card.retrieved_at >= since]
+cards_by_id = {card.id: card for card in cards}
+already_cited_source_card_matches = 0
+
+page_candidates = []
+for page in pages:
+    if len(page.title_tokens) < 1:
+        continue
+    if len(page.title_tokens) == 1 and next(iter(page.title_tokens)) in GENERIC_SINGLETON_TOKENS:
+        continue
+    page_best = []
+    for card in recent_cards:
+        if card.id in page.cited_source_card_ids:
+            already_cited_source_card_matches += 1
+            continue
+        overlap = page.title_tokens & card.text_tokens
+        source_match = page.source and card.url and page.source.rstrip("/") == card.url.rstrip("/")
+        if not overlap and source_match:
+            overlap = set(["url"])
+        if not overlap:
+            continue
+        title_den = max(1, min(len(page.title_tokens), 8))
+        overlap_score = len(overlap) / title_den
+        exactish = slug_text(page.title) and slug_text(page.title) in slug_text(card.title + " " + card.summary)
+        strong_overlap = len(overlap) >= 2 and overlap_score >= 0.5
+        single_distinctive_exact = (
+            len(page.title_tokens) == 1
+            and exactish
+            and next(iter(page.title_tokens)) not in GENERIC_SINGLETON_TOKENS
+        )
+        if not (source_match or exactish or strong_overlap or single_distinctive_exact):
+            continue
+        card_age_hours = max(0.0, (now - card.retrieved_at).total_seconds() / 3600) if card.retrieved_at else 9999
+        recency = max(0.0, 20.0 - min(card_age_hours / 12.0, 20.0))
+        role_score = {"primary": 30.0, "secondary": 18.0, "signal": 8.0}.get(card.role, 12.0)
+        match_score = min(35.0, overlap_score * 35.0 + (12.0 if exactish else 0.0) + (25.0 if source_match else 0.0))
+        page_updated = page.updated_at or datetime.fromtimestamp(0, timezone.utc)
+        stale_days = max(0.0, (card.retrieved_at - page_updated).total_seconds() / 86400) if card.retrieved_at else 0.0
+        stale_score = min(15.0, stale_days * 2.0)
+        score = role_score + match_score + recency + stale_score
+        if card.retrieved_at and page.updated_at and card.retrieved_at <= page.updated_at:
+            score -= 10.0
+        page_best.append((score, card, sorted(overlap), exactish, source_match))
+    if not page_best:
+        continue
+    page_best.sort(key=lambda item: item[0], reverse=True)
+    selected = page_best[:8]
+    primary_count = sum(1 for _, card, *_ in selected if card.role == "primary")
+    signal_count = sum(1 for _, card, *_ in selected if card.role == "signal")
+    exactish_count = sum(1 for _, _, _, exactish, _ in selected if exactish)
+    source_match_count = sum(1 for _, _, _, _, source_match in selected if source_match)
+    newest = max((card.retrieved_at for _, card, *_ in selected if card.retrieved_at), default=None)
+    total_score = sum(item[0] for item in selected[:3]) / min(3, len(selected))
+    if primary_count >= 2:
+        total_score += 8
+    if signal_count and primary_count:
+        total_score += 5
+    page_updated = page.updated_at or datetime.fromtimestamp(0, timezone.utc)
+    action = "review_existing_page"
+    if newest and newest > page_updated + timedelta(hours=6):
+        action = "update_existing_page"
+    if page.source.startswith("knowledge-cluster:"):
+        action = "refresh_generated_knowledge_page" if action == "update_existing_page" else "review_generated_knowledge_page"
+    reason = f"{len(selected)} recent source cards matched page title/source tokens; {primary_count} primary, {signal_count} signal."
+    title_key = slug_text(page.title)
+    duplicate_title_count = page_title_counts.get(title_key, 1)
+    all_title_terms_matched = bool(page.title_tokens) and page.title_tokens.issubset(
+        set(term for _, _, terms, *_ in selected for term in terms)
+    )
+    review_gate = "manual_review"
+    gate_reason = "needs human page/source claim check"
+    if duplicate_title_count > 1:
+        review_gate = "manual_review"
+        gate_reason = f"duplicate title group has {duplicate_title_count} active pages"
+    elif page.source.startswith("knowledge-cluster:"):
+        review_gate = "manual_review"
+        gate_reason = "generated knowledge page requires evidence consolidation"
+    elif signal_count > primary_count:
+        review_gate = "manual_review"
+        gate_reason = "signal-heavy evidence mix"
+    elif len(page.title_tokens) == 1 and source_match_count == 0:
+        review_gate = "manual_review"
+        gate_reason = "single-token title without exact source URL match"
+    elif source_match_count > 0 and primary_count >= 1 and signal_count <= primary_count:
+        review_gate = "safe_batch_candidate"
+        gate_reason = "source URL identity match"
+    elif primary_count >= 3 and exactish_count >= 2 and all_title_terms_matched and signal_count <= 2:
+        review_gate = "safe_batch_candidate"
+        gate_reason = "primary-heavy exact title match"
+    elif primary_count <= 1 and signal_count >= 1:
+        review_gate = "manual_review"
+        gate_reason = "weak primary evidence"
+    page_candidates.append({
+        "action": action,
+        "score": round(total_score, 2),
+        "review_gate": review_gate,
+        "gate_reason": gate_reason,
+        "page_id": page.id,
+        "page_title": page.title,
+        "page_path": page.path,
+        "page_source": page.source,
+        "page_updated_at": iso(page.updated_at),
+        "newest_evidence_at": iso(newest),
+        "source_card_count": len(selected),
+        "primary_count": primary_count,
+        "secondary_count": sum(1 for _, card, *_ in selected if card.role == "secondary"),
+        "signal_count": signal_count,
+        "exactish_count": exactish_count,
+        "source_match_count": source_match_count,
+        "duplicate_title_count": duplicate_title_count,
+        "source_card_ids": ";".join(card.id for _, card, *_ in selected),
+        "source_titles": " | ".join(compact(card.title, 90) for _, card, *_ in selected[:5]),
+        "source_urls": " | ".join(card.url for _, card, *_ in selected[:5]),
+        "reason": reason,
+        "match_terms": ";".join(sorted(set(term for _, _, terms, *_ in selected for term in terms))[:20]),
+        "provenance": "source_card_recent_match_v1",
+    })
+
+digest_by_topic = {}
+for row in conn.execute(
+    """
+    SELECT id, topic, status, review_status, score, source_card_ids_json, created_at, updated_at
+    FROM digest_candidates
+    ORDER BY datetime(updated_at) DESC
+    """
+):
+    status_rank = {"approved": 4, "ready": 3, "pending": 2, "rejected": 1}.get(row["status"] or "", 0)
+    current = digest_by_topic.get(row["topic"])
+    candidate = {
+        "id": row["id"],
+        "status": row["status"] or "",
+        "review_status": row["review_status"] or "",
+        "score": float(row["score"] or 0),
+        "updated_at": parse_time(row["updated_at"]),
+        "status_rank": status_rank,
+    }
+    if not current or (candidate["status_rank"], candidate["score"], candidate["updated_at"] or datetime.min.replace(tzinfo=timezone.utc)) > (
+        current["status_rank"],
+        current["score"],
+        current["updated_at"] or datetime.min.replace(tzinfo=timezone.utc),
+    ):
+        digest_by_topic[row["topic"]] = candidate
+
+knowledge_candidates = []
+seen_knowledge_keys = set()
+for row in conn.execute(
+    """
+    SELECT r.id AS report_id, r.cluster_id, r.title, r.status, r.source_card_ids_json,
+           r.metadata_json, r.created_at, r.updated_at,
+           c.topic, c.status AS cluster_status, c.novelty_score, c.momentum_score, c.stale_score
+    FROM knowledge_reports r
+    LEFT JOIN knowledge_clusters c ON c.id = r.cluster_id
+    ORDER BY datetime(r.updated_at) DESC
+    LIMIT 500
+    """
+):
+    source_ids = load_json(row["source_card_ids_json"], [])
+    if not isinstance(source_ids, list):
+        source_ids = []
+    related = [cards_by_id[card_id] for card_id in source_ids if card_id in cards_by_id]
+    if not related:
+        continue
+    knowledge_key = (row["cluster_id"], tuple(sorted(source_ids)))
+    if knowledge_key in seen_knowledge_keys:
+        continue
+    seen_knowledge_keys.add(knowledge_key)
+    newest = max((card.retrieved_at for card in related if card.retrieved_at), default=None)
+    if newest and newest < since:
+        continue
+    metadata = load_json(row["metadata_json"], {})
+    wiki_page_id = metadata.get("wiki_page_id") if isinstance(metadata, dict) else ""
+    primary_count = sum(1 for card in related if card.role == "primary")
+    signal_count = sum(1 for card in related if card.role == "signal")
+    digest = digest_by_topic.get(row["topic"] or "")
+    digest_status = digest["status"] if digest else ""
+    score = 45.0 + min(primary_count, 12) * 4.0 + min(signal_count, 12) * 1.0
+    score += float(row["novelty_score"] or 0) * 10.0
+    score += float(row["momentum_score"] or 0) * 10.0
+    if digest_status == "ready":
+        score += 15
+    elif digest_status == "pending":
+        score += 8
+    if primary_count == 0:
+        score = min(score, 68.0)
+    action = "review_ready_digest_candidate" if digest_status == "ready" else "review_recent_knowledge_report"
+    if primary_count == 0 and signal_count > 0:
+        action = "review_signal_only_cluster"
+    if wiki_page_id:
+        action = "review_generated_knowledge_page"
+    knowledge_candidates.append({
+        "action": action,
+        "score": round(score, 2),
+        "review_gate": "manual_review",
+        "gate_reason": "generated knowledge reports require human promotion",
+        "page_id": wiki_page_id or "",
+        "page_title": row["topic"] or row["title"] or "",
+        "page_path": "",
+        "page_source": f"knowledge-cluster:{row['cluster_id']}",
+        "page_updated_at": iso(parse_time(row["updated_at"])),
+        "newest_evidence_at": iso(newest),
+        "source_card_count": len(related),
+        "primary_count": primary_count,
+        "secondary_count": sum(1 for card in related if card.role == "secondary"),
+        "signal_count": signal_count,
+        "exactish_count": 0,
+        "source_match_count": 0,
+        "duplicate_title_count": 0,
+        "source_card_ids": ";".join(source_ids),
+        "source_titles": " | ".join(compact(card.title, 90) for card in related[:5]),
+        "source_urls": " | ".join(card.url for card in related[:5]),
+        "reason": f"Knowledge report {row['report_id']} has {len(related)} evidence cards; digest={digest_status or 'none'}.",
+        "match_terms": "",
+        "provenance": "knowledge_report_digest_v1",
+    })
+
+all_candidates = page_candidates + knowledge_candidates
+all_candidates.sort(key=lambda item: item["score"], reverse=True)
+ranked = all_candidates[:max_candidates]
+for index, item in enumerate(ranked, start=1):
+    item["rank"] = index
+
+candidate_pool_action_counts = Counter(item["action"] for item in all_candidates)
+candidate_pool_review_gate_counts = Counter(item["review_gate"] for item in all_candidates)
+ranked_window_overflow = max(0, len(all_candidates) - len(ranked))
+
+candidate_fields = [
+    "rank", "action", "score", "review_gate", "gate_reason",
+    "page_id", "page_title", "page_path",
+    "page_source", "page_updated_at", "newest_evidence_at",
+    "source_card_count", "primary_count", "secondary_count", "signal_count",
+    "exactish_count", "source_match_count", "duplicate_title_count",
+    "source_card_ids", "source_titles", "source_urls", "match_terms",
+    "reason", "provenance",
+]
+with (artifact_dir / "wiki_freshness_candidates.csv").open("w", newline="") as handle:
+    writer = csv.DictWriter(handle, fieldnames=candidate_fields)
+    writer.writeheader()
+    writer.writerows(ranked)
+
+safe_batch_ranked = [
+    item
+    for item in ranked
+    if item["action"] == "update_existing_page"
+    and item["review_gate"] == "safe_batch_candidate"
+    and item["primary_count"] >= 3
+    and item["score"] >= 105
+]
+with (artifact_dir / "safe_batch_candidates.csv").open("w", newline="") as handle:
+    writer = csv.DictWriter(handle, fieldnames=candidate_fields)
+    writer.writeheader()
+    writer.writerows(safe_batch_ranked)
+
+def editorial_queue_for(item):
+    if item["review_gate"] == "safe_batch_candidate":
+        return (
+            "low_score_safe_gate_review",
+            60,
+            "Open the page and evidence, then either lower the safe threshold intentionally or leave for manual editing.",
+            "Do not auto-apply until score/primary thresholds or an explicit human review gate is satisfied.",
+        )
+    if item["action"] != "update_existing_page":
+        return (
+            "generated_knowledge_promotion",
+            10,
+            "Review the generated/report artifact against source cards, then promote, merge, or reject.",
+            "Do not treat generated reports as primary evidence; require cited source-card support before promotion.",
+        )
+    if item["duplicate_title_count"] > 1:
+        return (
+            "duplicate_title_consolidation",
+            20,
+            "Inspect sibling pages with the same title and consolidate before adding freshness notes.",
+            "Do not write parallel updates into duplicate title pages without choosing the canonical page.",
+        )
+    if item["gate_reason"].startswith("single-token title"):
+        return (
+            "ambiguous_single_topic",
+            40,
+            "Verify the source cards really refer to this page's intended entity, not just a shared product/name token.",
+            "Require exact source URL, canonical entity match, or human confirmation before writing.",
+        )
+    if item["signal_count"] > item["primary_count"]:
+        return (
+            "signal_heavy_primary_verification",
+            50,
+            "Find or wait for primary/secondary corroboration before promoting social evidence into the page.",
+            "Do not update from signal-heavy evidence alone unless the page explicitly tracks social reaction.",
+        )
+    if item["primary_count"] >= 5 and item["exactish_count"] >= 2:
+        return (
+            "high_primary_editorial_update",
+            30,
+            "Open the page and write a source-card-backed paragraph or bullet after checking current claims.",
+            "Back up the page and refresh DB/FTS; do not claim a full rewrite from a freshness note.",
+        )
+    return (
+        "general_claim_review",
+        70,
+        "Review whether the matched source cards update, contradict, or merely mention the page topic.",
+        "Skip when evidence is only topical overlap or does not change a page claim.",
+    )
+
+manual_queue_rows = []
+for item in ranked:
+    if item in safe_batch_ranked:
+        continue
+    queue, priority, next_action, stop_condition = editorial_queue_for(item)
+    manual_queue_rows.append({
+        "rank": item["rank"],
+        "queue": queue,
+        "queue_priority": priority,
+        "next_action": next_action,
+        "stop_condition": stop_condition,
+        "action": item["action"],
+        "score": item["score"],
+        "review_gate": item["review_gate"],
+        "gate_reason": item["gate_reason"],
+        "page_id": item["page_id"],
+        "page_title": item["page_title"],
+        "page_path": item["page_path"],
+        "newest_evidence_at": item["newest_evidence_at"],
+        "source_card_count": item["source_card_count"],
+        "primary_count": item["primary_count"],
+        "secondary_count": item["secondary_count"],
+        "signal_count": item["signal_count"],
+        "exactish_count": item["exactish_count"],
+        "source_match_count": item["source_match_count"],
+        "duplicate_title_count": item["duplicate_title_count"],
+        "source_card_ids": item["source_card_ids"],
+        "source_titles": item["source_titles"],
+        "source_urls": item["source_urls"],
+        "reason": item["reason"],
+        "provenance": item["provenance"],
+    })
+manual_queue_rows.sort(key=lambda row: (row["queue_priority"], -float(row["score"]), int(row["rank"])))
+manual_queue_fields = [
+    "rank", "queue", "queue_priority", "next_action", "stop_condition",
+    "action", "score", "review_gate", "gate_reason", "page_id",
+    "page_title", "page_path", "newest_evidence_at",
+    "source_card_count", "primary_count", "secondary_count", "signal_count",
+    "exactish_count", "source_match_count", "duplicate_title_count",
+    "source_card_ids", "source_titles", "source_urls", "reason", "provenance",
+]
+with (artifact_dir / "manual_review_queues.csv").open("w", newline="") as handle:
+    writer = csv.DictWriter(handle, fieldnames=manual_queue_fields)
+    writer.writeheader()
+    writer.writerows(manual_queue_rows)
+
+manual_queue_counts = Counter(row["queue"] for row in manual_queue_rows)
+with (artifact_dir / "manual_review_queues.md").open("w") as handle:
+    handle.write("# Manual Review Queues\n\n")
+    handle.write(f"Generated: `{iso(now)}`\n\n")
+    handle.write(
+        "These queues are not automatic writes. They split non-safe-batch candidates into "
+        "reviewable editorial work with a next action and a stop condition.\n\n"
+    )
+    handle.write("## Queue Counts\n\n")
+    handle.write("| Queue | Rows |\n")
+    handle.write("| --- | ---: |\n")
+    for queue, count in sorted(manual_queue_counts.items(), key=lambda item: (-item[1], item[0])):
+        handle.write(f"| `{queue}` | {count} |\n")
+    handle.write("\n")
+    for queue, _ in sorted(manual_queue_counts.items(), key=lambda item: (-item[1], item[0])):
+        rows = [row for row in manual_queue_rows if row["queue"] == queue]
+        handle.write(f"## {queue}\n\n")
+        handle.write(f"- Rows: `{len(rows)}`\n")
+        handle.write(f"- Next action: {rows[0]['next_action']}\n")
+        handle.write(f"- Stop condition: {rows[0]['stop_condition']}\n\n")
+        handle.write("| Rank | Score | Page | Gate reason | Evidence mix | Source cards |\n")
+        handle.write("| ---: | ---: | --- | --- | --- | --- |\n")
+        for row in rows[:15]:
+            handle.write(
+                "| {rank} | {score} | `{page}` | {reason} | {primary}P/{secondary}S/{signal}Sig | {cards} |\n".format(
+                    rank=row["rank"],
+                    score=row["score"],
+                    page=compact(row["page_title"], 70).replace("|", "\\|"),
+                    reason=compact(row["gate_reason"], 80).replace("|", "\\|"),
+                    primary=row["primary_count"],
+                    secondary=row["secondary_count"],
+                    signal=row["signal_count"],
+                    cards=compact(row["source_card_ids"], 90).replace("|", "\\|"),
+                )
+            )
+        handle.write("\n")
+
+source_rows = []
+provider_counts = Counter((card.provider, card.source_type, card.role) for card in recent_cards)
+for (provider, source_type, role), count in sorted(provider_counts.items(), key=lambda item: (-item[1], item[0])):
+    newest = max((card.retrieved_at for card in recent_cards if (card.provider, card.source_type, card.role) == (provider, source_type, role)), default=None)
+    source_rows.append({
+        "provider": provider,
+        "source_type": source_type,
+        "role": role,
+        "recent_cards": count,
+        "newest_retrieved_at": iso(newest),
+    })
+with (artifact_dir / "source_delta_summary.csv").open("w", newline="") as handle:
+    writer = csv.DictWriter(handle, fieldnames=["provider", "source_type", "role", "recent_cards", "newest_retrieved_at"])
+    writer.writeheader()
+    writer.writerows(source_rows)
+
+blocked_sources = list(conn.execute(
+    """
+    SELECT ws.source_kind, ws.locator, ws.label, ws.cadence, ws.status AS watch_status,
+           COALESCE(sh.status, 'no_health') AS health_status,
+           sh.last_success_at, sh.last_failure_at, sh.next_run_at, sh.last_error
+    FROM watch_sources ws
+    LEFT JOIN source_health sh
+      ON (
+        ws.source_kind = 'x_handle'
+        AND sh.key = ('x:watch:' || ws.locator)
+      )
+      OR (
+        ws.source_kind = 'x_bookmarks'
+        AND sh.key = 'x:bookmarks'
+      )
+      OR (
+        ws.source_kind NOT IN ('x_handle', 'x_bookmarks')
+        AND sh.source_kind = ws.source_kind
+        AND sh.locator = ws.locator
+      )
+    WHERE ws.status = 'active'
+      AND (
+        sh.status IS NULL
+        OR sh.status != 'healthy'
+        OR (sh.next_run_at IS NOT NULL AND datetime(sh.next_run_at) < datetime('now'))
+      )
+    ORDER BY
+      CASE COALESCE(sh.status, 'no_health')
+        WHEN 'failed' THEN 0
+        WHEN 'rate_limited' THEN 1
+        WHEN 'no_health' THEN 2
+        ELSE 3
+      END,
+      ws.source_kind,
+      lower(ws.locator)
+    """
+))
+
+active_jobs_by_source = defaultdict(lambda: {"count": 0, "kinds": Counter()})
+for row in conn.execute(
+    """
+    SELECT 'rss' AS source_kind, json_extract(input_json, '$.url') AS locator, kind, COUNT(*) AS count
+    FROM wiki_jobs
+    WHERE kind = 'rss_fetch' AND status IN ('pending', 'running', 'deferred')
+    GROUP BY source_kind, locator, kind
+    UNION ALL
+    SELECT 'blog' AS source_kind, json_extract(input_json, '$.url') AS locator, kind, COUNT(*) AS count
+    FROM wiki_jobs
+    WHERE kind = 'ingest_url' AND status IN ('pending', 'running', 'deferred')
+    GROUP BY source_kind, locator, kind
+    UNION ALL
+    SELECT 'github_owner' AS source_kind, json_extract(input_json, '$.owner') AS locator, kind, COUNT(*) AS count
+    FROM wiki_jobs
+    WHERE kind = 'github_owner' AND status IN ('pending', 'running', 'deferred')
+    GROUP BY source_kind, locator, kind
+    UNION ALL
+    SELECT 'arxiv_query' AS source_kind, json_extract(input_json, '$.query') AS locator, kind, COUNT(*) AS count
+    FROM wiki_jobs
+    WHERE kind = 'arxiv_search' AND status IN ('pending', 'running', 'deferred')
+    GROUP BY source_kind, locator, kind
+    UNION ALL
+    SELECT 'knowledge_model_clusters' AS source_kind, json_extract(input_json, '$.query') AS locator, kind, COUNT(*) AS count
+    FROM wiki_jobs
+    WHERE kind = 'knowledge_cluster_model_propose' AND status IN ('pending', 'running', 'deferred')
+    GROUP BY source_kind, locator, kind
+    UNION ALL
+    SELECT 'knowledge_backlog' AS source_kind, 'source-cards' AS locator, kind, COUNT(*) AS count
+    FROM wiki_jobs
+    WHERE kind = 'knowledge_cluster_backlog' AND status IN ('pending', 'running', 'deferred')
+    GROUP BY source_kind, locator, kind
+    UNION ALL
+    SELECT 'x_bookmarks' AS source_kind, 'bookmarks' AS locator, kind, COUNT(*) AS count
+    FROM wiki_jobs
+    WHERE kind = 'x_import_bookmarks' AND status IN ('pending', 'running', 'deferred')
+    GROUP BY source_kind, locator, kind
+    UNION ALL
+    SELECT 'x_handle' AS source_kind, json_extract(input_json, '$.handle') AS locator, kind, COUNT(*) AS count
+    FROM wiki_jobs
+    WHERE kind = 'x_monitor_watch_source' AND status IN ('pending', 'running', 'deferred')
+    GROUP BY source_kind, locator, kind
+    """
+):
+    locator = row["locator"]
+    if not locator:
+        continue
+    key = (row["source_kind"], locator)
+    active_jobs_by_source[key]["count"] += int(row["count"] or 0)
+    active_jobs_by_source[key]["kinds"][row["kind"]] += int(row["count"] or 0)
+
+blocked_source_rows = []
+for row in blocked_sources:
+    status = row["health_status"] or ""
+    error = row["last_error"] or ""
+    source_kind = row["source_kind"] or ""
+    locator = row["locator"] or ""
+    next_run = parse_time(row["next_run_at"])
+    active_job_info = active_jobs_by_source.get((source_kind, locator), {"count": 0, "kinds": Counter()})
+    active_job_count = active_job_info["count"]
+    active_job_kinds = ",".join(
+        f"{kind}:{count}" for kind, count in sorted(active_job_info["kinds"].items())
+    )
+    policy_action = policy_action_from_error(error)
+    current_policy_allows = current_policy_allows_source_kind(
+        source_kind,
+        policy_action,
+        present_policy_rule_ids,
+    )
+    if status == "rate_limited" or "rate limit" in error.lower() or "rate_limit" in error.lower():
+        blocker_class = "rate_limited"
+    elif "policy deferred" in error.lower():
+        if current_policy_allows and source_kind in {"rss", "github_owner", "github_repo", "arxiv_query"}:
+            blocker_class = "stale_policy_deferred_non_x"
+        elif current_policy_allows and source_kind in {"x_bookmarks", "x_handle"}:
+            blocker_class = "stale_policy_deferred_x"
+        elif source_kind in {"x_bookmarks", "x_handle"}:
+            blocker_class = "x_policy_deferred"
+        else:
+            blocker_class = "policy_deferred"
+    elif status == "no_health" and source_kind in {"x_bookmarks", "x_handle"}:
+        blocker_class = "x_no_health"
+    elif status == "no_health":
+        blocker_class = "no_health"
+    elif status == "healthy" and next_run and next_run < now and active_job_count > 0:
+        blocker_class = "queued_due"
+    elif status == "healthy" and next_run and next_run < now:
+        blocker_class = "overdue_healthy"
+    else:
+        blocker_class = "failed"
+    blocked_source_rows.append({
+        "blocker_class": blocker_class,
+        "source_kind": source_kind,
+        "health_status": status,
+        "locator": locator,
+        "label": row["label"] or "",
+        "cadence": row["cadence"] or "",
+        "watch_status": row["watch_status"] or "",
+        "active_job_count": active_job_count,
+        "active_job_kinds": active_job_kinds,
+        "last_success_at": row["last_success_at"] or "",
+        "last_failure_at": row["last_failure_at"] or "",
+        "next_run_at": row["next_run_at"] or "",
+        "policy_action": policy_action if "policy deferred" in error.lower() else "",
+        "current_policy_allows": "true" if current_policy_allows else "false",
+        "last_error": error,
+    })
+
+blocked_source_rows.sort(key=blocked_source_sort_key)
+blocked_source_preview_limit = 120
+
+with (artifact_dir / "blocked_sources.csv").open("w", newline="") as handle:
+    fields = [
+        "blocker_class", "source_kind", "health_status", "locator", "label",
+        "cadence", "watch_status", "active_job_count", "active_job_kinds",
+        "last_success_at", "last_failure_at",
+        "next_run_at", "policy_action", "current_policy_allows", "last_error",
+    ]
+    writer = csv.DictWriter(handle, fieldnames=fields)
+    writer.writeheader()
+    writer.writerows(blocked_source_rows)
+
+dead_letters = list(conn.execute(
+    """
+    SELECT kind, COUNT(*) AS count, MAX(updated_at) AS latest_updated_at,
+           substr(COALESCE(error, ''), 1, 220) AS error_sample
+    FROM wiki_jobs
+    WHERE status = 'dead_lettered'
+    GROUP BY kind, substr(COALESCE(error, ''), 1, 220)
+    ORDER BY count DESC, latest_updated_at DESC
+    LIMIT 80
+    """
+))
+
+github_blocked_rows = [
+    row
+    for row in blocked_source_rows
+    if row["source_kind"] in {"github_owner", "github_repo"}
+]
+github_probe = conn.execute(
+    """
+    SELECT key, status, last_success_at, last_failure_at, next_run_at, last_error, updated_at
+    FROM source_health
+    WHERE key = 'provider:github:credential-probe'
+       OR (provider = 'github' AND source_kind = 'provider_credential')
+    ORDER BY datetime(updated_at) DESC
+    LIMIT 1
+    """
+).fetchone()
+github_secret_rows = list(conn.execute(
+    """
+    SELECT name, scope, provider, expires_at, updated_at
+    FROM secret_values
+    WHERE lower(name) LIKE '%github%'
+       OR lower(COALESCE(provider, '')) LIKE '%github%'
+       OR lower(scope) LIKE '%github%'
+    ORDER BY name
+    """
+))
+
+with (artifact_dir / "github_blockers.md").open("w") as handle:
+    handle.write("# GitHub Source Freshness Blockers\n\n")
+    handle.write(f"Generated: `{iso(now)}`\n\n")
+    handle.write("This artifact is diagnostic only. It does not retry GitHub sources.\n\n")
+    handle.write("## Summary\n\n")
+    if not github_blocked_rows:
+        handle.write("No active blocked or overdue GitHub watch sources found in this scan.\n\n")
+    else:
+        classes = Counter(row["blocker_class"] for row in github_blocked_rows)
+        handle.write("| Class | Rows |\n")
+        handle.write("| --- | ---: |\n")
+        for blocker_class, count in sorted(classes.items(), key=lambda item: (-item[1], item[0])):
+            handle.write(f"| {blocker_class} | {count} |\n")
+        handle.write("\n")
+        active_jobs = sum(int(row["active_job_count"] or 0) for row in github_blocked_rows)
+        handle.write(f"- Active queued/running/deferred GitHub jobs represented in blocker rows: `{active_jobs}`\n")
+        next_runs = [parse_time(row["next_run_at"]) for row in github_blocked_rows if parse_time(row["next_run_at"])]
+        if next_runs:
+            handle.write(f"- Earliest next run: `{iso(min(next_runs))}`\n")
+            handle.write(f"- Latest next run: `{iso(max(next_runs))}`\n")
+        handle.write("\n")
+
+    handle.write("## Credential Probe\n\n")
+    if github_probe:
+        handle.write(f"- Status: `{github_probe['status']}`\n")
+        handle.write(f"- Last success: `{github_probe['last_success_at'] or ''}`\n")
+        handle.write(f"- Last failure: `{github_probe['last_failure_at'] or ''}`\n")
+        handle.write(f"- Updated: `{github_probe['updated_at'] or ''}`\n")
+        handle.write(f"- Error: {compact(github_probe['last_error'] or '', 300)}\n\n")
+    else:
+        handle.write("No GitHub credential probe source-health row found.\n\n")
+
+    handle.write("## Secret Presence\n\n")
+    if github_secret_rows:
+        handle.write("| Name | Scope | Provider | Expires | Updated |\n")
+        handle.write("| --- | --- | --- | --- | --- |\n")
+        for row in github_secret_rows:
+            handle.write(
+                f"| `{row['name']}` | `{row['scope']}` | `{row['provider'] or ''}` | "
+                f"`{row['expires_at'] or ''}` | `{row['updated_at'] or ''}` |\n"
+            )
+        handle.write("\n")
+    else:
+        handle.write("No GitHub-named local secret values found.\n\n")
+
+    handle.write("## First Blocked Rows\n\n")
+    if github_blocked_rows:
+        handle.write("| Class | Locator | Active jobs | Next run | Error sample |\n")
+        handle.write("| --- | --- | ---: | --- | --- |\n")
+        for row in github_blocked_rows[:40]:
+            handle.write(
+                "| {blocker_class} | `{locator}` | {active_job_count} | {next_run_at} | {error} |\n".format(
+                    blocker_class=row["blocker_class"],
+                    locator=compact(row["locator"], 80).replace("|", "\\|"),
+                    active_job_count=row["active_job_count"],
+                    next_run_at=row["next_run_at"] or "",
+                    error=compact(row["last_error"], 160).replace("|", "\\|"),
+                )
+            )
+
+watch_counts = [dict(row) for row in conn.execute(
+    """
+    SELECT source_kind, status, COUNT(*) AS count
+    FROM watch_sources
+    GROUP BY source_kind, status
+    ORDER BY count DESC
+    """
+)]
+health_counts = [dict(row) for row in conn.execute(
+    """
+    SELECT provider, source_kind, status, COUNT(*) AS count,
+           MAX(last_success_at) AS latest_success_at,
+           MAX(last_failure_at) AS latest_failure_at
+    FROM source_health
+    GROUP BY provider, source_kind, status
+    ORDER BY count DESC
+    """
+)]
+job_counts = [dict(row) for row in conn.execute(
+    """
+    SELECT kind, status, COUNT(*) AS count, MAX(updated_at) AS latest_updated_at
+    FROM wiki_jobs
+    GROUP BY kind, status
+    ORDER BY count DESC
+    """
+)]
+
+summary = {
+    "ok": True,
+    "db": str(db_path),
+    "generated_at": iso(now),
+    "since_days": since_days,
+    "recent_source_cards": len(recent_cards),
+    "indexed_pages": len(pages),
+    "candidate_pool_total": len(all_candidates),
+    "candidate_pool_page_candidates": len(page_candidates),
+    "candidate_pool_knowledge_candidates": len(knowledge_candidates),
+    "candidate_pool_action_counts": candidate_pool_action_counts,
+    "candidate_pool_review_gate_counts": candidate_pool_review_gate_counts,
+    "candidate_count": len(ranked),
+    "ranked_candidate_window_limit": max_candidates,
+    "ranked_candidate_window_saturated": len(ranked) >= max_candidates and ranked_window_overflow > 0,
+    "ranked_candidate_window_overflow": ranked_window_overflow,
+    "candidate_actions": Counter(item["action"] for item in ranked),
+    "high_confidence_existing_page_updates": sum(
+        1
+        for item in ranked
+        if item["action"] == "update_existing_page"
+        and item["review_gate"] == "safe_batch_candidate"
+        and item["primary_count"] >= 3
+        and item["score"] >= 105
+    ),
+    "safe_gate_candidates": sum(1 for item in ranked if item.get("review_gate") == "safe_batch_candidate"),
+    "safe_batch_candidates": len(safe_batch_ranked),
+    "manual_review_candidates": sum(1 for item in ranked if item.get("review_gate") == "manual_review"),
+    "manual_review_queue_counts": manual_queue_counts,
+    "manual_review_queue_rows": len(manual_queue_rows),
+    "review_only_generated_or_digest_candidates": sum(
+        1
+        for item in ranked
+        if item["action"] != "update_existing_page"
+    ),
+    "source_delta_rows": len(source_rows),
+    "already_cited_source_card_matches_suppressed": already_cited_source_card_matches,
+    "policy_file": str(policy_path),
+    "policy_rule_ids_loaded": len(present_policy_rule_ids),
+    "blocked_source_rows_total": len(blocked_source_rows),
+    "blocked_source_rows_sampled": min(blocked_source_preview_limit, len(blocked_source_rows)),
+    "blocked_source_classes": Counter(row["blocker_class"] for row in blocked_source_rows),
+    "dead_letter_groups": len(dead_letters),
+    "watch_counts": watch_counts,
+    "source_health_counts": health_counts[:100],
+    "wiki_job_counts": job_counts[:100],
+    "artifacts": {
+        "wiki_freshness_candidates": "wiki_freshness_candidates.csv",
+        "safe_batch_candidates": "safe_batch_candidates.csv",
+        "source_delta_summary": "source_delta_summary.csv",
+        "update_batch": "update_batch.md",
+        "blocked_sources": "blocked_sources.md",
+        "blocked_sources_csv": "blocked_sources.csv",
+        "github_blockers": "github_blockers.md",
+        "manual_review_queues": "manual_review_queues.md",
+        "manual_review_queues_csv": "manual_review_queues.csv",
+    },
+}
+with (artifact_dir / "wiki_freshness_summary.json").open("w") as handle:
+    json.dump(summary, handle, indent=2, default=lambda value: dict(value) if isinstance(value, Counter) else str(value))
+
+with (artifact_dir / "blocked_sources.md").open("w") as handle:
+    handle.write("# Blocked Source Freshness\n\n")
+    handle.write(f"Generated: `{iso(now)}`\n\n")
+    handle.write("## Source Health / Due Rows\n\n")
+    if not blocked_source_rows:
+        handle.write("No blocked or overdue active watch sources found.\n\n")
+    else:
+        if len(blocked_source_rows) > blocked_source_preview_limit:
+            handle.write(
+                f"Showing the first {blocked_source_preview_limit} prioritized rows of {len(blocked_source_rows)} total. "
+                "See `blocked_sources.csv` for the full export.\n\n"
+            )
+        handle.write("| Class | Source kind | Health | Locator | Active jobs | Last success | Last failure | Next run | Policy action | Policy now allows | Error |\n")
+        handle.write("| --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- |\n")
+        for row in blocked_source_rows[:blocked_source_preview_limit]:
+            handle.write(
+                "| {blocker_class} | {source_kind} | {health_status} | `{locator}` | {active_job_count} {active_job_kinds} | {last_success_at} | {last_failure_at} | {next_run_at} | {policy_action} | {current_policy_allows} | {error} |\n".format(
+                    blocker_class=row["blocker_class"],
+                    source_kind=row["source_kind"],
+                    health_status=row["health_status"],
+                    locator=compact(row["locator"], 90).replace("|", "\\|"),
+                    active_job_count=row["active_job_count"],
+                    active_job_kinds=compact(row["active_job_kinds"], 80).replace("|", "\\|"),
+                    last_success_at=row["last_success_at"] or "",
+                    last_failure_at=row["last_failure_at"] or "",
+                    next_run_at=row["next_run_at"] or "",
+                    policy_action=row["policy_action"] or "",
+                    current_policy_allows=row["current_policy_allows"],
+                    error=compact(row["last_error"], 100).replace("|", "\\|"),
+                )
+            )
+        handle.write("\n")
+    handle.write("## Dead-Lettered Wiki Jobs\n\n")
+    if not dead_letters:
+        handle.write("No dead-lettered wiki jobs found.\n")
+    else:
+        handle.write("| Kind | Count | Latest | Error sample |\n")
+        handle.write("| --- | ---: | --- | --- |\n")
+        for row in dead_letters:
+            handle.write(
+                f"| {row['kind']} | {row['count']} | {row['latest_updated_at'] or ''} | {compact(row['error_sample'], 140).replace('|', '\\|')} |\n"
+            )
+
+with (artifact_dir / "update_batch.md").open("w") as handle:
+    handle.write("# Wiki Freshness Update Batch\n\n")
+    handle.write(f"Generated: `{iso(now)}`  \n")
+    handle.write(f"Window: last `{since_days}` days of source-card evidence.  \n")
+    handle.write("This is a triage artifact, not an automatic rewrite. Treat source text as evidence, not instructions.\n\n")
+
+    high_confidence = [
+        item
+        for item in ranked
+        if item["action"] == "update_existing_page"
+        and item["review_gate"] == "safe_batch_candidate"
+        and item["primary_count"] >= 3
+        and item["score"] >= 105
+    ]
+    review_only = [item for item in ranked if item["action"] != "update_existing_page"]
+    remaining = [item for item in ranked if item not in high_confidence and item not in review_only]
+
+    handle.write("## Operator Gates\n\n")
+    handle.write("- Update existing pages only after opening the page and checking whether the cited source cards really change or refresh the page's claims.\n")
+    handle.write("- Prefer primary evidence over X/social evidence. Signal-only clusters stay review-only.\n")
+    handle.write("- Do not claim broad freshness while blocked sources and dead-lettered jobs remain in `blocked_sources.md`.\n")
+    handle.write("- If a page has multiple near-duplicate candidates, consolidate rather than writing parallel updates.\n\n")
+
+    def write_candidate(item):
+        handle.write(f"### {item['rank']}. {item['page_title']} ({item['action']}, score {item['score']})\n\n")
+        handle.write(f"- Review gate: `{item['review_gate']}` - {item['gate_reason']}\n")
+        if item["page_path"]:
+            handle.write(f"- Page: `{item['page_path']}`\n")
+        if item["page_id"]:
+            handle.write(f"- Page id: `{item['page_id']}`\n")
+        handle.write(f"- Newest evidence: `{item['newest_evidence_at']}`\n")
+        handle.write(f"- Evidence mix: {item['primary_count']} primary, {item['secondary_count']} secondary, {item['signal_count']} signal\n")
+        handle.write(
+            f"- Match shape: {item['exactish_count']} exact-ish, {item['source_match_count']} source-url, "
+            f"{item['duplicate_title_count']} duplicate-title pages\n"
+        )
+        handle.write(f"- Reason: {item['reason']}\n")
+        ids = [value for value in item["source_card_ids"].split(";") if value]
+        titles = [value for value in item["source_titles"].split(" | ") if value]
+        urls = [value for value in item["source_urls"].split(" | ") if value]
+        handle.write("- Evidence:\n")
+        for idx, card_id in enumerate(ids[:5]):
+            title = titles[idx] if idx < len(titles) else card_id
+            url = urls[idx] if idx < len(urls) else ""
+            handle.write(f"  - `{card_id}`: {title}")
+            if url:
+                handle.write(f" ({url})")
+            handle.write("\n")
+        handle.write("\n")
+
+    handle.write("## High-Confidence Existing Page Candidates\n\n")
+    if not high_confidence:
+        handle.write("No existing-page candidates met the high-confidence threshold.\n\n")
+    for item in high_confidence[:30]:
+        write_candidate(item)
+
+    handle.write("## Review-Only Generated/Digest Candidates\n\n")
+    if not review_only:
+        handle.write("No generated or digest candidates in this run.\n\n")
+    for item in review_only[:30]:
+        write_candidate(item)
+
+    handle.write("## Remaining Ranked Candidates\n\n")
+    for item in remaining[:40]:
+        write_candidate(item)
+
+proof = {
+    "generated_at": iso(now),
+    "db": str(db_path),
+    "ok": True,
+    "checks": {
+        "read_only_scan": True,
+        "source_cards_recent_window": len(recent_cards),
+        "already_cited_source_card_matches_suppressed": already_cited_source_card_matches,
+        "candidate_pool_total": len(all_candidates),
+        "candidate_pool_page_candidates": len(page_candidates),
+        "candidate_pool_knowledge_candidates": len(knowledge_candidates),
+        "ranked_candidate_window_limit": max_candidates,
+        "ranked_candidate_window_saturated": len(ranked) >= max_candidates and ranked_window_overflow > 0,
+        "ranked_candidate_window_overflow": ranked_window_overflow,
+        "policy_rule_ids_loaded": len(present_policy_rule_ids),
+        "candidates_written": len(ranked),
+        "safe_gate_candidates": sum(1 for item in ranked if item.get("review_gate") == "safe_batch_candidate"),
+        "safe_batch_candidates": len(safe_batch_ranked),
+        "manual_review_candidates": sum(1 for item in ranked if item.get("review_gate") == "manual_review"),
+        "manual_review_queue_rows": len(manual_queue_rows),
+        "manual_review_queue_counts": manual_queue_counts,
+        "blocked_source_rows_total": len(blocked_source_rows),
+        "blocked_source_preview_rows": min(blocked_source_preview_limit, len(blocked_source_rows)),
+        "blocked_sources_written": True,
+        "dead_letter_groups": len(dead_letters),
+    },
+    "artifacts": summary["artifacts"],
+}
+with (artifact_dir / "proof-packet.json").open("w") as handle:
+    json.dump(proof, handle, indent=2)
+
+print(json.dumps({
+    "proof_dir": str(artifact_dir.parent),
+    "recent_source_cards": len(recent_cards),
+    "indexed_pages": len(pages),
+    "candidate_pool_total": len(all_candidates),
+    "candidates": len(ranked),
+    "ranked_candidate_window_limit": max_candidates,
+    "ranked_candidate_window_saturated": len(ranked) >= max_candidates and ranked_window_overflow > 0,
+    "ranked_candidate_window_overflow": ranked_window_overflow,
+    "top_action_counts": dict(Counter(item["action"] for item in ranked)),
+    "review_gate_counts": dict(Counter(item["review_gate"] for item in ranked)),
+    "manual_review_queue_counts": dict(manual_queue_counts),
+    "safe_batch_rows": len(safe_batch_ranked),
+    "blocked_source_rows_total": len(blocked_source_rows),
+    "blocked_source_rows_sampled": min(blocked_source_preview_limit, len(blocked_source_rows)),
+    "blocked_source_classes": dict(Counter(row["blocker_class"] for row in blocked_source_rows)),
+    "dead_letter_groups": len(dead_letters),
+}, indent=2))
+PY

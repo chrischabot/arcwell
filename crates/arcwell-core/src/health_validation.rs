@@ -942,8 +942,9 @@ pub(crate) fn normalize_job_contact_input(mut input: JobContactInput) -> Result<
     input.public_profile_url = canonical_source_url(input.public_profile_url.trim())?;
     input.source_url = canonical_source_url(input.source_url.trim())?;
     input.relationship_status = normalize_job_relationship_status(&input.relationship_status)?;
-    input.relevance = normalize_research_key(input.relevance, "contact relevance")?;
+    input.relevance = normalize_job_contact_relevance(&input.relevance)?;
     input.note = normalize_optional_job_text(input.note, "contact note", JOB_MAX_TEXT)?;
+    validate_job_contact_relevance_evidence(&input)?;
     Ok(input)
 }
 
@@ -994,6 +995,57 @@ pub(crate) fn normalize_job_application_input(
     input.follow_up_at = normalize_optional_job_text(input.follow_up_at, "follow_up_at", 100)?;
     input.outcome_note =
         normalize_optional_job_text(input.outcome_note, "outcome_note", JOB_MAX_TEXT)?;
+    Ok(input)
+}
+
+pub(crate) fn normalize_job_weekly_report_delivery_input(
+    mut input: JobWeeklyReportDeliveryInput,
+) -> Result<JobWeeklyReportDeliveryInput> {
+    validate_id(&input.report_id)?;
+    input.channel = normalize_radar_delivery_channel(&input.channel)?;
+    input.subject = normalize_radar_delivery_recipient(&input.channel, &input.subject)?;
+    input.target = normalize_radar_delivery_recipient(&input.channel, &input.target)?;
+    input.idempotency_key = Some(match input.idempotency_key.as_deref() {
+        Some(explicit) => {
+            validate_query(explicit)?;
+            explicit.trim().to_string()
+        }
+        None => format!(
+            "job-weekly-report-delivery-{}",
+            &sha256(
+                format!(
+                    "{}\n{}\n{}\n{}",
+                    input.report_id, input.channel, input.subject, input.target
+                )
+                .as_bytes()
+            )[..32]
+        ),
+    });
+    Ok(input)
+}
+
+pub(crate) fn normalize_job_weekly_report_delivery_send_input(
+    input: JobWeeklyReportDeliverySendInput,
+) -> Result<JobWeeklyReportDeliverySendInput> {
+    validate_id(&input.delivery_id)?;
+    if let Some(value) = input.telegram_bot_token.as_deref() {
+        validate_notes(value)?;
+    }
+    if let Some(value) = input.email_account_id.as_deref() {
+        validate_key(value)?;
+    }
+    if let Some(value) = input.email_api_token.as_deref() {
+        validate_notes(value)?;
+    }
+    if let Some(value) = input.email_from.as_deref() {
+        normalize_email_address(value).context("invalid email from address")?;
+    }
+    if let Some(value) = input.api_base.as_deref() {
+        let url = validate_public_http_url(value)?;
+        if url.scheme() == "http" && !is_loopback_host(&url) {
+            bail!("provider API base must use https or loopback http");
+        }
+    }
     Ok(input)
 }
 
@@ -1494,6 +1546,9 @@ pub(crate) fn job_source_self_company_card(
 }
 
 pub(crate) fn job_role_title_from_anchor(anchor: &JobRefreshAnchor) -> Option<String> {
+    if job_refresh_url_looks_like_job_category(&anchor.url) {
+        return None;
+    }
     if !job_refresh_url_looks_like_job(&anchor.url) {
         return None;
     }
@@ -1727,6 +1782,19 @@ pub(crate) fn job_refresh_url_looks_like_job_detail(url: &str) -> bool {
     false
 }
 
+pub(crate) fn job_refresh_url_looks_like_job_category(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    let segments = parsed
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())
+        .unwrap_or_default();
+    segments
+        .windows(2)
+        .any(|pair| pair[0].eq_ignore_ascii_case("jobs") && pair[1].eq_ignore_ascii_case("role"))
+}
+
 pub(crate) fn job_path_has_segment_after(segments: &[&str], marker: &str) -> bool {
     segments
         .windows(2)
@@ -1740,8 +1808,9 @@ pub(crate) fn job_refresh_anchor_looks_like_weak_job_lead(anchor: &JobRefreshAnc
 }
 
 pub(crate) fn job_refresh_generic_anchor_text(text: &str) -> bool {
+    let lower = text.trim().to_ascii_lowercase();
     matches!(
-        text.trim().to_ascii_lowercase().as_str(),
+        lower.as_str(),
         "careers"
             | "jobs"
             | "open roles"
@@ -1755,7 +1824,8 @@ pub(crate) fn job_refresh_generic_anchor_text(text: &str) -> bool {
             | "team"
             | "about"
             | "contact"
-    )
+    ) || lower.ends_with(" jobs")
+        || lower.contains(" jobs in ")
 }
 
 pub(crate) fn job_refresh_text_is_company_like(text: &str) -> bool {
@@ -2273,6 +2343,48 @@ pub(crate) fn normalize_job_relationship_status(value: &str) -> Result<String> {
     }
 }
 
+pub(crate) fn normalize_job_contact_relevance(value: &str) -> Result<String> {
+    match value.trim() {
+        "unknown" | "hiring_manager" | "recruiter" | "founder" | "devrel_lead" | "engineer"
+        | "investor" => Ok(value.trim().to_string()),
+        other => bail!("unsupported job contact relevance: {other}"),
+    }
+}
+
+pub(crate) fn validate_job_contact_relevance_evidence(input: &JobContactInput) -> Result<()> {
+    if input.relevance == "unknown" {
+        return Ok(());
+    }
+    if input.relevance == "hiring_manager" && input.role_title.is_none() {
+        bail!("hiring-manager contact relevance requires a source-backed role title");
+    }
+    let Some(note) = input.note.as_deref() else {
+        bail!("job contact relevance requires a note naming source evidence or user confirmation");
+    };
+    let lower = note.to_ascii_lowercase();
+    let has_public_source_basis = [
+        "source evidence",
+        "source lists",
+        "listed",
+        "public careers",
+        "careers route",
+        "public ats",
+        "role page",
+        "public team",
+        "team/about",
+        "about route",
+        "user-confirmed",
+        "user confirmed",
+        "confirmed by user",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    if !has_public_source_basis {
+        bail!("job contact relevance requires a note naming source evidence or user confirmation");
+    }
+    Ok(())
+}
+
 pub(crate) fn normalize_job_intro_path_type(value: &str) -> Result<String> {
     match value.trim() {
         "direct" | "mutual" | "recruiter" | "investor" | "community" | "unknown" => {
@@ -2331,6 +2443,13 @@ pub(crate) fn normalize_job_application_packet_status(value: &str) -> Result<Str
     match value.trim() {
         "draft" | "approved" | "rejected" | "archived" => Ok(value.trim().to_string()),
         other => bail!("unsupported job application packet status: {other}"),
+    }
+}
+
+pub(crate) fn normalize_job_weekly_report_delivery_status(value: &str) -> Result<String> {
+    match value.trim() {
+        "blocked" | "prepared" | "sent" | "failed" => Ok(value.trim().to_string()),
+        other => bail!("unsupported job weekly report delivery status: {other}"),
     }
 }
 
@@ -2708,9 +2827,17 @@ pub(crate) fn render_job_weekly_report(
     shortlist: &JobShortlist,
     applications: &[JobApplication],
     source_health: &[JobSourceHealth],
+    intro_paths: &[JobIntroPath],
+    contacts: &[JobContact],
+    role_events: &[JobRoleStatusEvent],
 ) -> String {
     let mut tier_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut role_labels: BTreeMap<String, String> = BTreeMap::new();
     for entry in &shortlist.entries {
+        role_labels.insert(
+            entry.role.id.clone(),
+            format!("{} - {}", entry.role.company, entry.role.role_title),
+        );
         let tier = entry
             .score
             .as_ref()
@@ -2726,9 +2853,14 @@ pub(crate) fn render_job_weekly_report(
     for health in source_health {
         *health_counts.entry(health.status.clone()).or_insert(0) += 1;
     }
+    let contact_names = contacts
+        .iter()
+        .map(|contact| (contact.id.clone(), contact.name.clone()))
+        .collect::<BTreeMap<_, _>>();
     let top_roles = shortlist
         .entries
         .iter()
+        .filter(|entry| entry.score.is_some())
         .take(10)
         .map(|entry| {
             let score = entry
@@ -2748,17 +2880,24 @@ pub(crate) fn render_job_weekly_report(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let intro_status = render_job_intro_status(intro_paths);
+    let next_actions =
+        render_job_weekly_next_actions(intro_paths, &contact_names, &role_labels, applications);
+    let role_changes = render_job_weekly_role_changes(role_events, &role_labels);
     format!(
-        "# Job Weekly Report\n\nProfile: {}\nGenerated: {}\n\n## Shortlist\n\n{}\n\n## Tier Counts\n\n{}\n\n## Applications\n\n{}\n\n## Source Health\n\n{}\n",
+        "# Job Weekly Report\n\nProfile: {}\nGenerated: {}\n\n## Shortlist\n\n{}\n\n## Tier Counts\n\n{}\n\n## Role Changes\n\n{}\n\n## Applications\n\n{}\n\n## Intro Status\n\n{}\n\n## Next Actions\n\n{}\n\n## Source Health\n\n{}\n",
         shortlist.profile_id,
         shortlist.generated_at,
         if top_roles.is_empty() {
-            "- No roles recorded.".to_string()
+            "- No scored roles recorded.".to_string()
         } else {
             top_roles
         },
         render_job_count_map(&tier_counts),
+        role_changes,
         render_job_count_map(&status_counts),
+        intro_status,
+        next_actions,
         render_job_count_map(&health_counts),
     )
 }
@@ -2772,4 +2911,113 @@ pub(crate) fn render_job_count_map(counts: &BTreeMap<String, usize>) -> String {
         .map(|(key, count)| format!("- {key}: {count}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+pub(crate) fn job_intro_path_is_warm_ready(path: &JobIntroPath) -> bool {
+    matches!(
+        path.path_type.as_str(),
+        "direct" | "mutual" | "community" | "investor"
+    ) || path.confidence == "confirmed"
+        || matches!(path.status.as_str(), "ask" | "sent" | "replied")
+}
+
+pub(crate) fn render_job_intro_status(intro_paths: &[JobIntroPath]) -> String {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    counts.insert(
+        "warm_intro_ready".to_string(),
+        intro_paths
+            .iter()
+            .filter(|path| job_intro_path_is_warm_ready(path))
+            .count(),
+    );
+    for path in intro_paths {
+        *counts.entry(path.status.clone()).or_insert(0) += 1;
+    }
+    render_job_count_map(&counts)
+}
+
+pub(crate) fn render_job_weekly_role_changes(
+    role_events: &[JobRoleStatusEvent],
+    role_labels: &BTreeMap<String, String>,
+) -> String {
+    if role_events.is_empty() {
+        return "- none".to_string();
+    }
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for event in role_events {
+        *counts.entry(event.status.clone()).or_insert(0) += 1;
+    }
+    let details = role_events
+        .iter()
+        .take(10)
+        .map(|event| {
+            let role = role_labels
+                .get(&event.role_id)
+                .cloned()
+                .unwrap_or_else(|| event.role_id.clone());
+            let tier_change = match (&event.previous_tier, &event.current_tier) {
+                (Some(previous), Some(current)) => format!(" {previous} -> {current}"),
+                (None, Some(current)) => format!(" -> {current}"),
+                (Some(previous), None) => format!(" {previous} -> unknown"),
+                (None, None) => String::new(),
+            };
+            let note = event
+                .note
+                .as_ref()
+                .filter(|value| !value.is_empty())
+                .map(|value| format!(" - {value}"))
+                .unwrap_or_default();
+            format!("- {role}: {}{}{}", event.status, tier_change, note)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{}\n\n{}", render_job_count_map(&counts), details)
+}
+
+pub(crate) fn render_job_weekly_next_actions(
+    intro_paths: &[JobIntroPath],
+    contact_names: &BTreeMap<String, String>,
+    role_labels: &BTreeMap<String, String>,
+    applications: &[JobApplication],
+) -> String {
+    let mut actions = Vec::new();
+    for path in intro_paths {
+        let Some(next_action) = path.next_action.as_ref().filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        let role = role_labels
+            .get(&path.role_id)
+            .cloned()
+            .unwrap_or_else(|| path.role_id.clone());
+        let contact = contact_names
+            .get(&path.contact_id)
+            .cloned()
+            .unwrap_or_else(|| path.contact_id.clone());
+        actions.push(format!(
+            "- Intro: {role}: {next_action} (contact: {contact}; path: {}/{}/{})",
+            path.path_type, path.confidence, path.status
+        ));
+    }
+    for application in applications {
+        let Some(follow_up_at) = application
+            .follow_up_at
+            .as_ref()
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let role = role_labels
+            .get(&application.role_id)
+            .cloned()
+            .unwrap_or_else(|| application.role_id.clone());
+        actions.push(format!(
+            "- Application: {role}: follow up by {follow_up_at} (status: {})",
+            application.status
+        ));
+    }
+    if actions.is_empty() {
+        "- none".to_string()
+    } else {
+        actions.into_iter().take(5).collect::<Vec<_>>().join("\n")
+    }
 }

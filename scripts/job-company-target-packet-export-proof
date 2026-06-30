@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+if [ ! -x "$ARCWELL_BIN" ]; then
+  ARCWELL_BIN="$(command -v arcwell || true)"
+fi
+
+if [ -z "${ARCWELL_BIN:-}" ] || [ ! -x "$ARCWELL_BIN" ]; then
+  echo "BLOCKED: arcwell binary not found. Run: cargo build -p arcwell" >&2
+  exit 2
+fi
+
+for required in jq sqlite3 shasum; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the company-target packet export proof." >&2
+    exit 2
+  fi
+done
+
+DEFAULT_SOURCE_PROOF="$REPO_ROOT/.arcwell-dev/proofs/job-company-target-packet-proof-20260629T043746Z-98813"
+SOURCE_PROOF="${ARCWELL_JOB_COMPANY_TARGET_PACKET_EXPORT_SOURCE_PROOF:-$DEFAULT_SOURCE_PROOF}"
+SOURCE_HOME="$SOURCE_PROOF/home"
+SOURCE_PACKET="$SOURCE_PROOF/artifacts/proof-packet.json"
+
+if [ ! -f "$SOURCE_HOME/arcwell.sqlite3" ]; then
+  cat >&2 <<EOF
+BLOCKED: source proof home not found: $SOURCE_HOME
+Set ARCWELL_JOB_COMPANY_TARGET_PACKET_EXPORT_SOURCE_PROOF to a company-target packet proof.
+EOF
+  exit 2
+fi
+
+if [ ! -f "$SOURCE_PACKET" ]; then
+  echo "BLOCKED: source proof packet not found: $SOURCE_PACKET" >&2
+  exit 2
+fi
+
+RUN_STAMP="${ARCWELL_JOB_COMPANY_TARGET_PACKET_EXPORT_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_JOB_COMPANY_TARGET_PACKET_EXPORT_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/job-company-target-packet-export-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+export ARCWELL_HOME="${ARCWELL_JOB_COMPANY_TARGET_PACKET_EXPORT_HOME:-$PROOF_ROOT/home}"
+EXPORT_DIR="$PROOF_ROOT/packet-exports"
+DB="$ARCWELL_HOME/arcwell.sqlite3"
+REVIEWER_NOTE="Controlled company-target local export proof only; not user-approved for sending or submission."
+
+mkdir -p "$ARTIFACT_DIR" "$ARCWELL_HOME" "$EXPORT_DIR"
+
+log() {
+  printf '[job-company-target-packet-export-proof] %s\n' "$*"
+}
+
+sql_value() {
+  sqlite3 "$DB" "$1"
+}
+
+log "proof root: $PROOF_ROOT"
+log "source proof: $SOURCE_PROOF"
+log "ARCWELL_HOME: $ARCWELL_HOME"
+
+cp -R "$SOURCE_HOME/." "$ARCWELL_HOME/"
+printf '%s\n' "$SOURCE_PROOF" >"$ARTIFACT_DIR/source-proof.txt"
+printf '%s\n' "$SOURCE_HOME" >"$ARTIFACT_DIR/source-home.txt"
+printf '%s\n' "$REVIEWER_NOTE" >"$ARTIFACT_DIR/reviewer-note.txt"
+
+"$ARCWELL_BIN" job profiles >"$ARTIFACT_DIR/profiles.json"
+"$ARCWELL_BIN" job shortlist "$(jq -r '.[0].id' "$ARTIFACT_DIR/profiles.json")" >"$ARTIFACT_DIR/shortlist-before.json"
+
+PACKET_IDS_FILE="$ARTIFACT_DIR/packet-ids.txt"
+jq -r '.created_packets[].id' "$SOURCE_PACKET" >"$PACKET_IDS_FILE"
+PACKET_COUNT="$(wc -l <"$PACKET_IDS_FILE" | tr -d '[:space:]')"
+if [ "$PACKET_COUNT" != "5" ]; then
+  echo "BLOCKED: expected 5 company-target packet ids, found $PACKET_COUNT" >&2
+  exit 2
+fi
+
+APPLICATIONS_BEFORE="$(sql_value "SELECT COUNT(*) FROM job_applications;")"
+PACKET_EXPORT_PRIVACY_BEFORE="$(sql_value "SELECT COUNT(*) FROM job_privacy_checks WHERE artifact_type = 'packet_export';")"
+
+: >"$ARTIFACT_DIR/packets-before.jsonl"
+: >"$ARTIFACT_DIR/approvals.jsonl"
+: >"$ARTIFACT_DIR/exports.jsonl"
+: >"$ARTIFACT_DIR/packets-after.jsonl"
+: >"$ARTIFACT_DIR/exported-files.jsonl"
+
+while IFS= read -r packet_id; do
+  [ -n "$packet_id" ] || continue
+  log "approving and exporting $packet_id in copied proof home"
+  before="$("$ARCWELL_BIN" job packet "$packet_id")"
+  printf '%s\n' "$before" >>"$ARTIFACT_DIR/packets-before.jsonl"
+  before_status="$(printf '%s\n' "$before" | jq -r '.status')"
+  if [ "$before_status" != "draft" ]; then
+    echo "BLOCKED: expected packet $packet_id to start as draft, found $before_status" >&2
+    exit 2
+  fi
+
+  "$ARCWELL_BIN" job packet-approve "$packet_id" \
+    --reviewer-note "$REVIEWER_NOTE" \
+    >>"$ARTIFACT_DIR/approvals.jsonl"
+
+  export_json="$("$ARCWELL_BIN" job packet-export "$packet_id" --out "$EXPORT_DIR")"
+  printf '%s\n' "$export_json" >>"$ARTIFACT_DIR/exports.jsonl"
+  export_path="$(printf '%s\n' "$export_json" | jq -r '.path')"
+  if [ ! -f "$export_path" ]; then
+    echo "BLOCKED: exported packet path missing: $export_path" >&2
+    exit 2
+  fi
+  if ! grep -q "Delivery status: not_sent" "$export_path"; then
+    echo "BLOCKED: exported packet lacks not_sent boundary: $export_path" >&2
+    exit 2
+  fi
+  if ! grep -q "Application status changed by export: false" "$export_path"; then
+    echo "BLOCKED: exported packet lacks application-status boundary: $export_path" >&2
+    exit 2
+  fi
+  if grep -Eiq '/Users/|file:|ferrite|integral' "$export_path"; then
+    echo "BLOCKED: exported packet includes a local path or private marker: $export_path" >&2
+    exit 2
+  fi
+
+  "$ARCWELL_BIN" job packet "$packet_id" >>"$ARTIFACT_DIR/packets-after.jsonl"
+  jq -n \
+    --arg packet_id "$packet_id" \
+    --arg path "$export_path" \
+    --arg sha256 "$(shasum -a 256 "$export_path" | awk '{print $1}')" \
+    --arg byte_len "$(wc -c <"$export_path" | tr -d '[:space:]')" \
+    '{packet_id:$packet_id,path:$path,sha256:$sha256,byte_len:($byte_len|tonumber)}' \
+    >>"$ARTIFACT_DIR/exported-files.jsonl"
+done <"$PACKET_IDS_FILE"
+
+APPLICATIONS_AFTER="$(sql_value "SELECT COUNT(*) FROM job_applications;")"
+PACKET_EXPORT_PRIVACY_AFTER="$(sql_value "SELECT COUNT(*) FROM job_privacy_checks WHERE artifact_type = 'packet_export';")"
+PACKET_EXPORT_PRIVACY_DELTA="$((PACKET_EXPORT_PRIVACY_AFTER - PACKET_EXPORT_PRIVACY_BEFORE))"
+EXPORTED_FILE_COUNT="$(find "$EXPORT_DIR" -type f -name '*.md' | wc -l | tr -d '[:space:]')"
+
+if [ "$APPLICATIONS_BEFORE" != "0" ] || [ "$APPLICATIONS_AFTER" != "0" ]; then
+  echo "BLOCKED: expected zero application rows before/after, got $APPLICATIONS_BEFORE/$APPLICATIONS_AFTER" >&2
+  exit 2
+fi
+
+if [ "$EXPORTED_FILE_COUNT" != "5" ]; then
+  echo "BLOCKED: expected 5 exported Markdown files, found $EXPORTED_FILE_COUNT" >&2
+  exit 2
+fi
+
+if [ "$PACKET_EXPORT_PRIVACY_DELTA" != "5" ]; then
+  echo "BLOCKED: expected 5 new packet_export privacy checks, found $PACKET_EXPORT_PRIVACY_DELTA" >&2
+  exit 2
+fi
+
+if ! jq -e -s 'all(.[]; .proof_level == "local_proof" and .delivery_status == "not_sent" and .application_status_changed == false)' "$ARTIFACT_DIR/exports.jsonl" >/dev/null; then
+  echo "BLOCKED: one or more exports violated the local/not_sent/no-application boundary" >&2
+  exit 2
+fi
+
+if ! jq -e -s 'all(.[]; .status == "approved")' "$ARTIFACT_DIR/packets-after.jsonl" >/dev/null; then
+  echo "BLOCKED: one or more exported packets did not end as approved" >&2
+  exit 2
+fi
+
+"$ARCWELL_BIN" job shortlist "$(jq -r '.[0].id' "$ARTIFACT_DIR/profiles.json")" >"$ARTIFACT_DIR/shortlist-after.json"
+sqlite3 -json "$DB" "
+  SELECT p.status, COUNT(*) AS count
+  FROM job_application_packets p
+  GROUP BY p.status
+  ORDER BY p.status;
+" >"$ARTIFACT_DIR/packet-status-counts.json"
+
+jq -n \
+  --arg feature "company-target confirmed-role packet local Markdown export" \
+  --arg status "Controlled Local Proof over production-data input" \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg source_proof "$SOURCE_PROOF" \
+  --arg source_packet "$SOURCE_PACKET" \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg home "$ARCWELL_HOME" \
+  --arg export_dir "$EXPORT_DIR" \
+  --argjson packet_count "$PACKET_COUNT" \
+  --argjson exported_file_count "$EXPORTED_FILE_COUNT" \
+  --argjson packet_export_privacy_before "$PACKET_EXPORT_PRIVACY_BEFORE" \
+  --argjson packet_export_privacy_after "$PACKET_EXPORT_PRIVACY_AFTER" \
+  --argjson packet_export_privacy_delta "$PACKET_EXPORT_PRIVACY_DELTA" \
+  --argjson applications_before "$APPLICATIONS_BEFORE" \
+  --argjson applications_after "$APPLICATIONS_AFTER" \
+  --arg exported_files_sha256 "$(shasum -a 256 "$ARTIFACT_DIR/exported-files.jsonl" | awk '{print $1}')" \
+  --slurpfile packets_before "$ARTIFACT_DIR/packets-before.jsonl" \
+  --slurpfile approvals "$ARTIFACT_DIR/approvals.jsonl" \
+  --slurpfile exports "$ARTIFACT_DIR/exports.jsonl" \
+  --slurpfile packets_after "$ARTIFACT_DIR/packets-after.jsonl" \
+  --slurpfile files "$ARTIFACT_DIR/exported-files.jsonl" \
+  --slurpfile status_counts "$ARTIFACT_DIR/packet-status-counts.json" \
+  '{
+    feature: $feature,
+    status: $status,
+    created_at: $created_at,
+    skill_gates: ["arc:anti-mirage", "arc:job-hunting"],
+    user_visible_claim: "Starting from the bounded live company-target role proof and its controlled draft packets, Arcwell can approve those five packets inside a copied proof home for local-export review only, export them to inspectable Markdown, recheck privacy at export time, and leave applications unsent and unrecorded.",
+    non_claims: [
+      "This is not proof that the user reviewed or approved these applications for submission.",
+      "This does not prove current freshness beyond the source role and packet proofs.",
+      "This is not proof over the user operational Arcwell home.",
+      "This is not Google Docs draft creation.",
+      "This is not email, ATS, browser, or provider delivery.",
+      "This is not evidence that any application was submitted, sent, or marked applied.",
+      "This does not prove warm-intro paths or hiring outcomes."
+    ],
+    inputs: {
+      source_proof: $source_proof,
+      source_packet: $source_packet,
+      packet_set: "five draft packets created for confirmed Tier 1 Ably/Northflank company-target roles"
+    },
+    outputs: {
+      proof_root: $proof_root,
+      copied_home: $home,
+      export_dir: $export_dir,
+      packet_count: $packet_count,
+      exported_file_count: $exported_file_count,
+      packet_export_privacy_before: $packet_export_privacy_before,
+      packet_export_privacy_after: $packet_export_privacy_after,
+      packet_export_privacy_delta: $packet_export_privacy_delta,
+      applications_before: $applications_before,
+      applications_after: $applications_after,
+      exported_files_sha256: $exported_files_sha256,
+      packet_status_counts: $status_counts[0]
+    },
+    packets_before: $packets_before,
+    approvals: $approvals,
+    export_results: $exports,
+    packets_after: $packets_after,
+    exported_files: $files,
+    durable_state_written: [
+      "five copied-home packet status updates to approved",
+      "five copied-home packet_export privacy checks",
+      "five local Markdown files under the proof export directory"
+    ],
+    durable_state_not_written: [
+      "no job_applications rows",
+      "no sent/delivered/submitted provider rows",
+      "no writes to the source proof home",
+      "no writes to the user operational home"
+    ],
+    commands_run: [
+      "scripts/job-company-target-packet-export-proof"
+    ],
+    adversarial_review_judgment: "Promote only as controlled Local Proof for local Markdown export of the five company-target packets. Hold user-approved, operational-home, Google Docs, sent, submitted, recurring freshness, and outcome claims.",
+    remaining_risks: [
+      {
+        risk: "The proof approves packets with a controlled proof note, not with user review for real applications.",
+        next_action: "Run user review and current role refresh before approving real operational-home packets."
+      },
+      {
+        risk: "The source roles and packets may go stale.",
+        next_action: "Refresh the company/ATS source again before using any exported packet."
+      },
+      {
+        risk: "The proof writes local Markdown only.",
+        next_action: "Add an authorized Google Docs or browser/send proof only after explicit privacy and delivery authorization gates exist."
+      }
+    ]
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"
+log "company-target packet export proof passed"

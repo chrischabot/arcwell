@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+PROOF_ROOT="${ARCWELL_X_WATCH_CURATION_PROOF_DIR:-$REPO_ROOT/.arcwell-dev/proofs/x-watch-curation-local-proof-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+ARCWELL_HOME="${ARCWELL_X_WATCH_CURATION_PROOF_HOME:-${ARCWELL_HOME:-$HOME/.arcwell}}"
+ARCWELL_BIN="${ARCWELL_BIN:-$REPO_ROOT/target/debug/arcwell}"
+
+mkdir -p "$ARTIFACT_DIR"
+
+log() {
+  printf '[x-watch-curation-proof] %s\n' "$*"
+}
+
+fail() {
+  printf '[x-watch-curation-proof] BLOCKED: %s\n' "$*" >&2
+  exit 1
+}
+
+[[ -d "$ARCWELL_HOME" ]] || fail "ARCWELL_HOME does not exist: $ARCWELL_HOME"
+
+log "proof root: $PROOF_ROOT"
+log "arcwell home: $ARCWELL_HOME"
+
+log "building arcwell CLI"
+cargo build -p arcwell >"$ARTIFACT_DIR/cargo-build.log" 2>&1
+
+log "running targeted severe/local tests"
+cargo test -p arcwell-core x_watch_curation -- --nocapture \
+  >"$ARTIFACT_DIR/x-watch-curation-tests.log" 2>&1
+
+log "running proof-ledger severe tests"
+cargo test -p arcwell-core proof_packet -- --nocapture \
+  >"$ARTIFACT_DIR/proof-packet-tests.log" 2>&1
+
+log "checking formatting"
+cargo fmt -- --check >"$ARTIFACT_DIR/cargo-fmt-check.log" 2>&1
+
+log "capturing status counts before dry-run"
+python3 - "$ARCWELL_HOME/arcwell.sqlite3" >"$ARTIFACT_DIR/watch-status-before.json" <<'PY'
+import json
+import sqlite3
+import sys
+
+db = sys.argv[1]
+conn = sqlite3.connect(db)
+rows = conn.execute(
+    "SELECT status, COUNT(*) FROM watch_sources WHERE source_kind='x_handle' GROUP BY status ORDER BY status"
+).fetchall()
+print(json.dumps({status: count for status, count in rows}, indent=2, sort_keys=True))
+PY
+
+log "running real-home dry-run curation"
+"$ARCWELL_BIN" --home "$ARCWELL_HOME" x curate-watch-sources --dry-run \
+  >"$ARTIFACT_DIR/dry-run.json"
+
+log "capturing status counts after dry-run"
+python3 - "$ARCWELL_HOME/arcwell.sqlite3" >"$ARTIFACT_DIR/watch-status-after.json" <<'PY'
+import json
+import sqlite3
+import sys
+
+db = sys.argv[1]
+conn = sqlite3.connect(db)
+rows = conn.execute(
+    "SELECT status, COUNT(*) FROM watch_sources WHERE source_kind='x_handle' GROUP BY status ORDER BY status"
+).fetchall()
+print(json.dumps({status: count for status, count in rows}, indent=2, sort_keys=True))
+PY
+
+log "validating proof artifacts"
+python3 - "$ARTIFACT_DIR" "$PROOF_ROOT" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+artifact_dir = pathlib.Path(sys.argv[1])
+proof_root = pathlib.Path(sys.argv[2])
+
+before = json.loads((artifact_dir / "watch-status-before.json").read_text())
+after = json.loads((artifact_dir / "watch-status-after.json").read_text())
+dry = json.loads((artifact_dir / "dry-run.json").read_text())
+
+def assert_true(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+assert_true(before == after, f"dry-run changed watch-source status counts: before={before} after={after}")
+assert_true(dry["run"]["mode"] == "dry_run", dry["run"])
+assert_true(dry["run"]["paused_count"] == 0, dry["run"])
+assert_true(dry["run"]["input_count"] > 0, "real-home proof requires nonzero x_handle watch sources")
+assert_true(
+    "This does not delete watch sources." in dry["non_claims"],
+    "proof response must carry non-claim boundary",
+)
+serialized = json.dumps(dry)
+assert_true("sk-" not in serialized, "dry-run artifact appears to contain an API-secret-like token")
+
+packet = {
+    "proof_name": "x-watch-curation-local-proof",
+    "proof_level": "production_data_dry_run_plus_local_restore_tests",
+    "proof_root": str(proof_root),
+    "feature": "M1 reversible X watch-source curation first slice",
+    "claim": "Arcwell can classify the real X watch-source list into durable curation decisions without mutating watch-source statuses in dry-run mode, and local severe tests prove pause-only restore behavior.",
+    "non_claims": [
+        "This is not proof that the X watch list is fully curated.",
+        "This is not live profile enrichment proof.",
+        "This is not pause-only production apply proof.",
+        "This is not scheduled worker recurrence proof."
+    ],
+    "real_home_dry_run": {
+        "run_id": dry["run"]["id"],
+        "input_count": dry["run"]["input_count"],
+        "counts": dry["counts"],
+        "paused_count": dry["run"]["paused_count"],
+        "watch_status_before": before,
+        "watch_status_after": after
+    },
+    "artifacts": {
+        "cargo_build_log": str(artifact_dir / "cargo-build.log"),
+        "targeted_tests_log": str(artifact_dir / "x-watch-curation-tests.log"),
+        "fmt_check_log": str(artifact_dir / "cargo-fmt-check.log"),
+        "dry_run_json": str(artifact_dir / "dry-run.json"),
+        "watch_status_before": str(artifact_dir / "watch-status-before.json"),
+        "watch_status_after": str(artifact_dir / "watch-status-after.json")
+    },
+    "artifact_sha256": {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in artifact_dir.iterdir()
+        if path.is_file()
+    },
+    "adversarial_review_judgment": "promote only as the M1 first-slice dry-run/local-restore proof; hold operational curation until live profile enrichment, reviewed pause apply, worker pressure reduction, and ops UI controls are proven.",
+    "remaining_risks": [
+        {
+            "risk": "Classifier is conservative and still requires review/enrichment before material watch-list reduction.",
+            "next_action": "Implement live profile enrichment and reviewed CSV/manual-rule apply flow."
+        },
+        {
+            "risk": "No real-home pause-only apply was performed.",
+            "next_action": "Apply pause-only first in a copied home, then real home only after reviewed rules exist."
+        }
+    ]
+}
+
+(artifact_dir / "proof-packet.json").write_text(json.dumps(packet, indent=2) + "\n")
+packet["artifact_sha256"]["proof-packet.json"] = hashlib.sha256(
+    (artifact_dir / "proof-packet.json").read_bytes()
+).hexdigest()
+
+proof_level = packet["proof_level"]
+(artifact_dir / "proof-claims.json").write_text(json.dumps([{
+    "claim_key": "x-watch-curation-real-home-dry-run",
+    "claim": packet["claim"],
+    "status": "proven",
+    "proof_level": proof_level,
+    "evidence": [{
+        "real_home_dry_run": packet["real_home_dry_run"],
+        "proof_packet_path": str(artifact_dir / "proof-packet.json")
+    }],
+    "refutation": [],
+    "gates": [
+        "cargo build -p arcwell passed",
+        "cargo test -p arcwell-core x_watch_curation passed",
+        "cargo test -p arcwell-core proof_packet passed",
+        "cargo fmt -- --check passed",
+        "watch-source status counts before and after dry-run are identical",
+        "dry-run returned paused_count 0"
+    ]
+}], indent=2) + "\n")
+
+artifact_rows = []
+for name, digest in sorted(packet["artifact_sha256"].items()):
+    artifact_rows.append({
+        "artifact_kind": "local_file",
+        "label": name,
+        "path": str(artifact_dir / name),
+        "sha256": digest,
+        "metadata": {
+            "proof_root": str(proof_root),
+            "local_path_only": True
+        }
+    })
+(artifact_dir / "proof-artifacts.json").write_text(json.dumps(artifact_rows, indent=2) + "\n")
+
+(artifact_dir / "proof-checks.json").write_text(json.dumps([
+    {
+        "check_kind": "build",
+        "command": "cargo build -p arcwell",
+        "status": "passed",
+        "exit_code": 0,
+        "output_excerpt": "build completed; see cargo-build.log",
+        "metadata": {"artifact": str(artifact_dir / "cargo-build.log")}
+    },
+    {
+        "check_kind": "severe_test",
+        "command": "cargo test -p arcwell-core x_watch_curation -- --nocapture",
+        "status": "passed",
+        "exit_code": 0,
+        "output_excerpt": "x_watch_curation tests passed; see x-watch-curation-tests.log",
+        "metadata": {"artifact": str(artifact_dir / "x-watch-curation-tests.log")}
+    },
+    {
+        "check_kind": "severe_test",
+        "command": "cargo test -p arcwell-core proof_packet -- --nocapture",
+        "status": "passed",
+        "exit_code": 0,
+        "output_excerpt": "proof_packet tests passed; see proof-packet-tests.log",
+        "metadata": {"artifact": str(artifact_dir / "proof-packet-tests.log")}
+    },
+    {
+        "check_kind": "format",
+        "command": "cargo fmt -- --check",
+        "status": "passed",
+        "exit_code": 0,
+        "output_excerpt": "format check passed; see cargo-fmt-check.log",
+        "metadata": {"artifact": str(artifact_dir / "cargo-fmt-check.log")}
+    },
+    {
+        "check_kind": "state_invariant",
+        "command": "compare watch-status-before.json watch-status-after.json",
+        "status": "passed",
+        "exit_code": 0,
+        "output_excerpt": "dry-run did not mutate X watch-source status counts",
+        "metadata": {
+            "before": before,
+            "after": after
+        }
+    }
+], indent=2) + "\n")
+
+(artifact_dir / "proof-metadata.json").write_text(json.dumps({
+    "proof_name": packet["proof_name"],
+    "real_home_dry_run": packet["real_home_dry_run"],
+    "non_claims": packet["non_claims"],
+    "remaining_risks": packet["remaining_risks"],
+    "adversarial_review_judgment": packet["adversarial_review_judgment"]
+}, indent=2) + "\n")
+print(json.dumps(packet, indent=2))
+PY
+
+log "recording durable proof packet"
+"$ARCWELL_BIN" --home "$ARCWELL_HOME" proof record \
+  --scope autonomous-knowledge-system \
+  --title "X watch curation local proof $RUN_STAMP" \
+  --proof-level production_data_dry_run_plus_local_restore_tests \
+  --status passed \
+  --summary "Real-home X watch curation dry-run proof with unchanged watch-source status counts, targeted severe tests, formatting, and durable proof-ledger recording." \
+  --artifact-root "$PROOF_ROOT" \
+  --claims-json "$(cat "$ARTIFACT_DIR/proof-claims.json")" \
+  --artifacts-json "$(cat "$ARTIFACT_DIR/proof-artifacts.json")" \
+  --checks-json "$(cat "$ARTIFACT_DIR/proof-checks.json")" \
+  --metadata-json "$(cat "$ARTIFACT_DIR/proof-metadata.json")" \
+  >"$ARTIFACT_DIR/proof-ledger-record.json"
+
+log "proof packet: $ARTIFACT_DIR/proof-packet.json"
+log "proof ledger record: $ARTIFACT_DIR/proof-ledger-record.json"
+log "x watch curation local proof passed"

@@ -540,6 +540,9 @@ pub(crate) fn job(store: Store, args: JobCommand) -> Result<()> {
         JobSubcommand::Shortlist { profile_id } => {
             print_json(&store.compile_job_shortlist(&profile_id)?)
         }
+        JobSubcommand::OutreachReadiness { profile_id, limit } => {
+            print_json(&store.compile_job_outreach_readiness_report(&profile_id, limit)?)
+        }
         JobSubcommand::CompanyTargets {
             profile_id,
             market,
@@ -605,6 +608,11 @@ pub(crate) fn job(store: Store, args: JobCommand) -> Result<()> {
         JobSubcommand::PacketExport { packet_id, out } => {
             print_json(&store.export_job_application_packet(&packet_id, &out)?)
         }
+        JobSubcommand::PacketExportSet {
+            profile_id,
+            packet_ids,
+            out,
+        } => print_json(&store.export_job_application_packet_set(&profile_id, packet_ids, &out)?),
         JobSubcommand::CompanyAdd {
             company_name,
             website_url,
@@ -753,8 +761,52 @@ pub(crate) fn job(store: Store, args: JobCommand) -> Result<()> {
             &scope,
             Some(min_elapsed_hours),
         )?),
+        JobSubcommand::OperationalAudit {
+            profile_id,
+            scope,
+            min_elapsed_hours,
+        } => print_json(&store.audit_job_operational_readiness(
+            &profile_id,
+            &scope,
+            Some(min_elapsed_hours),
+        )?),
         JobSubcommand::WeeklyReport { profile_id, scope } => {
             print_json(&store.compile_job_weekly_report(&profile_id, &scope)?)
+        }
+        JobSubcommand::WeeklyReportDeliveryPrepare {
+            report_id,
+            channel,
+            subject,
+            target,
+            idempotency_key,
+        } => print_json(&store.prepare_job_weekly_report_delivery(
+            JobWeeklyReportDeliveryInput {
+                report_id,
+                channel,
+                subject,
+                target,
+                idempotency_key,
+            },
+        )?),
+        JobSubcommand::WeeklyReportDeliverySend {
+            delivery_id,
+            telegram_bot_token,
+            email_account_id,
+            email_api_token,
+            email_from,
+            api_base,
+        } => print_json(&store.send_job_weekly_report_delivery(
+            JobWeeklyReportDeliverySendInput {
+                delivery_id,
+                telegram_bot_token,
+                email_account_id,
+                email_api_token,
+                email_from,
+                api_base,
+            },
+        )?),
+        JobSubcommand::WeeklyReportDeliveries { report_id } => {
+            print_json(&store.list_job_weekly_report_deliveries(report_id.as_deref())?)
         }
     }
 }

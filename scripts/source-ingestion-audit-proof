@@ -1,0 +1,913 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DB="${ARCWELL_SOURCE_INGESTION_AUDIT_DB:-${ARCWELL_HOME:-$HOME/.arcwell}/arcwell.sqlite3}"
+RUN_STAMP="${ARCWELL_SOURCE_INGESTION_AUDIT_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+PROOF_ROOT="${ARCWELL_SOURCE_INGESTION_AUDIT_PROOF_DIR:-.arcwell-dev/audits/source-ingestion-$RUN_STAMP}"
+ARTIFACT_DIR="$PROOF_ROOT/artifacts"
+DB_HOME="$(cd "$(dirname "$DB")" && pwd)"
+POLICY_FILE="$DB_HOME/arcwell-policy.toml"
+ARCWELL_BIN="${ARCWELL_BIN:-}"
+if [ -z "$ARCWELL_BIN" ] && [ -x "./target/debug/arcwell" ]; then
+  ARCWELL_BIN="./target/debug/arcwell"
+fi
+
+for required in sqlite3 jq python3; do
+  if ! command -v "$required" >/dev/null 2>&1; then
+    echo "BLOCKED: $required is required for the source ingestion audit proof." >&2
+    exit 2
+  fi
+done
+
+if [ ! -f "$DB" ]; then
+  echo "BLOCKED: Arcwell DB not found: $DB" >&2
+  exit 2
+fi
+
+mkdir -p "$ARTIFACT_DIR"
+
+sql_json() {
+  sqlite3 -json "$DB" "$1"
+}
+
+sql_csv() {
+  local file="$1"
+  local query="$2"
+  sqlite3 -cmd ".headers on" -cmd ".mode csv" "$DB" "$query" >"$file"
+}
+
+sql_csv "$ARTIFACT_DIR/source_inventory.csv" "
+WITH adapter AS (
+  SELECT
+    source_kind,
+    lower(locator) AS locator_lc,
+    COUNT(*) AS adapter_run_count,
+    SUM(accepted_count) AS accepted_count,
+    SUM(rejected_count) AS rejected_count,
+    SUM(duplicate_count) AS duplicate_count,
+    MAX(updated_at) AS latest_adapter_run_at
+  FROM knowledge_adapter_runs
+  GROUP BY source_kind, lower(locator)
+),
+x_author AS (
+  SELECT
+    lower(author) AS locator_lc,
+    COUNT(*) AS x_item_count,
+    MAX(imported_at) AS latest_x_import_at
+  FROM x_items
+  GROUP BY lower(author)
+),
+gh_owner_cards AS (
+  SELECT
+    lower(substr(url, 20, instr(substr(url, 20), '/') - 1)) AS locator_lc,
+    COUNT(*) AS github_card_count,
+    MAX(retrieved_at) AS latest_github_card_at
+  FROM source_cards
+  WHERE provider = 'github'
+    AND url LIKE 'https://github.com/%/%'
+  GROUP BY lower(substr(url, 20, instr(substr(url, 20), '/') - 1))
+),
+worker_jobs AS (
+  SELECT
+    CASE kind
+      WHEN 'ingest_url' THEN 'blog'
+      WHEN 'rss_fetch' THEN 'rss'
+      WHEN 'github_owner' THEN 'github_owner'
+      WHEN 'arxiv_search' THEN 'arxiv_query'
+      WHEN 'x_import_bookmarks' THEN 'x_bookmarks'
+      WHEN 'x_monitor_watch_source' THEN 'x_handle'
+      ELSE kind
+    END AS source_kind,
+    lower(COALESCE(
+      json_extract(input_json, '$.url'),
+      json_extract(input_json, '$.owner'),
+      json_extract(input_json, '$.query'),
+      json_extract(input_json, '$.handle'),
+      'bookmarks'
+    )) AS locator_lc,
+    COUNT(*) AS worker_job_count,
+    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS worker_completed_count,
+    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS worker_failed_count,
+    SUM(CASE WHEN status = 'dead_lettered' THEN 1 ELSE 0 END) AS worker_dead_lettered_count,
+    SUM(CASE WHEN status = 'superseded' THEN 1 ELSE 0 END) AS worker_superseded_count,
+    MAX(updated_at) AS latest_worker_job_at
+  FROM wiki_jobs
+  WHERE kind IN (
+    'ingest_url',
+    'rss_fetch',
+    'github_owner',
+    'arxiv_search',
+    'x_import_bookmarks',
+    'x_monitor_watch_source'
+  )
+  GROUP BY source_kind, locator_lc
+),
+job_source_cards AS (
+  SELECT
+    CASE w.kind
+      WHEN 'rss_fetch' THEN 'rss'
+      WHEN 'github_owner' THEN 'github_owner'
+      WHEN 'arxiv_search' THEN 'arxiv_query'
+      ELSE w.kind
+    END AS source_kind,
+    lower(COALESCE(
+      json_extract(w.input_json, '$.url'),
+      json_extract(w.input_json, '$.owner'),
+      json_extract(w.input_json, '$.query')
+    )) AS locator_lc,
+    COUNT(DISTINCT sc.id) AS source_card_count,
+    MAX(sc.retrieved_at) AS latest_source_card_at
+  FROM wiki_jobs w
+  JOIN json_each(w.result_json, '$.source_cards') card
+  JOIN source_cards sc
+    ON sc.id = card.value
+  WHERE w.kind IN ('rss_fetch', 'github_owner', 'arxiv_search')
+    AND w.result_json IS NOT NULL
+    AND json_valid(w.result_json)
+    AND json_type(w.result_json, '$.source_cards') = 'array'
+  GROUP BY source_kind, locator_lc
+)
+SELECT
+  CASE ws.source_kind
+    WHEN 'x_handle' THEN 'twitter_account'
+    WHEN 'x_bookmarks' THEN 'twitter_bookmarks'
+    WHEN 'github_owner' THEN 'github_org'
+    WHEN 'arxiv_query' THEN 'research_papers'
+    WHEN 'rss' THEN 'rss_or_blog_feed'
+    WHEN 'blog' THEN 'blog_url'
+    WHEN 'knowledge_backlog' THEN 'internal_analysis'
+    WHEN 'knowledge_entity_resolution' THEN 'internal_analysis'
+    WHEN 'knowledge_model_clusters' THEN 'internal_analysis'
+    ELSE ws.source_kind
+  END AS category,
+  ws.source_kind,
+  ws.locator,
+  ws.label,
+  ws.cadence,
+  ws.status AS watch_status,
+  COALESCE(sh.status, 'no_health_row') AS health_status,
+  sh.last_success_at,
+  sh.last_failure_at,
+  sh.last_error,
+  sh.last_item_id,
+  sh.last_item_date,
+  sh.next_run_at,
+  COALESCE(worker_jobs.worker_job_count, 0) AS worker_job_count,
+  COALESCE(worker_jobs.worker_completed_count, 0) AS worker_completed_count,
+  COALESCE(worker_jobs.worker_failed_count, 0) AS worker_failed_count,
+  COALESCE(worker_jobs.worker_dead_lettered_count, 0) AS worker_dead_lettered_count,
+  COALESCE(worker_jobs.worker_superseded_count, 0) AS worker_superseded_count,
+  worker_jobs.latest_worker_job_at,
+  COALESCE(adapter.adapter_run_count, 0) AS adapter_run_count,
+  COALESCE(adapter.accepted_count, 0) AS adapter_accepted_count,
+  COALESCE(adapter.rejected_count, 0) AS adapter_rejected_count,
+  COALESCE(adapter.duplicate_count, 0) AS adapter_duplicate_count,
+  adapter.latest_adapter_run_at,
+  CASE
+    WHEN ws.source_kind = 'x_handle' THEN COALESCE(x_author.x_item_count, 0)
+    WHEN ws.source_kind = 'github_owner' THEN COALESCE(gh_owner_cards.github_card_count, 0)
+    WHEN ws.source_kind IN ('rss', 'arxiv_query') THEN COALESCE(job_source_cards.source_card_count, 0)
+    ELSE 0
+  END AS durable_item_count,
+  CASE
+    WHEN ws.source_kind = 'x_handle' THEN x_author.latest_x_import_at
+    WHEN ws.source_kind = 'github_owner' THEN gh_owner_cards.latest_github_card_at
+    WHEN ws.source_kind IN ('rss', 'arxiv_query') THEN job_source_cards.latest_source_card_at
+    ELSE NULL
+  END AS latest_durable_item_at,
+  ws.created_at AS watch_created_at,
+  ws.updated_at AS watch_updated_at
+FROM watch_sources ws
+LEFT JOIN source_health sh
+  ON sh.source_kind = ws.source_kind
+ AND sh.locator = ws.locator
+LEFT JOIN adapter
+  ON adapter.source_kind = CASE WHEN ws.source_kind = 'x_handle' THEN 'x_watch' ELSE ws.source_kind END
+ AND adapter.locator_lc = lower(ws.locator)
+LEFT JOIN x_author
+  ON x_author.locator_lc = lower(ws.locator)
+LEFT JOIN gh_owner_cards
+  ON gh_owner_cards.locator_lc = lower(ws.locator)
+LEFT JOIN worker_jobs
+  ON worker_jobs.source_kind = ws.source_kind
+ AND worker_jobs.locator_lc = lower(ws.locator)
+LEFT JOIN job_source_cards
+  ON job_source_cards.source_kind = ws.source_kind
+ AND job_source_cards.locator_lc = lower(ws.locator)
+ORDER BY category, ws.source_kind, lower(ws.locator);
+"
+
+python3 - "$ARTIFACT_DIR" "$DB" <<'PY'
+import csv
+import re
+import sqlite3
+import sys
+from collections import Counter
+from pathlib import Path
+
+artifact_dir = Path(sys.argv[1])
+db_path = sys.argv[2]
+source_inventory = artifact_dir / "source_inventory.csv"
+out_dir = artifact_dir / "source_lists"
+out_dir.mkdir(parents=True, exist_ok=True)
+
+rows = list(csv.DictReader(source_inventory.open(newline="")))
+common_cols = [
+    "category",
+    "source_kind",
+    "locator",
+    "label",
+    "cadence",
+    "watch_status",
+    "health_status",
+    "last_success_at",
+    "last_failure_at",
+    "last_error",
+    "last_item_id",
+    "last_item_date",
+    "next_run_at",
+    "worker_job_count",
+    "worker_completed_count",
+    "worker_failed_count",
+    "worker_dead_lettered_count",
+    "worker_superseded_count",
+    "latest_worker_job_at",
+    "adapter_run_count",
+    "adapter_accepted_count",
+    "adapter_rejected_count",
+    "adapter_duplicate_count",
+    "latest_adapter_run_at",
+    "durable_item_count",
+    "latest_durable_item_at",
+    "watch_created_at",
+    "watch_updated_at",
+]
+
+
+def write_rows(name, selected, cols=None):
+    path = out_dir / name
+    fields = cols or common_cols
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        for row in selected:
+            writer.writerow(row)
+    return path, len(selected)
+
+
+files = [
+    write_rows("twitter_accounts.csv", [row for row in rows if row["category"] == "twitter_account"]),
+    write_rows("twitter_bookmarks.csv", [row for row in rows if row["category"] == "twitter_bookmarks"]),
+    write_rows("github_orgs_and_users.csv", [row for row in rows if row["category"] == "github_org"]),
+    write_rows("rss_and_blog_feeds.csv", [row for row in rows if row["category"] == "rss_or_blog_feed"]),
+    write_rows("blog_urls.csv", [row for row in rows if row["category"] == "blog_url"]),
+    write_rows("research_paper_queries.csv", [row for row in rows if row["category"] == "research_papers"]),
+    write_rows("internal_analysis_sources.csv", [row for row in rows if row["category"] == "internal_analysis"]),
+]
+
+personal_blog_urls = {
+    "https://eugeneyan.com/start-here/",
+    "https://hamel.dev/",
+    "https://jalammar.github.io",
+    "https://karpathy.github.io",
+}
+company_blog_urls = {
+    "https://ai.meta.com/blog/",
+    "https://blog.google/technology/ai/",
+    "https://deepmind.google/discover/blog/",
+    "https://developer.nvidia.com/blog/category/generative-ai/",
+    "https://huggingface.co/blog",
+    "https://mistral.ai/news/",
+    "https://openai.com/news/",
+    "https://research.google/blog/",
+    "https://www.anthropic.com/news",
+    "https://www.microsoft.com/en-us/research/blog/",
+}
+personal_feed_fragments = [
+    "lilianweng.github.io",
+    "simonwillison.net",
+    "til.simonwillison.net",
+    "interconnects.ai",
+    "latent.space",
+    "sebastianraschka.com",
+    "cameronrwolfe.substack.com",
+]
+publication_feed_fragments = [
+    "alphasignalai",
+    "bullrich.dev",
+    "cobusgreyling",
+    "importai",
+    "news.smol.ai",
+    "sub.thursdai.news",
+    "thecreatorsai",
+    "theneurondaily",
+    "thesequence",
+    "turingpost",
+    "bensbites",
+    "exponentialview",
+    "normaltech",
+    "superhuman",
+    "therundown",
+    "whatshotit",
+]
+classified = []
+for row in rows:
+    if row["category"] not in {"blog_url", "rss_or_blog_feed"}:
+        continue
+    locator = row["locator"]
+    classification = "other_feed"
+    if locator in personal_blog_urls:
+        classification = "personal_blog_url"
+    elif locator in company_blog_urls:
+        classification = "company_blog_url"
+    elif any(fragment in locator for fragment in personal_feed_fragments):
+        classification = "personal_or_practitioner_feed"
+    elif any(fragment in locator for fragment in publication_feed_fragments):
+        classification = "company_publication_or_newsletter_feed"
+    item = dict(row)
+    item["classification"] = classification
+    classified.append(item)
+write_rows("blogs_and_feeds_classified.csv", classified, ["classification"] + common_cols)
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+watch = {
+    row["locator"].lower(): {
+        "owner_watch_cadence": row["cadence"],
+        "owner_watch_status": row["status"],
+    }
+    for row in conn.execute(
+        "select locator, cadence, status from watch_sources where source_kind='github_owner'"
+    )
+}
+repo_re = re.compile(r"^https://github\.com/([^/]+)/([^/#?]+)")
+repo_map = {}
+for row in conn.execute(
+    """
+    select id, title, url, source_type, provider, retrieved_at, wiki_page_id
+    from source_cards
+    where provider='github' and source_type='github_repo'
+    order by retrieved_at desc
+    """
+):
+    match = repo_re.match(row["url"])
+    if match:
+        owner = match.group(1)
+        repo = match.group(2).removesuffix(".git")
+        full_name = f"{owner}/{repo}"
+    else:
+        owner = ""
+        repo = ""
+        full_name = "(unparsed)"
+    record = repo_map.setdefault(
+        full_name,
+        {
+            "repo_full_name": full_name,
+            "owner": owner,
+            "repo": repo,
+            "source_card_count": 0,
+            "latest_retrieved_at": "",
+            "owner_watch_cadence": "",
+            "owner_watch_status": "",
+            "sample_source_card_id": row["id"],
+            "sample_source_card_title": row["title"],
+            "sample_source_card_url": row["url"],
+            "sample_wiki_page_id": row["wiki_page_id"],
+        },
+    )
+    record["source_card_count"] += 1
+    if row["retrieved_at"] and row["retrieved_at"] > record["latest_retrieved_at"]:
+        record["latest_retrieved_at"] = row["retrieved_at"]
+        record["sample_source_card_id"] = row["id"]
+        record["sample_source_card_title"] = row["title"]
+        record["sample_source_card_url"] = row["url"]
+        record["sample_wiki_page_id"] = row["wiki_page_id"]
+    if owner.lower() in watch:
+        record.update(watch[owner.lower()])
+
+repo_rows = sorted(
+    repo_map.values(),
+    key=lambda row: (row["latest_retrieved_at"], row["repo_full_name"]),
+    reverse=True,
+)
+write_rows(
+    "github_repos_observed_from_source_cards.csv",
+    repo_rows,
+    [
+        "repo_full_name",
+        "owner",
+        "repo",
+        "source_card_count",
+        "latest_retrieved_at",
+        "owner_watch_cadence",
+        "owner_watch_status",
+        "sample_source_card_id",
+        "sample_source_card_title",
+        "sample_source_card_url",
+        "sample_wiki_page_id",
+    ],
+)
+
+provider_rows = [
+    dict(row)
+    for row in conn.execute(
+        """
+        select provider, source_type, count(*) cards, count(distinct wiki_page_id) wiki_pages,
+               max(retrieved_at) latest_retrieved, min(retrieved_at) earliest_retrieved
+        from source_cards
+        group by provider, source_type
+        order by cards desc
+        """
+    )
+]
+write_rows(
+    "source_card_provider_summary.csv",
+    provider_rows,
+    ["provider", "source_type", "cards", "wiki_pages", "latest_retrieved", "earliest_retrieved"],
+)
+
+counts = Counter(row["category"] for row in rows)
+health = Counter((row["category"], row["health_status"] or "no_health_row") for row in rows)
+with (out_dir / "README.md").open("w") as handle:
+    handle.write("# Source list appendix\n\n")
+    handle.write(
+        f"Generated from `{source_inventory}` and `{db_path}`.\n\n"
+    )
+    handle.write("## Files\n\n")
+    for path, count in files:
+        handle.write(f"- `{path.name}`: {count} rows\n")
+    handle.write(f"- `blogs_and_feeds_classified.csv`: {len(classified)} rows\n")
+    handle.write(f"- `github_repos_observed_from_source_cards.csv`: {len(repo_rows)} rows\n")
+    handle.write(f"- `source_card_provider_summary.csv`: {len(provider_rows)} rows\n")
+    handle.write("\n## Category counts\n\n")
+    for category, count in counts.most_common():
+        handle.write(f"- `{category}`: {count}\n")
+    handle.write("\n## Health by category\n\n")
+    for (category, status), count in sorted(health.items()):
+        handle.write(f"- `{category}` / `{status}`: {count}\n")
+    handle.write("\n## Notes\n\n")
+    handle.write("- Cadence is the configured target cadence: `hot` is hourly, `warm` is every six hours, and `cold` is daily.\n")
+    handle.write("- Worker/check history is represented by `worker_*` columns.\n")
+    handle.write("- Adapter/import acceptance history is represented by `adapter_*` and `durable_item_*` columns where available.\n")
+    handle.write("- GitHub repos are observed durable source cards discovered from GitHub owner/repo jobs. They are not all first-class configured watch rows.\n")
+    handle.write("- A row being configured does not mean it is currently healthy. Use `health_status`, `last_success_at`, `last_failure_at`, and `last_error` together.\n")
+PY
+
+sql_csv "$ARTIFACT_DIR/source_card_summary.csv" "
+SELECT
+  source_type,
+  provider,
+  COUNT(*) AS source_cards,
+  MIN(retrieved_at) AS first_retrieved_at,
+  MAX(retrieved_at) AS latest_retrieved_at,
+  COUNT(DISTINCT wiki_page_id) AS wiki_pages
+FROM source_cards
+GROUP BY source_type, provider
+ORDER BY source_cards DESC;
+"
+
+sql_csv "$ARTIFACT_DIR/source_health_summary.csv" "
+SELECT
+  source_kind,
+  provider,
+  status,
+  COUNT(*) AS rows,
+  MAX(updated_at) AS latest_update,
+  MAX(last_success_at) AS latest_success,
+  MAX(last_failure_at) AS latest_failure
+FROM source_health
+GROUP BY source_kind, provider, status
+ORDER BY source_kind, provider, status;
+"
+
+sql_csv "$ARTIFACT_DIR/wiki_job_summary.csv" "
+SELECT
+  kind,
+  status,
+  COUNT(*) AS jobs,
+  MAX(updated_at) AS latest_update,
+  SUM(attempts) AS attempts
+FROM wiki_jobs
+GROUP BY kind, status
+ORDER BY kind, status;
+"
+
+sql_csv "$ARTIFACT_DIR/x_sync_summary.csv" "
+SELECT
+  stream,
+  transport,
+  status,
+  COUNT(*) AS runs,
+  SUM(seen) AS seen,
+  SUM(inserted) AS inserted,
+  SUM(updated) AS updated,
+  SUM(rejected) AS rejected,
+  MAX(completed_at) AS latest_completed,
+  MAX(started_at) AS latest_started
+FROM x_sync_runs
+GROUP BY stream, transport, status
+ORDER BY stream, transport, status;
+"
+
+sql_csv "$ARTIFACT_DIR/recent_cluster_report_links.csv" "
+SELECT
+  kc.id AS cluster_id,
+  kc.topic,
+  kc.status AS cluster_status,
+  json_array_length(kc.source_card_ids_json) AS cluster_source_refs,
+  kc.updated_at AS cluster_updated_at,
+  kr.id AS report_id,
+  kr.status AS report_status,
+  kr.updated_at AS report_updated_at
+FROM knowledge_clusters kc
+LEFT JOIN knowledge_reports kr
+  ON kr.cluster_id = kc.id
+ORDER BY kc.updated_at DESC, kr.updated_at DESC
+LIMIT 100;
+"
+
+sql_csv "$ARTIFACT_DIR/policy-deferred-source-health.csv" "
+SELECT
+  source_kind,
+  provider,
+  status,
+  COUNT(*) AS rows,
+  MAX(last_success_at) AS latest_success,
+  MAX(last_failure_at) AS latest_failure,
+  MIN(next_run_at) AS earliest_next_run_at,
+  MAX(next_run_at) AS latest_next_run_at
+FROM source_health
+WHERE last_error LIKE 'policy deferred worker.enqueue:%'
+GROUP BY source_kind, provider, status
+ORDER BY rows DESC, source_kind, provider, status;
+"
+
+sql_json "
+SELECT
+  COUNT(*) AS rows,
+  SUM(CASE WHEN next_run_at IS NULL OR next_run_at <= strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now') THEN 1 ELSE 0 END) AS due_or_overdue_rows,
+  COUNT(DISTINCT source_kind) AS source_kinds,
+  MAX(last_failure_at) AS latest_failure
+FROM source_health
+WHERE last_error LIKE 'policy deferred worker.enqueue:%';
+" >"$ARTIFACT_DIR/policy-deferred-counts.json"
+
+explain_policy() {
+  local label="$1"
+  shift
+  if [ -n "$ARCWELL_BIN" ] && [ -x "$ARCWELL_BIN" ]; then
+    ARCWELL_HOME="$DB_HOME" "$ARCWELL_BIN" policy explain "$@" \
+      | jq --arg label "$label" '. + {label: $label}'
+  else
+    jq -n --arg label "$label" --arg reason "arcwell binary not available" \
+      '{label: $label, effect: "unknown", allowed: false, reason: $reason}'
+  fi
+}
+
+{
+  explain_policy "blog_url_ingest_enqueue" \
+    --action worker.enqueue \
+    --package arcwell-llm-wiki \
+    --provider web \
+    --source ingest_url \
+    --target "https://example.com/"
+  explain_policy "rss_fetch_enqueue" \
+    --action worker.enqueue \
+    --package arcwell-llm-wiki \
+    --provider rss \
+    --source rss_fetch \
+    --target "https://example.com/feed.xml"
+  explain_policy "github_owner_enqueue" \
+    --action worker.enqueue \
+    --package arcwell-llm-wiki \
+    --provider github \
+    --source github_owner \
+    --target openai
+  explain_policy "arxiv_search_enqueue" \
+    --action worker.enqueue \
+    --package arcwell-llm-wiki \
+    --provider arxiv \
+    --source arxiv_search \
+    --target "cat:cs.AI"
+  explain_policy "x_bookmarks_enqueue" \
+    --action worker.enqueue \
+    --package arcwell-x \
+    --provider x \
+    --source x_import_bookmarks \
+    --target bookmarks
+  explain_policy "x_handle_monitor_enqueue" \
+    --action worker.enqueue \
+    --package arcwell-x \
+    --provider x \
+    --source x_monitor_watch_source \
+    --target openai
+  explain_policy "knowledge_backlog_enqueue" \
+    --action worker.enqueue \
+    --package arcwell-knowledge \
+    --source knowledge_cluster_backlog \
+    --target source-cards
+  explain_policy "knowledge_entity_resolution_enqueue" \
+    --action worker.enqueue \
+    --package arcwell-knowledge \
+    --provider openai \
+    --source knowledge_entity_resolution_model \
+    --target entities
+} | jq -s '.' >"$ARTIFACT_DIR/representative-policy-explain.json"
+
+POLICY_FILE_EXISTS=false
+POLICY_FILE_HAS_DEFAULT_WORKER_ENQUEUE=false
+POLICY_FILE_HAS_EXPIRED_SOURCE_SCAN_RULES=false
+if [ -f "$POLICY_FILE" ]; then
+  POLICY_FILE_EXISTS=true
+  if grep -q 'default-allow-worker-enqueue' "$POLICY_FILE"; then
+    POLICY_FILE_HAS_DEFAULT_WORKER_ENQUEUE=true
+  fi
+  if grep -q 'scheduled source' "$POLICY_FILE" || grep -q 'AI-source' "$POLICY_FILE"; then
+    POLICY_FILE_HAS_EXPIRED_SOURCE_SCAN_RULES=true
+  fi
+fi
+
+jq -n \
+  --arg policy_file "$POLICY_FILE" \
+  --argjson exists "$POLICY_FILE_EXISTS" \
+  --argjson has_default_worker_enqueue "$POLICY_FILE_HAS_DEFAULT_WORKER_ENQUEUE" \
+  --argjson has_source_scan_rules "$POLICY_FILE_HAS_EXPIRED_SOURCE_SCAN_RULES" \
+  --slurpfile explains "$ARTIFACT_DIR/representative-policy-explain.json" \
+  --slurpfile deferred "$ARTIFACT_DIR/policy-deferred-counts.json" \
+  '($explains[0] // []) as $policy_explains
+  | ([
+      $policy_explains[]
+      | select(
+          (.label == "rss_fetch_enqueue"
+            or .label == "github_owner_enqueue"
+            or .label == "arxiv_search_enqueue")
+          and (.allowed != true)
+        )
+    ] | length) as $non_x_policy_deferred
+  | ([
+      $policy_explains[]
+      | select(
+          (.label == "x_bookmarks_enqueue"
+            or .label == "x_handle_monitor_enqueue")
+          and (.allowed != true)
+        )
+    ] | length) as $x_policy_deferred
+  | {
+    policy_file: $policy_file,
+    policy_file_exists: $exists,
+    policy_file_contains_default_worker_enqueue_rule: $has_default_worker_enqueue,
+    policy_file_contains_source_scan_rule_text: $has_source_scan_rules,
+    representative_policy_explain: $policy_explains,
+    policy_deferred_source_health: $deferred[0],
+    interpretation: (
+      if (($deferred[0][0].rows // 0) > 0 and $non_x_policy_deferred == 0 and $x_policy_deferred > 0)
+      then "Current representative non-X scheduled enqueue policy allows RSS, GitHub owner, and arXiv. Existing policy-deferred source-health rows still need a bounded worker pass to refresh, while X enqueue policy remains intentionally deferred."
+      elif (($deferred[0][0].rows // 0) > 0)
+      then "Configured watch sources have recorded policy-deferred worker enqueue failures. Treat scheduled freshness as blocked until policy coverage is repaired and a fresh worker pass proves source-health recovery."
+      else "No policy-deferred source-health rows were found in this DB snapshot."
+      end
+    )
+  }' >"$ARTIFACT_DIR/policy-coverage-summary.json"
+
+sql_json "
+SELECT
+  source_kind,
+  COUNT(*) AS configured,
+  SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
+  SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END) AS paused
+FROM watch_sources
+GROUP BY source_kind
+ORDER BY configured DESC;
+" >"$ARTIFACT_DIR/watch-source-counts.json"
+
+sql_json "
+SELECT
+  source_kind,
+  COUNT(*) AS sources,
+  SUM(CASE WHEN status = 'healthy' THEN 1 ELSE 0 END) AS healthy,
+  SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+  SUM(CASE WHEN status = 'rate_limited' THEN 1 ELSE 0 END) AS rate_limited,
+  MAX(last_success_at) AS latest_success,
+  MAX(last_failure_at) AS latest_failure
+FROM source_health
+GROUP BY source_kind
+ORDER BY sources DESC;
+" >"$ARTIFACT_DIR/source-health-counts.json"
+
+sql_json "
+SELECT
+  COUNT(*) AS source_cards,
+  SUM(CASE WHEN sc.wiki_page_id IS NOT NULL AND wp.id IS NOT NULL THEN 1 ELSE 0 END) AS cards_with_existing_wiki_page,
+  COUNT(DISTINCT sc.wiki_page_id) AS distinct_wiki_pages
+FROM source_cards sc
+LEFT JOIN wiki_pages wp
+  ON wp.id = sc.wiki_page_id;
+" >"$ARTIFACT_DIR/source-card-wiki-links.json"
+
+sql_json "
+SELECT
+  COUNT(*) AS x_items,
+  SUM(CASE WHEN source_card_id IS NOT NULL THEN 1 ELSE 0 END) AS x_with_source_card,
+  SUM(CASE WHEN wiki_page_id IS NOT NULL THEN 1 ELSE 0 END) AS x_with_wiki_page
+FROM x_items;
+" >"$ARTIFACT_DIR/x-wiki-links.json"
+
+sql_json "
+SELECT
+  COUNT(*) AS clusters,
+  SUM(json_array_length(source_card_ids_json)) AS cluster_source_refs,
+  MAX(updated_at) AS latest_cluster_update
+FROM knowledge_clusters;
+" >"$ARTIFACT_DIR/knowledge-clusters.json"
+
+sql_json "
+SELECT
+  status,
+  COUNT(*) AS reports,
+  SUM(json_array_length(source_card_ids_json)) AS report_source_refs,
+  MAX(updated_at) AS latest_report_update
+FROM knowledge_reports
+GROUP BY status;
+" >"$ARTIFACT_DIR/knowledge-reports.json"
+
+sql_json "
+SELECT
+  role,
+  COUNT(*) AS event_source_links,
+  COUNT(DISTINCT source_card_id) AS distinct_source_cards,
+  MAX(updated_at) AS latest_link
+FROM knowledge_event_sources
+GROUP BY role;
+" >"$ARTIFACT_DIR/knowledge-event-source-links.json"
+
+sql_json "
+SELECT
+  status,
+  review_status,
+  COUNT(*) AS digest_candidates,
+  SUM(json_array_length(source_card_ids_json)) AS digest_source_refs,
+  MAX(updated_at) AS latest_digest_update
+FROM digest_candidates
+GROUP BY status, review_status
+ORDER BY status, review_status;
+" >"$ARTIFACT_DIR/digest-candidates.json"
+
+sql_json "
+SELECT
+  kind,
+  status,
+  COUNT(*) AS jobs,
+  MAX(updated_at) AS latest_update,
+  SUM(attempts) AS attempts
+FROM wiki_jobs
+GROUP BY kind, status
+ORDER BY kind, status;
+" >"$ARTIFACT_DIR/wiki-job-counts.json"
+
+sql_json "
+SELECT
+  key,
+  provider,
+  source_kind,
+  locator,
+  status,
+  last_success_at,
+  last_failure_at,
+  last_error,
+  next_run_at
+FROM source_health
+WHERE status != 'healthy'
+ORDER BY updated_at DESC
+LIMIT 50;
+" >"$ARTIFACT_DIR/recent-nonhealthy-source-health.json"
+
+SOURCE_CARD_TOTAL="$(jq -r '.[0].source_cards' "$ARTIFACT_DIR/source-card-wiki-links.json")"
+SOURCE_CARD_WIKI_TOTAL="$(jq -r '.[0].cards_with_existing_wiki_page' "$ARTIFACT_DIR/source-card-wiki-links.json")"
+X_TOTAL="$(jq -r '.[0].x_items' "$ARTIFACT_DIR/x-wiki-links.json")"
+X_SOURCE_TOTAL="$(jq -r '.[0].x_with_source_card' "$ARTIFACT_DIR/x-wiki-links.json")"
+X_WIKI_TOTAL="$(jq -r '.[0].x_with_wiki_page' "$ARTIFACT_DIR/x-wiki-links.json")"
+CLUSTER_TOTAL="$(jq -r '.[0].clusters' "$ARTIFACT_DIR/knowledge-clusters.json")"
+REPORT_TOTAL="$(jq -r '[.[].reports] | add // 0' "$ARTIFACT_DIR/knowledge-reports.json")"
+DEAD_LETTER_TOTAL="$(jq -r '[.[] | select(.status == "dead_lettered") | .jobs] | add // 0' "$ARTIFACT_DIR/wiki-job-counts.json")"
+FAILED_HEALTH_TOTAL="$(jq -r '[.[] | .failed] | add // 0' "$ARTIFACT_DIR/source-health-counts.json")"
+RATE_LIMITED_HEALTH_TOTAL="$(jq -r '[.[] | .rate_limited] | add // 0' "$ARTIFACT_DIR/source-health-counts.json")"
+POLICY_DEFERRED_TOTAL="$(jq -r '.[0].rows // 0' "$ARTIFACT_DIR/policy-deferred-counts.json")"
+POLICY_DEFERRED_DUE_TOTAL="$(jq -r '.[0].due_or_overdue_rows // 0' "$ARTIFACT_DIR/policy-deferred-counts.json")"
+
+if [ "$SOURCE_CARD_TOTAL" != "$SOURCE_CARD_WIKI_TOTAL" ]; then
+  echo "BLOCKED: not every source card has an existing wiki page" >&2
+  exit 2
+fi
+if [ "$X_TOTAL" != "$X_SOURCE_TOTAL" ] || [ "$X_TOTAL" != "$X_WIKI_TOTAL" ]; then
+  echo "BLOCKED: not every X item has source-card and wiki-page projections" >&2
+  exit 2
+fi
+
+jq -n \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg db "$DB" \
+  --arg proof_root "$PROOF_ROOT" \
+  --arg artifact_dir "$ARTIFACT_DIR" \
+  --argjson dead_letter_total "$DEAD_LETTER_TOTAL" \
+  --argjson failed_health_total "$FAILED_HEALTH_TOTAL" \
+  --argjson rate_limited_health_total "$RATE_LIMITED_HEALTH_TOTAL" \
+  --argjson policy_deferred_total "$POLICY_DEFERRED_TOTAL" \
+  --argjson policy_deferred_due_total "$POLICY_DEFERRED_DUE_TOTAL" \
+  --slurpfile watch_sources "$ARTIFACT_DIR/watch-source-counts.json" \
+  --slurpfile source_health "$ARTIFACT_DIR/source-health-counts.json" \
+  --slurpfile policy_coverage "$ARTIFACT_DIR/policy-coverage-summary.json" \
+  --slurpfile source_links "$ARTIFACT_DIR/source-card-wiki-links.json" \
+  --slurpfile x_links "$ARTIFACT_DIR/x-wiki-links.json" \
+  --slurpfile clusters "$ARTIFACT_DIR/knowledge-clusters.json" \
+  --slurpfile reports "$ARTIFACT_DIR/knowledge-reports.json" \
+  --slurpfile event_links "$ARTIFACT_DIR/knowledge-event-source-links.json" \
+  --slurpfile digests "$ARTIFACT_DIR/digest-candidates.json" \
+  --slurpfile jobs "$ARTIFACT_DIR/wiki-job-counts.json" \
+  '($policy_coverage[0].representative_policy_explain // []) as $policy_explains
+  | ([
+      $policy_explains[]
+      | select(
+          (.label == "rss_fetch_enqueue"
+            or .label == "github_owner_enqueue"
+            or .label == "arxiv_search_enqueue")
+          and (.allowed != true)
+        )
+    ] | length) as $non_x_policy_deferred
+  | ([
+      $policy_explains[]
+      | select(
+          (.label == "x_bookmarks_enqueue"
+            or .label == "x_handle_monitor_enqueue")
+          and (.allowed != true)
+        )
+    ] | length) as $x_policy_deferred
+  | {
+    feature: "source ingestion and knowledge expansion audit",
+    status: "partial_operational_audit",
+    created_at: $created_at,
+    db: $db,
+    proof_root: $proof_root,
+    artifact_dir: $artifact_dir,
+    user_visible_claim: (
+      if ($non_x_policy_deferred == 0 and $x_policy_deferred > 0)
+      then "Arcwell has durable source cards and wiki projections for all ingested source cards and X items, plus completed clustering/report/digest jobs. Current non-X scheduled enqueue policy is allowed for RSS, GitHub, and arXiv, but unattended freshness is still not healthy until a worker pass refreshes stale source-health rows; X remains policy-deferred/rate-limited and dead-lettered jobs still need triage."
+      else "Arcwell has durable source cards and wiki projections for all ingested source cards and X items, plus completed clustering/report/digest jobs, but current unattended source freshness is not healthy because multiple scheduled source families are policy-deferred, rate-limited, or dead-lettered."
+      end
+    ),
+    source_inventory_csv: ($artifact_dir + "/source_inventory.csv"),
+    source_list_appendix: ($artifact_dir + "/source_lists/README.md"),
+    summaries: {
+      watch_sources: $watch_sources[0],
+      source_health: $source_health[0],
+      policy_coverage: $policy_coverage[0],
+      source_card_wiki_links: $source_links[0],
+      x_wiki_links: $x_links[0],
+      knowledge_clusters: $clusters[0],
+      knowledge_reports: $reports[0],
+      knowledge_event_source_links: $event_links[0],
+      digest_candidates: $digests[0],
+      wiki_jobs: $jobs[0]
+    },
+    validated_invariants: [
+      "every source_cards row points at an existing wiki_pages row",
+      "every x_items row has source_card_id and wiki_page_id projections"
+    ],
+    blockers: [
+      if $failed_health_total > 0 then "some source_health rows are failed" else empty end,
+      if $rate_limited_health_total > 0 then "some source_health rows are rate_limited" else empty end,
+      if ($policy_deferred_total > 0 and $non_x_policy_deferred == 0)
+      then "\($policy_deferred_total) source-health rows still record previous policy-deferred worker enqueue failures; \($policy_deferred_due_total) are due or overdue and need a bounded worker pass to refresh"
+      elif $policy_deferred_total > 0
+      then "\($policy_deferred_total) source-health rows record policy-deferred worker enqueue failures; \($policy_deferred_due_total) are due or overdue"
+      else empty end,
+      if $x_policy_deferred > 0 then "X bookmark or handle monitor enqueue policy still defers by current representative policy explain" else empty end,
+      if $dead_letter_total > 0 then "some wiki_jobs are dead_lettered" else empty end
+    ],
+    next_actions: [
+      if $non_x_policy_deferred > 0
+      then "Repair policy coverage for scheduled non-X source enqueue contexts, then rerun a bounded worker pass and this audit to prove source-health recovery."
+      elif $policy_deferred_total > 0
+      then "Run a bounded worker pass after the non-X policy repair, then rerun this audit to prove source-health recovery for RSS, GitHub, and arXiv."
+      else empty end,
+      if $rate_limited_health_total > 0 then "Reduce or shard X watch-source polling before claiming regular X freshness." else empty end,
+      if $x_policy_deferred > 0 then "Keep X policy repair separate until X watch-source capping or sharding is proven." else empty end,
+      if $dead_letter_total > 0 then "Triage dead-lettered wiki jobs by kind and replay only after the root cause is fixed." else empty end
+    ],
+    non_claims: [
+      "This audit does not prove all configured sources are fresh right now.",
+      "This audit does not prove every watch source has historical check-count rows; source_health is current-state, not full history.",
+      "This audit does not change policy or enqueue work; representative policy explains are read-only.",
+      "This audit does not prove model-written analysis quality.",
+      "This audit does not prove external delivery recurrence."
+    ],
+    adversarial_review_judgment: (
+      if ($failed_health_total == 0 and $rate_limited_health_total == 0 and $policy_deferred_total == 0 and $dead_letter_total == 0)
+      then "Promote ingestion linkage only if fresh source-health and queue checks also pass."
+      else "Hold operational freshness claims. Linkage into wiki/source-card/knowledge tables is proven, but scheduled source health and dead-letter recovery need cleanup before calling the ingestion system robust."
+      end
+    )
+  }' >"$ARTIFACT_DIR/proof-packet.json"
+
+echo "[source-ingestion-audit-proof] proof packet: $ARTIFACT_DIR/proof-packet.json"
+echo "[source-ingestion-audit-proof] source inventory: $ARTIFACT_DIR/source_inventory.csv"
+echo "[source-ingestion-audit-proof] PASS with status partial_operational_audit"

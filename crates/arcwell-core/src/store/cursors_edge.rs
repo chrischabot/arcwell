@@ -28,6 +28,13 @@ impl Store {
         Ok(())
     }
 
+    pub(crate) fn delete_cursor(&self, key: &str) -> Result<()> {
+        validate_key(key)?;
+        self.conn
+            .execute("DELETE FROM cursors WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
     pub fn list_cursors(&self) -> Result<Vec<CursorState>> {
         let mut stmt = self
             .conn
