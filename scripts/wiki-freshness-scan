@@ -841,7 +841,12 @@ blocked_sources = list(conn.execute(
     """
     SELECT ws.source_kind, ws.locator, ws.label, ws.cadence, ws.status AS watch_status,
            COALESCE(sh.status, 'no_health') AS health_status,
-           sh.last_success_at, sh.last_failure_at, sh.next_run_at, sh.last_error
+           sh.last_success_at, sh.last_failure_at, sh.next_run_at, sh.last_error,
+           CASE
+             WHEN ws.source_kind = 'job_radar'
+             THEN (SELECT rp.status FROM radar_profiles rp WHERE rp.id = ws.locator)
+             ELSE NULL
+           END AS radar_profile_status
     FROM watch_sources ws
     LEFT JOIN source_health sh
       ON (
@@ -927,6 +932,7 @@ for row in conn.execute(
     active_jobs_by_source[key]["kinds"][row["kind"]] += int(row["count"] or 0)
 
 blocked_source_rows = []
+inactive_blocked_source_rows = []
 for row in blocked_sources:
     status = row["health_status"] or ""
     error = row["last_error"] or ""
@@ -957,6 +963,8 @@ for row in blocked_sources:
             blocker_class = "policy_deferred"
     elif status == "no_health" and source_kind in {"x_bookmarks", "x_handle"}:
         blocker_class = "x_no_health"
+    elif status == "no_health" and source_kind == "job_radar" and not row["radar_profile_status"]:
+        blocker_class = "inactive_missing_profile"
     elif status == "no_health":
         blocker_class = "no_health"
     elif status == "healthy" and next_run and next_run < now and active_job_count > 0:
@@ -965,7 +973,7 @@ for row in blocked_sources:
         blocker_class = "overdue_healthy"
     else:
         blocker_class = "failed"
-    blocked_source_rows.append({
+    blocked_row = {
         "blocker_class": blocker_class,
         "source_kind": source_kind,
         "health_status": status,
@@ -981,7 +989,11 @@ for row in blocked_sources:
         "policy_action": policy_action if "policy deferred" in error.lower() else "",
         "current_policy_allows": "true" if current_policy_allows else "false",
         "last_error": error,
-    })
+    }
+    if blocker_class == "inactive_missing_profile":
+        inactive_blocked_source_rows.append(blocked_row)
+    else:
+        blocked_source_rows.append(blocked_row)
 
 blocked_source_rows.sort(key=blocked_source_sort_key)
 blocked_source_preview_limit = 120
@@ -996,6 +1008,17 @@ with (artifact_dir / "blocked_sources.csv").open("w", newline="") as handle:
     writer = csv.DictWriter(handle, fieldnames=fields)
     writer.writeheader()
     writer.writerows(blocked_source_rows)
+
+with (artifact_dir / "inactive_blocked_sources.csv").open("w", newline="") as handle:
+    fields = [
+        "blocker_class", "source_kind", "health_status", "locator", "label",
+        "cadence", "watch_status", "active_job_count", "active_job_kinds",
+        "last_success_at", "last_failure_at",
+        "next_run_at", "policy_action", "current_policy_allows", "last_error",
+    ]
+    writer = csv.DictWriter(handle, fieldnames=fields)
+    writer.writeheader()
+    writer.writerows(inactive_blocked_source_rows)
 
 dead_letters = list(conn.execute(
     """
@@ -1164,6 +1187,10 @@ summary = {
     "blocked_source_rows_total": len(blocked_source_rows),
     "blocked_source_rows_sampled": min(blocked_source_preview_limit, len(blocked_source_rows)),
     "blocked_source_classes": Counter(row["blocker_class"] for row in blocked_source_rows),
+    "inactive_blocked_source_rows_total": len(inactive_blocked_source_rows),
+    "inactive_blocked_source_classes": Counter(
+        row["blocker_class"] for row in inactive_blocked_source_rows
+    ),
     "dead_letter_groups": len(dead_letters),
     "watch_counts": watch_counts,
     "source_health_counts": health_counts[:100],
@@ -1175,6 +1202,7 @@ summary = {
         "update_batch": "update_batch.md",
         "blocked_sources": "blocked_sources.md",
         "blocked_sources_csv": "blocked_sources.csv",
+        "inactive_blocked_sources_csv": "inactive_blocked_sources.csv",
         "github_blockers": "github_blockers.md",
         "manual_review_queues": "manual_review_queues.md",
         "manual_review_queues_csv": "manual_review_queues.csv",
@@ -1212,6 +1240,23 @@ with (artifact_dir / "blocked_sources.md").open("w") as handle:
                     policy_action=row["policy_action"] or "",
                     current_policy_allows=row["current_policy_allows"],
                     error=compact(row["last_error"], 100).replace("|", "\\|"),
+                )
+            )
+        handle.write("\n")
+    if inactive_blocked_source_rows:
+        handle.write("## Inactive Configuration Rows\n\n")
+        handle.write(
+            "These rows are not counted as active freshness blockers because the backing configured object is missing.\n\n"
+        )
+        handle.write("| Class | Source kind | Locator | Label |\n")
+        handle.write("| --- | --- | --- | --- |\n")
+        for row in inactive_blocked_source_rows[:blocked_source_preview_limit]:
+            handle.write(
+                "| {blocker_class} | {source_kind} | `{locator}` | {label} |\n".format(
+                    blocker_class=row["blocker_class"],
+                    source_kind=row["source_kind"],
+                    locator=compact(row["locator"], 90).replace("|", "\\|"),
+                    label=compact(row["label"], 90).replace("|", "\\|"),
                 )
             )
         handle.write("\n")
@@ -1315,6 +1360,7 @@ proof = {
         "manual_review_queue_counts": manual_queue_counts,
         "blocked_source_rows_total": len(blocked_source_rows),
         "blocked_source_preview_rows": min(blocked_source_preview_limit, len(blocked_source_rows)),
+        "inactive_blocked_source_rows_total": len(inactive_blocked_source_rows),
         "blocked_sources_written": True,
         "dead_letter_groups": len(dead_letters),
     },
@@ -1339,6 +1385,10 @@ print(json.dumps({
     "blocked_source_rows_total": len(blocked_source_rows),
     "blocked_source_rows_sampled": min(blocked_source_preview_limit, len(blocked_source_rows)),
     "blocked_source_classes": dict(Counter(row["blocker_class"] for row in blocked_source_rows)),
+    "inactive_blocked_source_rows_total": len(inactive_blocked_source_rows),
+    "inactive_blocked_source_classes": dict(
+        Counter(row["blocker_class"] for row in inactive_blocked_source_rows)
+    ),
     "dead_letter_groups": len(dead_letters),
 }, indent=2))
 PY
