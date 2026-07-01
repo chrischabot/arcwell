@@ -2319,6 +2319,6 @@ reason = "ops controls may enqueue local worker jobs"
     assert!(html.contains("/ops/actions/x/watch-curation/restore"));
     assert!(html.contains("X Watch Curation"));
     assert!(html.contains("manualdropops"));
-    assert!(html.contains("manual_always_exclude"));
+    assert!(html.contains("paused_excluded"));
     assert!(html.contains("/ops/actions/worker/run-once"));
 }
