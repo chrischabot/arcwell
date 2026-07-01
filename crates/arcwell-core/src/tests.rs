@@ -791,8 +791,10 @@ fn seed_knowledge_event(store: &Store, canonical_key: &str) -> KnowledgeEvent {
 mod guard;
 mod knowledge;
 use knowledge::seed_saturated_convergence_fixture;
+mod policy_validation;
 mod proof;
 mod schema_memory_policy;
+mod secret_redaction;
 use schema_memory_policy::{
     clear_x_bearer_env, mock_base_server, mock_header_server, mock_json_server,
     mock_oauth_request_assertion_server, mock_recording_sequence_server, mock_sequence_server,
