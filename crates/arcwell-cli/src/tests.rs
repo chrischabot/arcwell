@@ -6,6 +6,7 @@ mod http_ops_controls;
 mod http_ops_ui;
 mod mcp_research_commerce_job;
 mod mcp_sources_x;
+mod mcp_tool_parity;
 mod oauth_import_service;
 
 struct BrokenPipeWriter;
