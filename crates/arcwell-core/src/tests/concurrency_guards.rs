@@ -3,7 +3,7 @@ use super::*;
 // CLAIM: hot worker write paths (wiki job dedup enqueue, wiki job leasing, edge event
 // leasing) must not double-lease or double-enqueue under concurrent access.
 // These tests first characterize today's single-threaded behavior (it must keep
-// passing unmodified), then Step 6 adds a genuine two-connection race test.
+// passing unmodified), plus a genuine two-connection race test.
 // SEVERITY: Severe because double delivery / double fetch is a direct cost and
 // correctness bug across four worker entrypoints (launchd loop, CLI, ops UI, MCP).
 
@@ -88,8 +88,8 @@ fn lease_edge_event_matching_does_not_release_a_live_lease() {
 fn enqueue_wiki_job_dedup_is_race_free_across_two_connections() {
     // Two independent Store::open connections against the same on-disk db,
     // racing to enqueue the identical (kind, input_json) job concurrently.
-    // With busy_timeout (Step 1) + the BEGIN IMMEDIATE transaction guard
-    // (Step 4), exactly one wiki_jobs row must exist afterwards.
+    // With busy_timeout + the BEGIN IMMEDIATE transaction guard, exactly one
+    // wiki_jobs row must exist afterwards.
     let paths = test_paths("concurrency-guards-race-dedup");
     paths.ensure().unwrap();
     // Pre-create the schema with a single connection so the two racing threads
