@@ -550,6 +550,24 @@ first-class Arcwell maintenance path. Routine summary email was not sent; the
 radar proof was re-run with `delivery: null`, and digest alert ticks found no
 approved unsent candidates.
 
+## 2026-07-02 Known Limitation: concurrent first-open migration race
+
+`Store::open` runs `migrate()` without cross-process serialization. Two Arcwell
+processes opening a brand-new database (or crossing the same schema-migration
+version) at the same instant can fail one of them with `database is locked`,
+`duplicate column name`, or `UNIQUE constraint failed: schema_migrations.version`.
+Root cause: `run_migration` (base.rs) and `ensure_column_on` (x_rows_schema.rs)
+do non-atomic check-then-act, and `PRAGMA journal_mode = WAL` does not honor the
+busy handler. This is accepted as a known limitation, not fixed: a `BEGIN
+IMMEDIATE` wrap is unsafe because `migrate_x_watch_curation_audit_retention_on`
+does `PRAGMA foreign_keys = OFF` + a table rebuild (that PRAGMA is a no-op inside
+a transaction and a rebuild cannot be safely retried), so the only correct fix is
+a cross-process file lock around `migrate()` — disproportionate to a rare,
+first-boot/upgrade-moment-only, mostly self-healing, non-corrupting race. The
+connection-level `busy_timeout` in `Store::open` mitigates ordinary write
+contention. Impact is limited to a transient startup error on one racing process;
+re-running it succeeds once the other has finished migrating.
+
 ## Ownership Rule
 
 Every future feature should update this file in the same change that implements
