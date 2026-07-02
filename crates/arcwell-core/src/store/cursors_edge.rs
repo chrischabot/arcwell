@@ -406,7 +406,7 @@ impl Store {
         let Some(event) = event else {
             return Ok(None);
         };
-        self.conn.execute(
+        let changed = self.conn.execute(
             r#"
             UPDATE edge_events
             SET status = 'leased',
@@ -415,9 +415,19 @@ impl Store {
                 next_run_at = NULL,
                 updated_at = ?3
             WHERE id = ?1
+              AND (
+                status = 'pending'
+                OR (status = 'failed' AND (next_run_at IS NULL OR next_run_at <= ?4))
+                OR (status = 'leased' AND leased_until IS NOT NULL AND leased_until <= ?4)
+              )
+              AND attempts < max_attempts
+              AND expires_at > ?4
             "#,
-            params![event.id, now_plus_seconds(300), now()],
+            params![event.id, now_plus_seconds(300), now(), timestamp],
         )?;
+        if changed == 0 {
+            return Ok(None);
+        }
         self.get_edge_event(&event.id)
     }
 

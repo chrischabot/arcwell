@@ -788,6 +788,7 @@ fn seed_knowledge_event(store: &Store, canonical_key: &str) -> KnowledgeEvent {
         .unwrap()
 }
 
+mod concurrency_guards;
 mod guard;
 mod knowledge;
 use knowledge::seed_saturated_convergence_fixture;

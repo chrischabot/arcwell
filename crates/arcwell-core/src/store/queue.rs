@@ -175,10 +175,24 @@ impl Store {
     pub fn enqueue_wiki_job(&self, kind: &str, input_json: Value) -> Result<WikiJob> {
         validate_job_kind(kind)?;
         self.guard_wiki_job_enqueue_policy(kind, &input_json)?;
-        if let Some(job) = self.find_active_duplicate_wiki_job(kind, &input_json)? {
-            return Ok(job);
+
+        let enqueue_result = (|| -> Result<WikiJob> {
+            self.conn.execute("BEGIN IMMEDIATE", [])?;
+            let job = if let Some(job) = self.find_active_duplicate_wiki_job(kind, &input_json)? {
+                job
+            } else {
+                self.insert_wiki_job_with_status(kind, "pending", input_json.clone())?
+            };
+            self.conn.execute("COMMIT", [])?;
+            Ok(job)
+        })();
+        match enqueue_result {
+            Ok(job) => Ok(job),
+            Err(error) => {
+                let _ = self.conn.execute("ROLLBACK", []);
+                Err(error)
+            }
         }
-        self.insert_wiki_job_with_status(kind, "pending", input_json)
     }
 
     pub(crate) fn find_active_duplicate_wiki_job(

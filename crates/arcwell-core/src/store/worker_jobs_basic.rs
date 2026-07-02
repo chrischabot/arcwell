@@ -154,7 +154,7 @@ impl Store {
         let Some(job) = job else {
             return Ok(None);
         };
-        self.conn.execute(
+        let claimed = self.conn.execute(
             r#"
             UPDATE wiki_jobs
             SET status = 'running',
@@ -174,6 +174,9 @@ impl Store {
             "#,
             params![job.id, now_plus_seconds(300), default_worker_id(), now()],
         )?;
+        if claimed == 0 {
+            return Ok(None);
+        }
         self.get_wiki_job(&job.id)
     }
 
