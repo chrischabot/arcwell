@@ -925,23 +925,41 @@ impl Store {
         validate_query(idempotency_key)?;
         self.get_digest_candidate(candidate_id)?
             .with_context(|| format!("digest candidate not found: {candidate_id}"))?;
-        if let Some(existing) =
-            self.find_digest_delivery(candidate_id, channel, subject, target, idempotency_key)?
-        {
-            return Ok(existing);
-        }
-        let id = Uuid::new_v4().to_string();
-        let timestamp = now();
-        self.conn.execute(
-            r#"
-            INSERT INTO digest_deliveries
-              (id, candidate_id, channel, subject, target, idempotency_key, status, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7)
-            "#,
-            params![id, candidate_id, channel, subject, target, idempotency_key, timestamp],
-        )?;
-        self.get_digest_delivery(&id)?
-            .with_context(|| format!("inserted digest delivery not found: {id}"))
+
+        // Guard the find-then-INSERT against a concurrent connection racing the
+        // same (candidate_id, channel, subject, target, idempotency_key). A plain
+        // read-then-write can lose the race and hit the UNIQUE constraint; running
+        // the re-check and INSERT inside BEGIN IMMEDIATE serializes the write path.
+        let delivery_id = (|| -> Result<String> {
+            self.conn.execute("BEGIN IMMEDIATE", [])?;
+            if let Some(existing) =
+                self.find_digest_delivery(candidate_id, channel, subject, target, idempotency_key)?
+            {
+                self.conn.execute("COMMIT", [])?;
+                return Ok(existing.id);
+            }
+            let id = Uuid::new_v4().to_string();
+            let timestamp = now();
+            self.conn.execute(
+                r#"
+                INSERT INTO digest_deliveries
+                  (id, candidate_id, channel, subject, target, idempotency_key, status, created_at, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7)
+                "#,
+                params![id, candidate_id, channel, subject, target, idempotency_key, timestamp],
+            )?;
+            self.conn.execute("COMMIT", [])?;
+            Ok(id)
+        })();
+        let delivery_id = match delivery_id {
+            Ok(id) => id,
+            Err(error) => {
+                let _ = self.conn.execute("ROLLBACK", []);
+                return Err(error);
+            }
+        };
+        self.get_digest_delivery(&delivery_id)?
+            .with_context(|| format!("inserted digest delivery not found: {delivery_id}"))
     }
 
     pub(crate) fn find_digest_delivery(

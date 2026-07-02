@@ -281,33 +281,48 @@ impl Store {
             DateTime::parse_from_rfc3339(retry_at)
                 .with_context(|| format!("parsing retry_at timestamp {retry_at}"))?;
         }
-        let attempt: i64 = self.conn.query_row(
-            "SELECT COALESCE(MAX(attempt), 0) + 1 FROM channel_delivery_attempts WHERE message_id = ?1",
-            params![message_id],
-            |row| row.get(0),
-        )?;
+        let response_json = serde_json::to_string(response)?;
         let id = Uuid::new_v4().to_string();
         let created_at = now();
-        self.conn.execute(
-            r#"
-            INSERT INTO channel_delivery_attempts
-              (id, message_id, channel, destination, attempt, ok, provider_status, response_json, error, retry_at, created_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-            "#,
-            params![
-                id,
-                message_id,
-                channel,
-                destination,
-                attempt,
-                bool_to_i64(ok),
-                provider_status,
-                serde_json::to_string(response)?,
-                error,
-                retry_at,
-                created_at
-            ],
-        )?;
+
+        // Compute the next attempt number and consume it in one BEGIN IMMEDIATE
+        // transaction so two concurrent connections recording an attempt for the
+        // same message_id cannot both read the same MAX(attempt) and insert a
+        // duplicate attempt number.
+        let record_result = (|| -> Result<()> {
+            self.conn.execute("BEGIN IMMEDIATE", [])?;
+            let attempt: i64 = self.conn.query_row(
+                "SELECT COALESCE(MAX(attempt), 0) + 1 FROM channel_delivery_attempts WHERE message_id = ?1",
+                params![message_id],
+                |row| row.get(0),
+            )?;
+            self.conn.execute(
+                r#"
+                INSERT INTO channel_delivery_attempts
+                  (id, message_id, channel, destination, attempt, ok, provider_status, response_json, error, retry_at, created_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                "#,
+                params![
+                    id,
+                    message_id,
+                    channel,
+                    destination,
+                    attempt,
+                    bool_to_i64(ok),
+                    provider_status,
+                    response_json,
+                    error,
+                    retry_at,
+                    created_at
+                ],
+            )?;
+            self.conn.execute("COMMIT", [])?;
+            Ok(())
+        })();
+        if let Err(error) = record_result {
+            let _ = self.conn.execute("ROLLBACK", []);
+            return Err(error);
+        }
         self.get_channel_delivery_attempt(&id)?
             .with_context(|| format!("inserted channel delivery attempt not found: {id}"))
     }

@@ -135,3 +135,127 @@ fn enqueue_wiki_job_dedup_is_race_free_across_two_connections() {
         "exactly one wiki_jobs row must exist after the race"
     );
 }
+
+#[test]
+fn get_or_create_digest_delivery_is_idempotent_and_single_row() {
+    // get_or_create_digest_delivery now wraps its find-then-INSERT in a
+    // BEGIN IMMEDIATE transaction. Calling it twice with identical args must
+    // return the same delivery id and leave exactly one digest_deliveries row
+    // (the UNIQUE(candidate_id, channel, subject, target, idempotency_key)
+    // constraint is never violated because the re-check + INSERT are atomic).
+    let store = test_store("concurrency-guards-digest-delivery-idempotent");
+    let card = seed_knowledge_source_card(
+        &store,
+        "digest-delivery-idempotent",
+        "Digest delivery idempotency fixture.",
+    );
+    let candidate = store
+        .create_digest_candidate(
+            "Digest delivery idempotency",
+            std::slice::from_ref(&card.id),
+        )
+        .unwrap();
+
+    let first = store
+        .get_or_create_digest_delivery(
+            &candidate.id,
+            "email",
+            "email:friend@example.com",
+            "email:friend@example.com",
+            "idempotent-key",
+        )
+        .unwrap();
+    let second = store
+        .get_or_create_digest_delivery(
+            &candidate.id,
+            "email",
+            "email:friend@example.com",
+            "email:friend@example.com",
+            "idempotent-key",
+        )
+        .unwrap();
+
+    assert_eq!(
+        first.id, second.id,
+        "identical get_or_create_digest_delivery calls must return the same delivery id"
+    );
+
+    let count: i64 = store
+        .conn
+        .query_row(
+            r#"
+            SELECT COUNT(*) FROM digest_deliveries
+            WHERE candidate_id = ?1 AND channel = 'email'
+              AND subject = 'email:friend@example.com'
+              AND target = 'email:friend@example.com'
+              AND idempotency_key = 'idempotent-key'
+            "#,
+            params![candidate.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        count, 1,
+        "exactly one digest_deliveries row must exist for the deduped delivery"
+    );
+}
+
+#[test]
+fn record_channel_delivery_attempt_numbers_attempts_sequentially() {
+    // record_channel_delivery_attempt now computes SELECT MAX(attempt)+1 and the
+    // INSERT inside a single BEGIN IMMEDIATE transaction. Two sequential calls
+    // for the same message_id must produce attempt 1 then attempt 2 (no duplicate
+    // attempt number, no gap).
+    let store = test_store("concurrency-guards-channel-attempt-sequence");
+    let message = store
+        .record_channel_message(
+            "email",
+            "outgoing",
+            "email:friend@example.com",
+            "attempt-sequence body",
+            None,
+            None,
+        )
+        .unwrap();
+
+    let first = store
+        .record_channel_delivery_attempt(
+            &message.id,
+            "email",
+            "email:friend@example.com",
+            true,
+            200,
+            &json!({ "success": true }),
+            None,
+            None,
+        )
+        .unwrap();
+    let second = store
+        .record_channel_delivery_attempt(
+            &message.id,
+            "email",
+            "email:friend@example.com",
+            true,
+            200,
+            &json!({ "success": true }),
+            None,
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(first.attempt, 1, "first attempt must be numbered 1");
+    assert_eq!(second.attempt, 2, "second attempt must be numbered 2");
+
+    let count: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM channel_delivery_attempts WHERE message_id = ?1",
+            params![message.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        count, 2,
+        "exactly two channel_delivery_attempts rows must exist for the message"
+    );
+}

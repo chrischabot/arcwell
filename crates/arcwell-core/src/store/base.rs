@@ -5,6 +5,7 @@ impl Store {
         paths.ensure()?;
         let conn = Connection::open(&paths.db)
             .with_context(|| format!("opening sqlite database {}", paths.db.display()))?;
+        conn.busy_timeout(std::time::Duration::from_millis(5000))?;
         let store = Self { paths, conn };
         store.migrate()?;
         Ok(store)
