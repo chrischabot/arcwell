@@ -465,9 +465,10 @@ impl Store {
         let schedule = self
             .get_issue_schedule(&tick.schedule_id)?
             .with_context(|| format!("issue schedule not found: {}", tick.schedule_id))?;
+        let issue_label = issue_schedule_reader_label(&schedule);
         if schedule.kind != "knowledge_daily_briefing" {
             let error = format!(
-                "knowledge_daily_briefing job cannot execute issue kind {}",
+                "knowledge issue job cannot execute issue kind {}",
                 schedule.kind
             );
             let updated =
@@ -525,7 +526,7 @@ impl Store {
                 "status": "empty",
                 "window_start": window_start.to_rfc3339(),
                 "window_end": window_end.to_rfc3339(),
-                "proof_level": "Operational boundary: scheduled daily briefing ran, but no source-backed knowledge reports were updated in the configured window"
+                "proof_level": format!("Operational boundary: scheduled {issue_label} ran, but no source-backed knowledge reports were updated in the configured window")
             }));
         }
         let mut source_card_ids = BTreeSet::new();
@@ -587,7 +588,17 @@ impl Store {
         }
         let briefing_summary = excerpt_preserving_whitespace(&body, 19_500);
         let briefing_card = self.add_source_card(SourceCardInput {
-            title: format!("Arcwell AI daily briefing {}", issue_schedule_day_label(&tick.due_at)),
+            title: if issue_schedule_is_weekly_overview(&schedule) {
+                format!(
+                    "Arcwell AI week overview {}",
+                    issue_schedule_day_label(&tick.due_at)
+                )
+            } else {
+                format!(
+                    "Arcwell AI daily briefing {}",
+                    issue_schedule_day_label(&tick.due_at)
+                )
+            },
             url: format!(
                 "https://example.com/arcwell/knowledge-daily-briefing/{}",
                 &sha256(tick.tick_key.as_bytes())[..24]
@@ -600,8 +611,8 @@ impl Store {
                 .take(20)
                 .map(|report| SourceClaim {
                     claim: format!(
-                        "{} was considered for the scheduled daily briefing from source-backed report {}.",
-                        report.title, report.id
+                        "{} was considered for the scheduled {} from source-backed report {}.",
+                        report.title, issue_label, report.id
                     ),
                     kind: "summary".to_string(),
                     confidence: 0.82,
@@ -613,6 +624,8 @@ impl Store {
                 "trust_level": "medium",
                 "generated": true,
                 "source_kind": "knowledge_daily_briefing",
+                "issue_format": if issue_schedule_is_weekly_overview(&schedule) { "weekly_overview" } else { "daily_briefing" },
+                "cadence": issue_schedule_cadence(&schedule.metadata).unwrap_or_else(|_| "daily".to_string()),
                 "schedule_id": schedule.id,
                 "tick_id": tick.id,
                 "tick_key": tick.tick_key,
@@ -629,10 +642,17 @@ impl Store {
         let mut candidate_source_card_ids = vec![briefing_card.id.clone()];
         candidate_source_card_ids.extend(source_cards.iter().map(|card| card.id.clone()));
         let candidate = self.create_digest_candidate(
-            &format!(
-                "Arcwell AI daily briefing: {}",
-                issue_schedule_day_label(&tick.due_at)
-            ),
+            &if issue_schedule_is_weekly_overview(&schedule) {
+                format!(
+                    "Arcwell AI week overview: {}",
+                    issue_schedule_day_label(&tick.due_at)
+                )
+            } else {
+                format!(
+                    "Arcwell AI daily briefing: {}",
+                    issue_schedule_day_label(&tick.due_at)
+                )
+            },
             &candidate_source_card_ids,
         )?;
         let subject =
@@ -650,6 +670,7 @@ impl Store {
                 "candidate_id": candidate.id,
                 "schedule_id": schedule.id,
                 "tick_id": tick.id,
+                "issue_label": issue_label,
                 "report_count": reports.len(),
                 "source_card_count": candidate_source_card_ids.len(),
             }),
@@ -676,21 +697,21 @@ impl Store {
                     "candidate": candidate,
                     "status": "blocked",
                     "error": sanitize_radar_delivery_error(&error)?,
-                    "proof_level": "Operational boundary: daily briefing candidate was generated but auto-approval policy blocked delivery"
+                    "proof_level": format!("Operational boundary: {issue_label} candidate was generated but auto-approval policy blocked delivery")
                 }));
             }
         };
         let idempotency_key = Some(format!("issue-schedule-{}", tick.tick_key));
         let delivery_result = match schedule.channel.as_str() {
             "email" => {
-                let account_id = self.configured_cloudflare_account_id()?.context(
-                    "CLOUDFLARE_ACCOUNT_ID is required for scheduled knowledge daily email",
-                )?;
+                let account_id = self.configured_cloudflare_account_id()?.context(format!(
+                    "CLOUDFLARE_ACCOUNT_ID is required for scheduled knowledge {issue_label} email"
+                ))?;
                 let api_token = self.configured_cloudflare_email_api_token()?.context(
-                    "CLOUDFLARE_EMAIL_API_TOKEN or CLOUDFLARE_API_TOKEN is required for scheduled knowledge daily email",
+                    format!("CLOUDFLARE_EMAIL_API_TOKEN or CLOUDFLARE_API_TOKEN is required for scheduled knowledge {issue_label} email"),
                 )?;
                 let from = self.configured_agent_email_from()?.context(
-                    "ARCWELL_AGENT_EMAIL_FROM or ARCWELL_AGENT_EMAIL is required for scheduled knowledge daily email",
+                    format!("ARCWELL_AGENT_EMAIL_FROM or ARCWELL_AGENT_EMAIL is required for scheduled knowledge {issue_label} email"),
                 )?;
                 let to = digest_alert_email_recipient(&schedule.recipient_ref)?.to_string();
                 self.send_digest_candidate_email(
@@ -709,9 +730,9 @@ impl Store {
                 })
             }
             "telegram" => {
-                let bot_token = self.configured_telegram_bot_token()?.context(
-                    "TELEGRAM_BOT_TOKEN is required for scheduled knowledge daily Telegram",
-                )?;
+                let bot_token = self.configured_telegram_bot_token()?.context(format!(
+                    "TELEGRAM_BOT_TOKEN is required for scheduled knowledge {issue_label} Telegram"
+                ))?;
                 let chat_id = digest_alert_telegram_chat_id(&schedule.recipient_ref)?.to_string();
                 self.send_digest_candidate_telegram(
                     &approved.id,
@@ -726,7 +747,7 @@ impl Store {
                     (delivery_id, status, json!(report))
                 })
             }
-            other => bail!("unsupported scheduled knowledge daily channel: {other}"),
+            other => bail!("unsupported scheduled knowledge issue channel: {other}"),
         };
         match delivery_result {
             Ok((delivery_id, status, delivery)) => {
@@ -751,7 +772,7 @@ impl Store {
                     "reports": reports,
                     "delivery": delivery,
                     "status": tick_status,
-                    "proof_level": "Operational proof: native issue schedule created a source-backed daily briefing candidate and attempted authorized delivery"
+                    "proof_level": format!("Operational proof: native issue schedule created a source-backed {issue_label} candidate and attempted authorized delivery")
                 }))
             }
             Err(error) => {
@@ -771,7 +792,7 @@ impl Store {
                     "reports": reports,
                     "status": "blocked",
                     "error": error,
-                    "proof_level": "Operational boundary: native daily briefing generated and approved, but delivery was blocked before/at provider send"
+                    "proof_level": format!("Operational boundary: native {issue_label} generated and approved, but delivery was blocked before/at provider send")
                 }))
             }
         }

@@ -380,12 +380,13 @@ impl Store {
             };
             let next_due_at = due_slots.first().cloned();
             let next_scheduled_at = if schedule.status == "active" {
-                Some(issue_schedule_next_scheduled_slot(
+                Some(issue_schedule_next_scheduled_slot_with_metadata(
                     &schedule.created_at,
                     schedule.hour,
                     schedule.minute,
                     &schedule.time_zone,
                     now_utc,
+                    &schedule.metadata,
                 )?)
             } else {
                 None

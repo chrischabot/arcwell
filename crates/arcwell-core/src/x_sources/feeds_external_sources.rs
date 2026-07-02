@@ -1,4 +1,5 @@
 use super::*;
+use std::borrow::Cow;
 
 #[derive(Debug)]
 pub(crate) struct FeedItem {
@@ -37,7 +38,8 @@ pub(crate) struct RedditCommentExcerpt {
 }
 
 pub(crate) fn parse_feed_items(xml: &str, limit: usize) -> Result<Vec<FeedItem>> {
-    let doc = roxmltree::Document::parse(xml).context("parsing RSS/Atom XML")?;
+    let sanitized_xml = sanitize_xml_control_chars(xml);
+    let doc = roxmltree::Document::parse(sanitized_xml.as_ref()).context("parsing RSS/Atom XML")?;
     let mut items = Vec::new();
     for node in doc.descendants().filter(|node| {
         let name = node.tag_name().name();
@@ -76,6 +78,21 @@ pub(crate) fn parse_feed_items(xml: &str, limit: usize) -> Result<Vec<FeedItem>>
         });
     }
     Ok(items)
+}
+
+fn sanitize_xml_control_chars(xml: &str) -> Cow<'_, str> {
+    if !xml.chars().any(is_xml_forbidden_control_char) {
+        return Cow::Borrowed(xml);
+    }
+    Cow::Owned(
+        xml.chars()
+            .filter(|ch| !is_xml_forbidden_control_char(*ch))
+            .collect(),
+    )
+}
+
+fn is_xml_forbidden_control_char(ch: char) -> bool {
+    matches!(ch, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}')
 }
 
 pub(crate) fn normalize_hackernews_feed(raw: &str) -> Result<String> {

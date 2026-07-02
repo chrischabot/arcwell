@@ -220,7 +220,14 @@ PR, implementation note, or final report:
       real-home schedule `isch-093a064e3b5ecba50704d090` runs
       `knowledge_daily_briefing` at 7:00 local with 72-hour catch-up, 20 reports,
       120 source cards, email delivery policy, channel authorization, ops
-      visibility. The first missed 7am issue tick was catch-up attempted after
+      visibility. 2026-07-02 follow-up: `arcwell knowledge
+      schedule-weekly-overview` now stores weekly cadence/weekday metadata on
+      the same issue-schedule owner, and real-home schedule
+      `isch-3fc5f3c09ed784cb540bb9c1` is active for Friday 7:00 local, 168-hour
+      end-of-week overview emails with "big stories" and development sections;
+      compact ops reports it as not due until `2026-07-03T06:00:00+00:00`.
+      This is schedule/config proof, not first Friday send or Inbox proof. The
+      first missed 7am issue tick was catch-up attempted after
       laptop downtime through delivery `bbc7dc97-e94b-4485-a364-517042456c70`
       and tick `8c3ad3bd-9759-41b6-83a9-78154ba1d33a`, after fixing due-job
       priority and briefing email body capping; the provider accepted the send
@@ -2144,10 +2151,15 @@ PR, implementation note, or final report:
 	      curation dry-run/apply, report, restore, manual-rule import, and profile
 	      enrichment through MCP tools and slash prompts; `cargo test -p arcwell
 	      mcp_x -- --nocapture` and `scripts/verify-codex-plugin-docs` passed.
-	      Remaining work before this can close: optional CSV converter, ops UI
-	      controls, fresh-thread Codex app command smoke, expanded seed/gold-set
-	      quality measurement, and multi-day recurrence/provider proof where
-	      operational claims depend on it.
+	      Ops UI curation controls now have local server-side proof via
+	      `severe_ops_ui_x_controls_require_auth_csrf_policy_and_idempotency`:
+	      dry-run, pause-only, restore, policy denial, bad CSRF rejection,
+	      duplicate suppression, and latest-ledger rendering are covered in a
+	      disposable home. Remaining work before this can close: optional CSV
+	      converter, browser/live-service proof for the newest ops controls,
+	      fresh-thread Codex app command smoke, expanded seed/gold-set quality
+	      measurement, and multi-day recurrence/provider proof where operational
+	      claims depend on it.
 - [x] Add scheduled credential rotation reminders and stale-scope warnings.
       `secret_health`, `health`, `doctor`, and `ops_snapshot` warn when
       local/ref credentials expire within 72 hours, and active scheduled X
@@ -2239,3 +2251,13 @@ Run this before marking any P0/P1 item done:
 - [ ] Plugin commands/skills updated if the agent-facing behavior changed
 - [ ] Ops visibility added for new long-running or failure-prone state
 - [ ] Remaining risk explicitly stated
+
+## 2026-07-02 Source-Scan Follow-Up
+
+- [ ] Add a first-class stale/dead-letter retirement path for `job_radar_refresh`
+      rows that are superseded by a later successful same-profile live refresh,
+      so future maintenance does not need narrow SQL cleanup.
+- [ ] Decide whether partial job-board source-health rows with accepted roles
+      but rejected board noise should stay `partial`, gain source-specific
+      parsers, or be hidden from high-level health once accepted roles are
+      usable.

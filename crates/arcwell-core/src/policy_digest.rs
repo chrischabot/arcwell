@@ -103,12 +103,11 @@ pub(crate) fn digest_candidate_email_subject(candidate: &DigestCandidate) -> Str
 }
 
 pub(crate) fn digest_topic_is_knowledge_daily_briefing(topic: &str) -> bool {
-    topic
-        .to_ascii_lowercase()
-        .contains("arcwell ai daily briefing")
-        || topic
-            .to_ascii_lowercase()
-            .contains("knowledge daily briefing")
+    let topic = topic.to_ascii_lowercase();
+    topic.contains("arcwell ai daily briefing")
+        || topic.contains("knowledge daily briefing")
+        || topic.contains("arcwell ai week overview")
+        || topic.contains("knowledge weekly overview")
 }
 
 pub(crate) fn digest_topic_is_credential_reminder(topic: &str) -> bool {

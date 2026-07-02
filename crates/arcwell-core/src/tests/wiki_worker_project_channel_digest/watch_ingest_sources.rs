@@ -1666,6 +1666,18 @@ fn rss_parser_skips_unsafe_links_and_keeps_safe_items() {
 }
 
 #[test]
+fn rss_parser_tolerates_forbidden_xml_control_chars_in_item_text() {
+    let items = parse_feed_items(
+        "<rss><channel><item><title>Control byte</title><link>https://example.com/good</link><description>Before \u{19} after \u{1c}</description><guid>good-1</guid></item></channel></rss>",
+        10,
+    )
+    .unwrap();
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].summary, "Before  after");
+}
+
+#[test]
 fn github_mapper_rejects_path_injection_and_maps_release() {
     assert!(validate_github_segment("../owner").is_err());
     let card = github_release_to_source_card(

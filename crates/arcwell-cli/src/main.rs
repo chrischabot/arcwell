@@ -1,4 +1,6 @@
 use anyhow::{Context, Result, bail};
+#[cfg(test)]
+use arcwell_core::WatchSourceInput;
 use arcwell_core::{
     AdversarialReviewFindingInput, AdversarialReviewRunInput, AppPaths,
     CommerceAvailabilityProofInput, CommerceCandidateInput, CommerceContextFactInput,
@@ -19,8 +21,8 @@ use arcwell_core::{
     ResearchConvergenceProviderSearchInput, ResearchConvergenceStartInput,
     ResearchConvergenceStepInput, ResearchDocumentInput, ResearchEditorialInvokeInput,
     ResearchEditorialRunInput, ResearchHostSearchInput, ResearchHostSearchResultInput,
-    ResearchRoleRunStart, ResearchSourceInput, SourceCardInput, Store, WatchSourceInput,
-    WebSearchConfig, XStatsReport, XWatchManualRuleInput, personal_memory_eval_corpus,
+    ResearchRoleRunStart, ResearchSourceInput, SourceCardInput, Store, WebSearchConfig,
+    XStatsReport, XWatchManualRuleInput, personal_memory_eval_corpus,
 };
 use axum::{
     Json, Router,

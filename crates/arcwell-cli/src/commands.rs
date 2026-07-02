@@ -1078,6 +1078,32 @@ pub(crate) enum KnowledgeSubcommand {
         #[arg(long, default_value = "active")]
         status: String,
     },
+    ScheduleWeeklyOverview {
+        #[arg(long, default_value = "Arcwell AI week overview")]
+        name: String,
+        #[arg(long, default_value = "email")]
+        channel: String,
+        #[arg(long)]
+        recipient_ref: String,
+        #[arg(long, default_value = "local")]
+        time_zone: String,
+        #[arg(long, default_value = "friday")]
+        weekday: String,
+        #[arg(long, default_value_t = 7)]
+        hour: i64,
+        #[arg(long, default_value_t = 0)]
+        minute: i64,
+        #[arg(long, default_value_t = 336)]
+        catch_up_hours: i64,
+        #[arg(long, default_value_t = 20)]
+        max_reports: usize,
+        #[arg(long, default_value_t = 160)]
+        max_source_cards: usize,
+        #[arg(long, default_value_t = 2)]
+        max_catch_up_ticks: usize,
+        #[arg(long, default_value = "active")]
+        status: String,
+    },
     IssueSchedules,
     IssueScheduleTicks {
         #[arg(long)]

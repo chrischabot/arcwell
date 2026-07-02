@@ -1056,10 +1056,12 @@ pub(crate) fn normalize_job_manual_refresh_input(
 ) -> Result<JobManualRefreshInput> {
     validate_id(&input.profile_id)?;
     input.scope = sanitize_required_job_text(&input.scope, "refresh scope", JOB_MAX_TEXT)?;
-    input.observed_role_ids = normalize_job_id_list(input.observed_role_ids, "observed_role_id")?;
-    input.stale_role_ids = normalize_job_id_list(input.stale_role_ids, "stale_role_id")?;
-    input.closed_role_ids = normalize_job_id_list(input.closed_role_ids, "closed_role_id")?;
-    input.source_health_ids = normalize_job_id_list(input.source_health_ids, "source_health_id")?;
+    input.observed_role_ids =
+        normalize_job_refresh_id_list(input.observed_role_ids, "observed_role_id")?;
+    input.stale_role_ids = normalize_job_refresh_id_list(input.stale_role_ids, "stale_role_id")?;
+    input.closed_role_ids = normalize_job_refresh_id_list(input.closed_role_ids, "closed_role_id")?;
+    input.source_health_ids =
+        normalize_job_refresh_id_list(input.source_health_ids, "source_health_id")?;
     input.proof_level = normalize_job_proof_level(&input.proof_level)?;
     input.report_artifact_id =
         normalize_optional_id(input.report_artifact_id, "report_artifact_id")?;
@@ -2863,6 +2865,23 @@ pub(crate) fn normalize_job_id_list(values: Vec<String>, label: &str) -> Result<
     Ok(out)
 }
 
+pub(crate) fn normalize_job_refresh_id_list(
+    values: Vec<String>,
+    label: &str,
+) -> Result<Vec<String>> {
+    if values.len() > JOB_MAX_IMPORT_ITEMS {
+        bail!("too many job {label} values");
+    }
+    let mut out = Vec::new();
+    for value in values {
+        validate_id(&value).with_context(|| format!("invalid job {label}"))?;
+        if !out.contains(&value) {
+            out.push(value);
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn normalize_job_string_list(
     values: Vec<String>,
     label: &str,
@@ -4610,5 +4629,53 @@ pub(crate) fn render_job_weekly_next_actions(
         "- none".to_string()
     } else {
         actions.into_iter().take(5).collect::<Vec<_>>().join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manual_refresh_input(observed_role_ids: Vec<String>) -> JobManualRefreshInput {
+        JobManualRefreshInput {
+            profile_id: "jprof-test".to_string(),
+            scope: "scheduled job radar refresh".to_string(),
+            observed_role_ids,
+            stale_role_ids: Vec::new(),
+            closed_role_ids: Vec::new(),
+            source_health_ids: Vec::new(),
+            proof_level: "production_data_proof".to_string(),
+            report_artifact_id: None,
+        }
+    }
+
+    #[test]
+    fn job_manual_refresh_allows_scheduled_radar_sized_role_lists() {
+        let observed_role_ids = (0..101)
+            .map(|index| format!("role-{index:03}"))
+            .collect::<Vec<_>>();
+
+        let normalized =
+            normalize_job_manual_refresh_input(manual_refresh_input(observed_role_ids))
+                .expect("scheduled radar refresh role list should normalize");
+
+        assert_eq!(normalized.observed_role_ids.len(), 101);
+    }
+
+    #[test]
+    fn job_manual_refresh_still_rejects_oversized_role_lists() {
+        let observed_role_ids = (0..=JOB_MAX_IMPORT_ITEMS)
+            .map(|index| format!("role-{index:04}"))
+            .collect::<Vec<_>>();
+
+        let error = normalize_job_manual_refresh_input(manual_refresh_input(observed_role_ids))
+            .expect_err("oversized scheduled radar refresh role list should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("too many job observed_role_id values"),
+            "{error:?}"
+        );
     }
 }

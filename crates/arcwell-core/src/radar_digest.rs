@@ -608,6 +608,47 @@ pub(crate) fn validate_issue_schedule_kind(kind: &str) -> Result<()> {
     }
 }
 
+pub(crate) fn validate_issue_schedule_metadata(metadata: &Value) -> Result<()> {
+    let cadence = issue_schedule_cadence(metadata)?;
+    if cadence == "weekly" || metadata.get("weekday").is_some() {
+        issue_schedule_weekday_number(metadata)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn issue_schedule_cadence(metadata: &Value) -> Result<String> {
+    let cadence = metadata
+        .get("cadence")
+        .and_then(Value::as_str)
+        .unwrap_or("daily")
+        .trim()
+        .to_ascii_lowercase();
+    match cadence.as_str() {
+        "daily" | "weekly" => Ok(cadence),
+        other => bail!("issue schedule cadence must be daily or weekly, got {other}"),
+    }
+}
+
+fn issue_schedule_weekday_number(metadata: &Value) -> Result<u32> {
+    let weekday = metadata
+        .get("weekday")
+        .and_then(Value::as_str)
+        .unwrap_or("friday")
+        .trim()
+        .to_ascii_lowercase();
+    let day = match weekday.as_str() {
+        "monday" | "mon" => 0,
+        "tuesday" | "tue" | "tues" => 1,
+        "wednesday" | "wed" => 2,
+        "thursday" | "thu" | "thur" | "thurs" => 3,
+        "friday" | "fri" => 4,
+        "saturday" | "sat" => 5,
+        "sunday" | "sun" => 6,
+        other => bail!("issue schedule weekday must be a weekday name, got {other}"),
+    };
+    Ok(day)
+}
+
 pub(crate) fn validate_issue_schedule_status(status: &str) -> Result<()> {
     match status {
         "active" | "paused" => Ok(()),
@@ -655,6 +696,7 @@ pub(crate) fn issue_schedule_tick_key(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn issue_schedule_due_slots(
     latest_due_at: Option<&str>,
     created_at: &str,
@@ -664,6 +706,30 @@ pub(crate) fn issue_schedule_due_slots(
     time_zone: &str,
     now_utc: DateTime<Utc>,
     max_ticks: usize,
+) -> Result<Vec<String>> {
+    issue_schedule_due_slots_with_metadata(
+        latest_due_at,
+        created_at,
+        hour,
+        minute,
+        catch_up_hours,
+        time_zone,
+        now_utc,
+        max_ticks,
+        &Value::Null,
+    )
+}
+
+pub(crate) fn issue_schedule_due_slots_with_metadata(
+    latest_due_at: Option<&str>,
+    created_at: &str,
+    hour: i64,
+    minute: i64,
+    catch_up_hours: i64,
+    time_zone: &str,
+    now_utc: DateTime<Utc>,
+    max_ticks: usize,
+    metadata: &Value,
 ) -> Result<Vec<String>> {
     validate_timestamp(created_at)?;
     let created_at = DateTime::parse_from_rfc3339(created_at)?.with_timezone(&Utc);
@@ -680,9 +746,27 @@ pub(crate) fn issue_schedule_due_slots(
     }
     let hour = hour.clamp(0, 23) as u32;
     let minute = minute.clamp(0, 59) as u32;
-    let mut slots = match normalize_issue_schedule_time_zone(time_zone)?.as_str() {
-        "utc" => issue_schedule_due_slots_utc(start, now_utc, hour, minute)?,
-        "local" => issue_schedule_due_slots_local(start, now_utc, hour, minute)?,
+    let cadence = issue_schedule_cadence(metadata)?;
+    let mut slots = match (
+        normalize_issue_schedule_time_zone(time_zone)?.as_str(),
+        cadence.as_str(),
+    ) {
+        ("utc", "daily") => issue_schedule_due_slots_utc(start, now_utc, hour, minute)?,
+        ("local", "daily") => issue_schedule_due_slots_local(start, now_utc, hour, minute)?,
+        ("utc", "weekly") => issue_schedule_weekly_due_slots_utc(
+            start,
+            now_utc,
+            hour,
+            minute,
+            issue_schedule_weekday_number(metadata)?,
+        )?,
+        ("local", "weekly") => issue_schedule_weekly_due_slots_local(
+            start,
+            now_utc,
+            hour,
+            minute,
+            issue_schedule_weekday_number(metadata)?,
+        )?,
         _ => unreachable!("time zone normalized above"),
     };
     slots.sort();
@@ -690,6 +774,7 @@ pub(crate) fn issue_schedule_due_slots(
     Ok(slots.into_iter().map(|slot| slot.to_rfc3339()).collect())
 }
 
+#[cfg(test)]
 pub(crate) fn issue_schedule_next_scheduled_slot(
     created_at: &str,
     hour: i64,
@@ -697,13 +782,53 @@ pub(crate) fn issue_schedule_next_scheduled_slot(
     time_zone: &str,
     now_utc: DateTime<Utc>,
 ) -> Result<String> {
+    issue_schedule_next_scheduled_slot_with_metadata(
+        created_at,
+        hour,
+        minute,
+        time_zone,
+        now_utc,
+        &Value::Null,
+    )
+}
+
+pub(crate) fn issue_schedule_next_scheduled_slot_with_metadata(
+    created_at: &str,
+    hour: i64,
+    minute: i64,
+    time_zone: &str,
+    now_utc: DateTime<Utc>,
+    metadata: &Value,
+) -> Result<String> {
     validate_timestamp(created_at)?;
     let created_at = DateTime::parse_from_rfc3339(created_at)?.with_timezone(&Utc);
     let hour = hour.clamp(0, 23) as u32;
     let minute = minute.clamp(0, 59) as u32;
-    match normalize_issue_schedule_time_zone(time_zone)?.as_str() {
-        "utc" => issue_schedule_next_scheduled_slot_utc(created_at, now_utc, hour, minute),
-        "local" => issue_schedule_next_scheduled_slot_local(created_at, now_utc, hour, minute),
+    let cadence = issue_schedule_cadence(metadata)?;
+    match (
+        normalize_issue_schedule_time_zone(time_zone)?.as_str(),
+        cadence.as_str(),
+    ) {
+        ("utc", "daily") => {
+            issue_schedule_next_scheduled_slot_utc(created_at, now_utc, hour, minute)
+        }
+        ("local", "daily") => {
+            issue_schedule_next_scheduled_slot_local(created_at, now_utc, hour, minute)
+        }
+        ("utc", "weekly") => issue_schedule_next_weekly_slot_utc(
+            created_at,
+            now_utc,
+            hour,
+            minute,
+            issue_schedule_weekday_number(metadata)?,
+        ),
+        ("local", "weekly") => issue_schedule_next_weekly_slot_local(
+            created_at,
+            now_utc,
+            hour,
+            minute,
+            issue_schedule_weekday_number(metadata)?,
+        ),
         _ => unreachable!("time zone normalized above"),
     }
 }
@@ -790,6 +915,36 @@ pub(crate) fn issue_schedule_due_slots_utc(
     Ok(slots)
 }
 
+pub(crate) fn issue_schedule_weekly_due_slots_utc(
+    start: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+    hour: u32,
+    minute: u32,
+    weekday: u32,
+) -> Result<Vec<DateTime<Utc>>> {
+    let mut date = start.date_naive();
+    let end_date = now_utc.date_naive();
+    let mut slots = Vec::new();
+    while date <= end_date {
+        if date.weekday().num_days_from_monday() == weekday {
+            let Some(candidate) = Utc
+                .with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0)
+                .single()
+            else {
+                bail!("constructing UTC issue schedule slot failed");
+            };
+            if candidate >= start && candidate <= now_utc {
+                slots.push(candidate);
+            }
+        }
+        let Some(next) = date.succ_opt() else {
+            break;
+        };
+        date = next;
+    }
+    Ok(slots)
+}
+
 pub(crate) fn issue_schedule_due_slots_local(
     start: DateTime<Utc>,
     now_utc: DateTime<Utc>,
@@ -820,6 +975,114 @@ pub(crate) fn issue_schedule_due_slots_local(
         date = next;
     }
     Ok(slots)
+}
+
+pub(crate) fn issue_schedule_weekly_due_slots_local(
+    start: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+    hour: u32,
+    minute: u32,
+    weekday: u32,
+) -> Result<Vec<DateTime<Utc>>> {
+    let start_local = start.with_timezone(&Local);
+    let now_local = now_utc.with_timezone(&Local);
+    let mut date = start_local.date_naive();
+    let end_date = now_local.date_naive();
+    let mut slots = Vec::new();
+    while date <= end_date {
+        if date.weekday().num_days_from_monday() == weekday {
+            let local_slot = match Local.with_ymd_and_hms(
+                date.year(),
+                date.month(),
+                date.day(),
+                hour,
+                minute,
+                0,
+            ) {
+                chrono::LocalResult::Single(value) => Some(value),
+                chrono::LocalResult::Ambiguous(earliest, _) => Some(earliest),
+                chrono::LocalResult::None => None,
+            };
+            if let Some(local_slot) = local_slot {
+                let candidate = local_slot.with_timezone(&Utc);
+                if candidate >= start && candidate <= now_utc {
+                    slots.push(candidate);
+                }
+            }
+        }
+        let Some(next) = date.succ_opt() else {
+            break;
+        };
+        date = next;
+    }
+    Ok(slots)
+}
+
+fn issue_schedule_next_weekly_slot_utc(
+    created_at: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+    hour: u32,
+    minute: u32,
+    weekday: u32,
+) -> Result<String> {
+    let start = created_at.max(now_utc);
+    let mut date = start.date_naive();
+    for _ in 0..=370 {
+        if date.weekday().num_days_from_monday() == weekday {
+            let Some(candidate) = Utc
+                .with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0)
+                .single()
+            else {
+                bail!("constructing UTC issue schedule slot failed");
+            };
+            if candidate > now_utc && candidate >= created_at {
+                return Ok(candidate.to_rfc3339());
+            }
+        }
+        let Some(next) = date.succ_opt() else {
+            break;
+        };
+        date = next;
+    }
+    bail!("no future UTC weekly issue schedule slot found within 370 days")
+}
+
+fn issue_schedule_next_weekly_slot_local(
+    created_at: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+    hour: u32,
+    minute: u32,
+    weekday: u32,
+) -> Result<String> {
+    let start_local = created_at.max(now_utc).with_timezone(&Local);
+    let mut date = start_local.date_naive();
+    for _ in 0..=370 {
+        if date.weekday().num_days_from_monday() == weekday {
+            let local_slot = match Local.with_ymd_and_hms(
+                date.year(),
+                date.month(),
+                date.day(),
+                hour,
+                minute,
+                0,
+            ) {
+                chrono::LocalResult::Single(value) => Some(value),
+                chrono::LocalResult::Ambiguous(earliest, _) => Some(earliest),
+                chrono::LocalResult::None => None,
+            };
+            if let Some(local_slot) = local_slot {
+                let candidate = local_slot.with_timezone(&Utc);
+                if candidate > now_utc && candidate >= created_at {
+                    return Ok(candidate.to_rfc3339());
+                }
+            }
+        }
+        let Some(next) = date.succ_opt() else {
+            break;
+        };
+        date = next;
+    }
+    bail!("no future local weekly issue schedule slot found within 370 days")
 }
 
 pub(crate) fn issue_schedule_day_label(due_at: &str) -> String {
@@ -883,7 +1146,7 @@ pub(crate) fn daily_briefing_wiki_page_is_story_context(page: &WikiPageSummary) 
 }
 
 pub(crate) fn render_knowledge_daily_briefing(
-    _schedule: &IssueSchedule,
+    schedule: &IssueSchedule,
     tick: &IssueScheduleTick,
     reports: &[KnowledgeReport],
     source_cards: &[SourceCard],
@@ -894,9 +1157,17 @@ pub(crate) fn render_knowledge_daily_briefing(
     let day = issue_schedule_day_label(&tick.due_at);
     let window = daily_briefing_window(window_start, window_end);
     let window_label = daily_briefing_window_label(window.as_ref());
-    let stories = daily_briefing_reader_stories(reports, source_cards, window);
+    let weekly_overview = issue_schedule_is_weekly_overview(schedule);
+    let max_stories = schedule
+        .metadata
+        .get("max_stories")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(if weekly_overview { 8 } else { 5 })
+        .clamp(1, 12);
+    let stories = daily_briefing_reader_stories(reports, source_cards, window, max_stories);
     let mut lines = vec![
-        format!("# AI Daily Briefing - {day}"),
+        issue_schedule_reader_heading(schedule, &day),
         String::new(),
         "## Bottom Line".to_string(),
         daily_briefing_lede_for_stories(&stories, &window_label),
@@ -907,9 +1178,13 @@ pub(crate) fn render_knowledge_daily_briefing(
         lines.push(format!("The {window_label} scan was not empty; it just did not produce a clean story. The apparent activity was old feed items, reply-level social chatter, and routine code-hosting updates. None of that changes the picture for model access, agents, evaluation, or developer workflow on its own."));
         lines.push(String::new());
     } else {
-        lines.push("## Today's Stories".to_string());
+        lines.push(if weekly_overview {
+            "## Big Stories".to_string()
+        } else {
+            "## Today's Stories".to_string()
+        });
     }
-    for (index, story) in stories.iter().take(5).enumerate() {
+    for (index, story) in stories.iter().enumerate() {
         let report = story.report;
         let wiki_pages = related_wiki_pages
             .get(&report.id)
@@ -918,6 +1193,11 @@ pub(crate) fn render_knowledge_daily_briefing(
         lines.push(format!("### {}. {}", index + 1, story.title));
         lines.push(story.body.clone());
         lines.push(String::new());
+        if weekly_overview {
+            lines.push("#### Development This Week".to_string());
+            lines.push(weekly_overview_story_development(story, &window_label));
+            lines.push(String::new());
+        }
         if let Some(prior_context_insight) =
             daily_briefing_prior_context_insight(report, &story.source_cards, wiki_pages)
         {
@@ -929,11 +1209,27 @@ pub(crate) fn render_knowledge_daily_briefing(
         lines.extend(daily_briefing_key_source_lines(&story.source_cards, 2));
         lines.push(String::new());
     }
-    lines.push("## Editor's Read".to_string());
-    lines.push(daily_briefing_issue_read(&stories, &window_label));
+    lines.push(if weekly_overview {
+        "## End-of-Week Read".to_string()
+    } else {
+        "## Editor's Read".to_string()
+    });
+    lines.push(if weekly_overview {
+        weekly_overview_issue_read(&stories, &window_label)
+    } else {
+        daily_briefing_issue_read(&stories, &window_label)
+    });
     lines.push(String::new());
-    lines.push("## Watch Next".to_string());
-    lines.push(daily_briefing_watch_next(&stories, &window_label));
+    lines.push(if weekly_overview {
+        "## What Carries Into Next Week".to_string()
+    } else {
+        "## Watch Next".to_string()
+    });
+    lines.push(if weekly_overview {
+        weekly_overview_watch_next(&stories, &window_label)
+    } else {
+        daily_briefing_watch_next(&stories, &window_label)
+    });
     lines.join("\n")
 }
 
@@ -942,6 +1238,43 @@ struct DailyBriefingReaderStory<'a> {
     title: String,
     body: String,
     source_cards: Vec<&'a SourceCard>,
+}
+
+pub(crate) fn issue_schedule_is_weekly_overview(schedule: &IssueSchedule) -> bool {
+    issue_schedule_cadence(&schedule.metadata)
+        .map(|cadence| cadence == "weekly")
+        .unwrap_or(false)
+        || schedule
+            .metadata
+            .get("issue_format")
+            .and_then(Value::as_str)
+            .is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "weekly_overview" | "week_overview"
+                )
+            })
+}
+
+pub(crate) fn issue_schedule_reader_label(schedule: &IssueSchedule) -> &'static str {
+    if issue_schedule_is_weekly_overview(schedule) {
+        "weekly overview"
+    } else {
+        "daily briefing"
+    }
+}
+
+pub(crate) fn issue_schedule_reader_heading(schedule: &IssueSchedule, day: &str) -> String {
+    if issue_schedule_is_weekly_overview(schedule) {
+        let title = schedule
+            .metadata
+            .get("issue_title")
+            .and_then(Value::as_str)
+            .unwrap_or("AI Week Overview")
+            .trim();
+        return format!("# {} - Week ending {}", excerpt(title, 80), day);
+    }
+    format!("# AI Daily Briefing - {day}")
 }
 
 pub(crate) fn daily_briefing_window(
@@ -976,6 +1309,7 @@ fn daily_briefing_reader_stories<'a>(
     reports: &'a [KnowledgeReport],
     source_cards: &'a [SourceCard],
     window: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    max_stories: usize,
 ) -> Vec<DailyBriefingReaderStory<'a>> {
     let mut stories = Vec::new();
     let mut seen_titles = BTreeSet::new();
@@ -1011,7 +1345,7 @@ fn daily_briefing_reader_stories<'a>(
             body,
             source_cards: story_cards,
         });
-        if stories.len() >= 5 {
+        if stories.len() >= max_stories {
             break;
         }
     }
@@ -1111,6 +1445,55 @@ fn daily_briefing_issue_read(
     "The useful read is whether the primary links are backed by docs, releases, benchmarks, or credible developer use.".to_string()
 }
 
+fn weekly_overview_story_development(
+    story: &DailyBriefingReaderStory<'_>,
+    window_label: &str,
+) -> String {
+    let dates = story
+        .source_cards
+        .iter()
+        .filter_map(|card| source_card_issue_date(card))
+        .collect::<BTreeSet<_>>();
+    match (dates.iter().next(), dates.iter().next_back(), dates.len()) {
+        (Some(first), Some(last), count) if count > 1 => format!(
+            "The saved evidence spans {first} to {last} across {count} dated source points, so this reads as a developing thread across the {window_label}."
+        ),
+        (Some(date), _, _) => format!(
+            "The saved evidence is concentrated on {date}; treat it as this week's clearest update on the thread, not proof of a multi-day arc by itself."
+        ),
+        _ => format!(
+            "The saved evidence sits inside the {window_label}, but its source timestamps are too weak to claim a detailed week-long progression."
+        ),
+    }
+}
+
+fn source_card_issue_date(card: &SourceCard) -> Option<String> {
+    DateTime::parse_from_rfc3339(&card.retrieved_at)
+        .or_else(|_| DateTime::parse_from_rfc3339(&card.created_at))
+        .ok()
+        .map(|value| value.with_timezone(&Utc).date_naive().to_string())
+}
+
+fn weekly_overview_issue_read(
+    stories: &[DailyBriefingReaderStory<'_>],
+    window_label: &str,
+) -> String {
+    if stories.is_empty() {
+        return format!(
+            "The end-of-week read is negative: nothing fresh and well-sourced from the {window_label} rose to a big-story threshold."
+        );
+    }
+    let titles = stories
+        .iter()
+        .take(4)
+        .map(|story| story.title.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "The big read for the {window_label} is the shape across these threads: {titles}. The useful question is which ones turn into shipped docs, pricing, benchmarks, or durable developer adoption next."
+    )
+}
+
 fn daily_briefing_watch_next(
     stories: &[DailyBriefingReaderStory<'_>],
     window_label: &str,
@@ -1121,6 +1504,18 @@ fn daily_briefing_watch_next(
         );
     }
     "Check official release notes or docs first, then look for independent developer use before promoting any item into a trend.".to_string()
+}
+
+fn weekly_overview_watch_next(
+    stories: &[DailyBriefingReaderStory<'_>],
+    window_label: &str,
+) -> String {
+    if stories.is_empty() {
+        return format!(
+            "Next week's read should start from primary announcements, release notes, benchmark movement, or credible developer use dated after this quiet {window_label}."
+        );
+    }
+    "Carry forward only the threads that gain primary-source follow-through, shipped developer surface area, or credible adoption evidence.".to_string()
 }
 
 pub(crate) fn daily_briefing_lede_for_titles_in_window(

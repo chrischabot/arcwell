@@ -60,6 +60,63 @@ fn severe_issue_schedule_next_slot_reports_future_slot_before_and_after_due_time
 }
 
 #[test]
+fn severe_weekly_issue_schedule_due_slots_only_materialize_selected_weekday() {
+    // CLAIM: weekly issue schedules are native issue-schedule cadence, not a
+    // Codex reminder or daily schedule with downstream filtering.
+    // ORACLE: a Friday schedule produces only Friday 7am slots, resumes after
+    // the latest scheduled Friday, and reports the next Friday before/after a
+    // due slot.
+    // SEVERITY: Severe because a Friday end-of-week issue should not send on
+    // every laptop wake just because the daily scheduler exists.
+    let metadata = json!({ "cadence": "weekly", "weekday": "friday" });
+    let created_at = "2026-07-01T06:30:00+00:00";
+    let now = Utc.with_ymd_and_hms(2026, 7, 17, 8, 0, 0).single().unwrap();
+    let slots = issue_schedule_due_slots_with_metadata(
+        None,
+        created_at,
+        7,
+        0,
+        24 * 21,
+        "utc",
+        now,
+        10,
+        &metadata,
+    )
+    .unwrap();
+    assert_eq!(
+        slots,
+        vec!["2026-07-10T07:00:00+00:00", "2026-07-17T07:00:00+00:00",]
+    );
+    let resumed = issue_schedule_due_slots_with_metadata(
+        Some(&slots[0]),
+        created_at,
+        7,
+        0,
+        24 * 21,
+        "utc",
+        now,
+        10,
+        &metadata,
+    )
+    .unwrap();
+    assert_eq!(resumed, vec![slots[1].clone()]);
+    let before = Utc.with_ymd_and_hms(2026, 7, 17, 5, 0, 0).single().unwrap();
+    let after = Utc.with_ymd_and_hms(2026, 7, 17, 8, 0, 0).single().unwrap();
+    assert_eq!(
+        issue_schedule_next_scheduled_slot_with_metadata(
+            created_at, 7, 0, "utc", before, &metadata
+        )
+        .unwrap(),
+        "2026-07-17T07:00:00+00:00"
+    );
+    assert_eq!(
+        issue_schedule_next_scheduled_slot_with_metadata(created_at, 7, 0, "utc", after, &metadata)
+            .unwrap(),
+        "2026-07-24T07:00:00+00:00"
+    );
+}
+
+#[test]
 fn severe_issue_schedule_worker_enqueues_native_daily_briefing_once() {
     // CLAIM: daily AI briefings are first-class resident worker issue
     // schedules, not Codex-side reminders or manual commands.
@@ -101,6 +158,68 @@ fn severe_issue_schedule_worker_enqueues_native_daily_briefing_once() {
         1,
         "active pending issue job must suppress duplicate ticks"
     );
+}
+
+#[test]
+fn severe_weekly_overview_schedule_enqueues_through_native_issue_scheduler() {
+    // CLAIM: the end-of-week overview is a first-class issue schedule using
+    // the existing worker queue owner, not a separate reminder path.
+    // ORACLE: a due weekly cadence schedule creates one scheduled tick and one
+    // knowledge_daily_briefing job with the normal tick lineage.
+    // SEVERITY: Severe because a duplicate weekly scheduler would fork the
+    // delivery ledger, policy gates, and ops proof surface.
+    let store = test_store("weekly-overview-issue-schedule-enqueue");
+    let now = Utc::now();
+    let due = (now - ChronoDuration::minutes(1))
+        .with_second(0)
+        .unwrap()
+        .with_nanosecond(0)
+        .unwrap();
+    let weekdays = [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    ];
+    let schedule = store
+        .upsert_issue_schedule(IssueScheduleInput {
+            name: "Native weekly overview".to_string(),
+            kind: "knowledge_daily_briefing".to_string(),
+            channel: "email".to_string(),
+            recipient_ref: "email:friend@example.com".to_string(),
+            time_zone: "utc".to_string(),
+            hour: due.hour() as i64,
+            minute: due.minute() as i64,
+            catch_up_hours: 336,
+            status: Some("active".to_string()),
+            metadata: json!({
+                "cadence": "weekly",
+                "weekday": weekdays[due.weekday().num_days_from_monday() as usize],
+                "window_hours": 168,
+                "max_catch_up_ticks": 2,
+                "issue_format": "weekly_overview"
+            }),
+        })
+        .unwrap();
+    force_issue_schedule_created_at(
+        &store,
+        &schedule.id,
+        &(due - ChronoDuration::days(2)).to_rfc3339(),
+    );
+
+    let enqueued = store.enqueue_due_issue_schedule_jobs(10).unwrap();
+    assert_eq!(enqueued.enqueued, 1, "{enqueued:#?}");
+    let ticks = store.list_issue_schedule_ticks(Some(&schedule.id)).unwrap();
+    assert_eq!(ticks.len(), 1, "{ticks:#?}");
+    assert!(ticks[0].tick_key.starts_with("issue-"), "{ticks:#?}");
+    assert_eq!(ticks[0].due_at, due.to_rfc3339(), "{ticks:#?}");
+    let jobs = store.list_wiki_jobs().unwrap();
+    assert_eq!(jobs.len(), 1, "{jobs:#?}");
+    assert_eq!(jobs[0].kind, "knowledge_daily_briefing");
+    assert_eq!(jobs[0].input_json.get("tick_id"), Some(&json!(ticks[0].id)));
 }
 
 #[test]
@@ -2685,6 +2804,123 @@ fn severe_daily_briefing_projection_ledger_does_not_become_fake_story() {
             "reader briefing leaked forbidden term {forbidden:?}:\n{text}"
         );
     }
+}
+
+#[test]
+fn severe_weekly_overview_renders_big_read_sections_and_development_dates() {
+    // CLAIM: a Friday weekly overview renders as an end-of-week issue with
+    // explicit development context instead of reusing daily issue copy.
+    // ORACLE: weekly cadence metadata changes the heading/sections, uses the
+    // 168-hour label, and names the dated spread of supporting evidence.
+    // SEVERITY: Severe because the requested "big read" should not be a daily
+    // issue renamed after delivery.
+    let schedule = IssueSchedule {
+        id: "isch-weekly-overview".to_string(),
+        name: "AI weekly overview".to_string(),
+        status: "active".to_string(),
+        kind: "knowledge_daily_briefing".to_string(),
+        channel: "email".to_string(),
+        recipient_ref: "email:friend@example.com".to_string(),
+        time_zone: "utc".to_string(),
+        hour: 7,
+        minute: 0,
+        catch_up_hours: 336,
+        metadata: json!({
+            "cadence": "weekly",
+            "weekday": "friday",
+            "issue_format": "weekly_overview",
+            "issue_title": "AI Week Overview",
+            "window_hours": 168
+        }),
+        created_at: now(),
+        updated_at: now(),
+    };
+    let tick = IssueScheduleTick {
+        id: "ischt-weekly-overview".to_string(),
+        schedule_id: schedule.id.clone(),
+        tick_key: "2026-07-03".to_string(),
+        due_at: "2026-07-03T07:00:00+00:00".to_string(),
+        status: "pending".to_string(),
+        job_id: None,
+        candidate_id: None,
+        delivery_id: None,
+        error: None,
+        created_at: now(),
+        updated_at: now(),
+    };
+    let cards = vec![
+        SourceCard {
+            id: "src-weekly-openai-docs".to_string(),
+            title: "OpenAI agent docs release".to_string(),
+            url: "https://example.com/openai-agent-docs".to_string(),
+            source_type: "rss_item".to_string(),
+            provider: "rss".to_string(),
+            summary: "OpenAI released agent SDK docs with model deployment guidance and concrete developer migration notes.".to_string(),
+            claims: vec![SourceClaim {
+                claim: "OpenAI released agent SDK docs for developers.".to_string(),
+                kind: "fact".to_string(),
+                confidence: 0.9,
+            }],
+            retrieved_at: "2026-06-30T09:00:00+00:00".to_string(),
+            wiki_page_id: "source-card-weekly-openai-docs".to_string(),
+            content_sha256: "sha".to_string(),
+            metadata: json!({}),
+            created_at: now(),
+            updated_at: now(),
+        },
+        SourceCard {
+            id: "src-weekly-openai-benchmark".to_string(),
+            title: "OpenAI agent benchmark update".to_string(),
+            url: "https://example.com/openai-agent-benchmark".to_string(),
+            source_type: "rss_item".to_string(),
+            provider: "rss".to_string(),
+            summary: "Independent developers reported benchmark movement and available deployment examples for the same OpenAI agent workflow.".to_string(),
+            claims: vec![SourceClaim {
+                claim: "Developers reported benchmark movement for the workflow.".to_string(),
+                kind: "evidence".to_string(),
+                confidence: 0.82,
+            }],
+            retrieved_at: "2026-07-03T06:00:00+00:00".to_string(),
+            wiki_page_id: "source-card-weekly-openai-benchmark".to_string(),
+            content_sha256: "sha".to_string(),
+            metadata: json!({}),
+            created_at: now(),
+            updated_at: now(),
+        },
+    ];
+    let reports = vec![KnowledgeReport {
+        id: "krpt-weekly-openai".to_string(),
+        cluster_id: "kcl-weekly-openai".to_string(),
+        title: "Daily Knowledge Report: OpenAI agent developer workflow".to_string(),
+        body_markdown: "OpenAI's agent workflow story developed from documentation into credible developer usage signals. The important change is that the week now has both primary docs and follow-on benchmark/deployment evidence rather than a single launch note.".to_string(),
+        status: "draft".to_string(),
+        source_card_ids: cards.iter().map(|card| card.id.clone()).collect(),
+        quality_findings: Vec::new(),
+        metadata: json!({}),
+        created_at: now(),
+        updated_at: now(),
+    }];
+    let text = render_knowledge_daily_briefing(
+        &schedule,
+        &tick,
+        &reports,
+        &cards,
+        "2026-06-26T07:00:00+00:00",
+        "2026-07-03T07:00:00+00:00",
+        &BTreeMap::new(),
+    );
+
+    assert!(
+        text.contains("# AI Week Overview - Week ending 2026-07-03"),
+        "{text}"
+    );
+    assert!(text.contains("last 168 hours"), "{text}");
+    assert!(text.contains("## Big Stories"), "{text}");
+    assert!(!text.contains("## Today's Stories"), "{text}");
+    assert!(text.contains("#### Development This Week"), "{text}");
+    assert!(text.contains("2026-06-30 to 2026-07-03"), "{text}");
+    assert!(text.contains("## End-of-Week Read"), "{text}");
+    assert!(text.contains("## What Carries Into Next Week"), "{text}");
 }
 
 #[test]

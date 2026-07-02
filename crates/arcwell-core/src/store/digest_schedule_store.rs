@@ -1383,6 +1383,7 @@ impl Store {
         let minute = input.minute.clamp(0, 59);
         let catch_up_hours = input.catch_up_hours.clamp(1, 24 * 14);
         let metadata = sanitize_work_json(input.metadata)?;
+        validate_issue_schedule_metadata(&metadata)?;
         let metadata_json = serde_json::to_string(&metadata)?;
         let id = issue_schedule_id(&input.kind, &input.name);
         let timestamp = now();
@@ -1613,7 +1614,7 @@ impl Store {
         now_utc: DateTime<Utc>,
     ) -> Result<Vec<String>> {
         let latest_due_at = self.latest_issue_schedule_scheduled_due_at(&schedule.id)?;
-        issue_schedule_due_slots(
+        issue_schedule_due_slots_with_metadata(
             latest_due_at.as_deref(),
             &schedule.created_at,
             schedule.hour,
@@ -1626,6 +1627,7 @@ impl Store {
                 .get("max_catch_up_ticks")
                 .and_then(Value::as_u64)
                 .unwrap_or(3) as usize,
+            &schedule.metadata,
         )
     }
 
