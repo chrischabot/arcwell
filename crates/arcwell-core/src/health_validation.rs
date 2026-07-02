@@ -1,59 +1,10 @@
 use crate::*;
 
-pub(crate) fn worker_heartbeat_from_row(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<WorkerHeartbeat> {
-    Ok(WorkerHeartbeat {
-        worker_id: row.get(0)?,
-        started_at: row.get(1)?,
-        last_seen_at: row.get(2)?,
-        processed_jobs: row.get(3)?,
-        last_error: row.get(4)?,
-    })
-}
-
-pub(crate) fn worker_heartbeat_event_from_row(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<WorkerHeartbeatEvent> {
-    Ok(WorkerHeartbeatEvent {
-        id: row.get(0)?,
-        worker_id: row.get(1)?,
-        seen_at: row.get(2)?,
-        processed_jobs: row.get(3)?,
-        last_error: row.get(4)?,
-    })
-}
-
-pub(crate) fn worker_heartbeat_segment_span_seconds(
-    events: &[WorkerHeartbeatEvent],
-) -> Result<i64> {
-    let Some(first) = events.first() else {
-        return Ok(0);
-    };
-    let Some(last) = events.last() else {
-        return Ok(0);
-    };
-    let first_at = DateTime::parse_from_rfc3339(&first.seen_at)
-        .with_context(|| format!("parsing heartbeat event {}", first.seen_at))?
-        .with_timezone(&Utc);
-    let last_at = DateTime::parse_from_rfc3339(&last.seen_at)
-        .with_context(|| format!("parsing heartbeat event {}", last.seen_at))?
-        .with_timezone(&Utc);
-    Ok((last_at - first_at).num_seconds().max(0))
-}
-
 pub(crate) fn heartbeat_age_seconds(heartbeat: &WorkerHeartbeat) -> Result<i64> {
     let last_seen = DateTime::parse_from_rfc3339(&heartbeat.last_seen_at)
         .with_context(|| format!("parsing heartbeat timestamp {}", heartbeat.last_seen_at))?
         .with_timezone(&Utc);
     Ok((Utc::now() - last_seen).num_seconds())
-}
-
-pub(crate) fn backup_age_seconds(created_at: &str) -> Result<i64> {
-    let created_at = DateTime::parse_from_rfc3339(created_at)
-        .with_context(|| format!("parsing backup timestamp {created_at}"))?
-        .with_timezone(&Utc);
-    Ok((Utc::now() - created_at).num_seconds())
 }
 
 pub(crate) fn parse_optional_expiry(expires_at: Option<&str>) -> Result<Option<DateTime<Utc>>> {
@@ -64,112 +15,6 @@ pub(crate) fn parse_optional_expiry(expires_at: Option<&str>) -> Result<Option<D
                 .map(|parsed| parsed.with_timezone(&Utc))
         })
         .transpose()
-}
-
-pub(crate) fn secret_ref_health(secret: &SecretRef, has_local_value: bool) -> SecretHealth {
-    let mut warnings = Vec::new();
-    let mut status = "configured".to_string();
-    match parse_optional_expiry(secret.expires_at.as_deref()) {
-        Ok(Some(expires_at)) if expires_at <= Utc::now() => {
-            status = "expired".to_string();
-            warnings.push(format!(
-                "secret {} expired at {}",
-                secret.name,
-                secret.expires_at.clone().unwrap_or_default()
-            ));
-        }
-        Ok(Some(expires_at))
-            if expires_at
-                <= Utc::now() + ChronoDuration::seconds(SECRET_EXPIRY_WARNING_WINDOW_SECONDS) =>
-        {
-            status = "expiring_soon".to_string();
-            warnings.push(format!(
-                "secret {} expires soon at {}",
-                secret.name,
-                secret.expires_at.clone().unwrap_or_default()
-            ));
-        }
-        Err(error) => {
-            status = "invalid_expiry".to_string();
-            warnings.push(format!(
-                "secret {} has invalid expiry metadata: {error}",
-                secret.name
-            ));
-        }
-        _ => {}
-    }
-    if secret.location.trim().is_empty() && !has_local_value {
-        status = "missing".to_string();
-        warnings.push(format!(
-            "secret {} has no location or local value",
-            secret.name
-        ));
-    }
-    SecretHealth {
-        name: secret.name.clone(),
-        scope: secret.scope.clone(),
-        provider: None,
-        source: "ref".to_string(),
-        present: has_local_value || !secret.location.trim().is_empty(),
-        status,
-        expires_at: secret.expires_at.clone(),
-        updated_at: secret.updated_at.clone(),
-        warnings,
-    }
-}
-
-pub(crate) fn secret_value_health(secret: SecretValue) -> Result<SecretHealth> {
-    let mut warnings = Vec::new();
-    let mut status = "present".to_string();
-    if let Some(expires_at) = parse_optional_expiry(secret.expires_at.as_deref())? {
-        if expires_at <= Utc::now() {
-            status = "expired".to_string();
-            warnings.push(format!(
-                "secret {} expired at {}",
-                secret.name,
-                secret.expires_at.clone().unwrap_or_default()
-            ));
-        } else if expires_at
-            <= Utc::now() + ChronoDuration::seconds(SECRET_EXPIRY_WARNING_WINDOW_SECONDS)
-        {
-            status = "expiring_soon".to_string();
-            warnings.push(format!(
-                "secret {} expires soon at {}",
-                secret.name,
-                secret.expires_at.clone().unwrap_or_default()
-            ));
-        }
-    }
-    Ok(SecretHealth {
-        name: secret.name,
-        scope: secret.scope,
-        provider: secret.provider,
-        source: "local_sqlite".to_string(),
-        present: true,
-        status,
-        expires_at: secret.expires_at,
-        updated_at: secret.updated_at,
-        warnings,
-    })
-}
-
-pub(crate) fn missing_secret_health(
-    name: &str,
-    scope: &str,
-    provider: Option<&str>,
-    warning: &str,
-) -> SecretHealth {
-    SecretHealth {
-        name: name.to_string(),
-        scope: scope.to_string(),
-        provider: provider.map(ToOwned::to_owned),
-        source: "required".to_string(),
-        present: false,
-        status: "missing".to_string(),
-        expires_at: None,
-        updated_at: now(),
-        warnings: vec![warning.to_string()],
-    }
 }
 
 pub(crate) fn push_secret_warning(
@@ -274,16 +119,6 @@ pub(crate) fn slugify(input: &str) -> String {
     }
 }
 
-pub(crate) fn validate_query(query: &str) -> Result<()> {
-    if query.trim().is_empty() {
-        bail!("query cannot be empty");
-    }
-    if query.len() > 500 {
-        bail!("query is too long");
-    }
-    Ok(())
-}
-
 pub(crate) fn normalize_knowledge_model_cluster_query(query: &str) -> Result<String> {
     validate_query(query)?;
     if knowledge_model_cluster_query_is_broad(query) {
@@ -324,61 +159,6 @@ pub(crate) fn x_fts_query(query: &str) -> Option<String> {
     wiki_fts_query(query)
 }
 
-pub(crate) fn validate_id(id: &str) -> Result<()> {
-    if id.trim().is_empty() {
-        bail!("id cannot be empty");
-    }
-    if id.len() > 120 {
-        bail!("id is too long");
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_notes(notes: &str) -> Result<()> {
-    if notes.trim().is_empty() {
-        bail!("notes cannot be empty");
-    }
-    if notes.len() > 20_000 {
-        bail!("notes are too long");
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_public_http_url(raw: &str) -> Result<Url> {
-    let url = Url::parse(raw).with_context(|| format!("invalid URL: {raw}"))?;
-    if !matches!(url.scheme(), "http" | "https") {
-        bail!("URL must use http or https");
-    }
-    if url.host_str().is_none() {
-        bail!("URL must include a host");
-    }
-    Ok(url)
-}
-
-pub(crate) fn validate_indexable_x_link_url(raw: &str) -> Result<Url> {
-    let url = validate_public_http_url(raw)?;
-    if is_blocked_fetch_host(&url) {
-        bail!("X link URL host is not allowed");
-    }
-    Ok(url)
-}
-
-pub(crate) fn validate_fetch_url(raw: &str) -> Result<Url> {
-    let url = validate_public_http_url(raw)?;
-    if url.scheme() != "https" {
-        if is_loopback_host(&url)
-            && std::env::var("ARCWELL_ALLOW_LOOPBACK_URL_INGEST").as_deref() == Ok("1")
-        {
-            return Ok(url);
-        }
-        bail!("fetch URL must use https");
-    }
-    if is_blocked_fetch_host(&url) {
-        bail!("fetch URL host is not allowed");
-    }
-    Ok(url)
-}
-
 pub(crate) fn validated_x_api_base(raw: &str) -> Result<Url> {
     let url = Url::parse(raw).with_context(|| format!("invalid X API base URL: {raw}"))?;
     if is_loopback_host(&url) {
@@ -388,24 +168,6 @@ pub(crate) fn validated_x_api_base(raw: &str) -> Result<Url> {
         bail!("X API base must be https://api.x.com or loopback for tests");
     }
     Ok(url)
-}
-
-pub(crate) fn validate_github_segment(segment: &str) -> Result<()> {
-    validate_key(segment)?;
-    if !segment
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-    {
-        bail!("invalid GitHub owner/repo segment");
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_github_mode(mode: &str) -> Result<()> {
-    match mode {
-        "releases" | "commits" => Ok(()),
-        other => bail!("unsupported GitHub mode: {other}"),
-    }
 }
 
 pub(crate) fn is_blocked_fetch_host(url: &Url) -> bool {
@@ -434,31 +196,6 @@ pub(crate) fn is_blocked_fetch_host(url: &Url) -> bool {
         };
     }
     false
-}
-
-pub(crate) fn validate_source_card_input(input: &SourceCardInput) -> Result<()> {
-    validate_query(&input.title)?;
-    validate_public_http_url(&input.url)?;
-    validate_key(&input.source_type)?;
-    validate_key(&input.provider)?;
-    validate_notes(&input.summary)?;
-    validate_source_card_metadata(&input.metadata)?;
-    if source_card_metadata_string(&input.metadata, "source_role").as_deref() == Some("primary")
-        && is_generated_source_card_input(input)
-    {
-        bail!("generated research output cannot be primary source-card evidence");
-    }
-    if input.claims.len() > 50 {
-        bail!("too many source claims");
-    }
-    for claim in &input.claims {
-        validate_notes(&claim.claim)?;
-        validate_key(&claim.kind)?;
-        if !(0.0..=1.0).contains(&claim.confidence) {
-            bail!("claim confidence must be between 0 and 1");
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn normalize_research_source_input(
@@ -538,29 +275,6 @@ pub(crate) fn normalize_optional_research_text(
     Ok(Some(trimmed.to_string()))
 }
 
-pub(crate) fn validate_research_source_link_input(
-    triage_status: &str,
-    read_depth: &str,
-    notes: Option<&str>,
-) -> Result<()> {
-    validate_key(triage_status)?;
-    validate_key(read_depth)?;
-    if let Some(notes) = notes {
-        validate_notes(notes)?;
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_research_metadata(metadata: &Value) -> Result<()> {
-    if metadata.is_null() {
-        return Ok(());
-    }
-    if !metadata.is_object() {
-        bail!("research source metadata must be an object");
-    }
-    Ok(())
-}
-
 const RESEARCH_ARTIFACT_BODY_MAX: usize = 120_000;
 const RESEARCH_ARTIFACT_TITLE_MAX: usize = 300;
 const RESEARCH_ARTIFACT_METADATA_MAX: usize = 60_000;
@@ -611,33 +325,6 @@ pub(crate) fn normalize_research_role_execution_mode(mode: &str) -> Result<Strin
     }
 }
 
-pub(crate) fn validate_research_role_run_finish(
-    status: &str,
-    error_kind: Option<&str>,
-    error_message: Option<&str>,
-) -> Result<()> {
-    match status {
-        "completed" => {
-            if error_kind.is_some() || error_message.is_some() {
-                bail!("completed research role run cannot include an error");
-            }
-        }
-        "failed" | "rejected" | "cancelled" => {
-            if error_kind.is_none() && error_message.is_none() {
-                bail!("{status} research role run requires an error kind or message");
-            }
-            if let Some(kind) = error_kind {
-                validate_key(kind.trim())?;
-            }
-            if let Some(message) = error_message {
-                validate_notes(message)?;
-            }
-        }
-        other => bail!("unsupported research role run status: {other}"),
-    }
-    Ok(())
-}
-
 pub(crate) fn normalize_research_artifact_input(
     mut input: ResearchArtifactInput,
 ) -> Result<ResearchArtifactInput> {
@@ -682,25 +369,6 @@ pub(crate) const JOB_MAX_PACKET_TEXT: usize = 12_000;
 pub(crate) const JOB_MAX_SOURCE_REFRESH_BODY_CHARS: usize = 1_000_000;
 pub(crate) const JOB_SOURCE_REFRESH_NEW_ROLE_EVENT_NOTE: &str =
     "Job source refresh observed this role for the first time.";
-
-pub(crate) fn sanitize_job_source_refresh_body_input(input: &str) -> Result<String> {
-    let without_controls = input
-        .chars()
-        .filter(|ch| *ch == '\n' || *ch == '\t' || !ch.is_control())
-        .collect::<String>();
-    let mut output = without_controls
-        .chars()
-        .take(JOB_MAX_SOURCE_REFRESH_BODY_CHARS)
-        .collect::<String>();
-    if without_controls.chars().count() > JOB_MAX_SOURCE_REFRESH_BODY_CHARS {
-        output.push_str(" [TRUNCATED]");
-    }
-    if job_source_refresh_body_is_json(&output) {
-        Ok(output)
-    } else {
-        sanitize_work_text(input, JOB_MAX_SOURCE_REFRESH_BODY_CHARS)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct JobSourceSnapshot {
@@ -1106,18 +774,6 @@ fn ashby_location_name(value: Option<&Value>) -> Option<String> {
         .or_else(|| job_json_string_at(value, &["city"]))
         .or_else(|| job_json_string_at(value, &["region"]))
         .or_else(|| job_json_string_at(value, &["country"]))
-}
-
-pub(crate) fn sanitize_required_job_text(
-    input: &str,
-    label: &str,
-    max_chars: usize,
-) -> Result<String> {
-    let value = sanitize_work_text(input.trim(), max_chars)?;
-    if value.trim().is_empty() {
-        bail!("job {label} cannot be empty");
-    }
-    Ok(value)
 }
 
 pub(crate) fn normalize_optional_job_text(
