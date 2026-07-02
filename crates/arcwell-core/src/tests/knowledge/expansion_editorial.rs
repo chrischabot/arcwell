@@ -702,7 +702,7 @@ fn severe_cluster_evidence_revision_reopens_shared_editorial_recurrence() {
     let updated = store
         .add_source_cards_to_knowledge_cluster(
             &cluster.id,
-            &[fresh.id.clone()],
+            std::slice::from_ref(&fresh.id),
             Some("Fresh package-registry evidence arrived for the same cluster."),
         )
         .unwrap();

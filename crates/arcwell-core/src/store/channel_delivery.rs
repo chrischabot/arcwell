@@ -61,6 +61,8 @@ impl Store {
         )
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_channel_message_with_status(
         &self,
         channel: &str,
@@ -258,6 +260,8 @@ impl Store {
             .any(|author| author == &sender))
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_channel_delivery_attempt(
         &self,
         message_id: &str,
@@ -372,6 +376,8 @@ impl Store {
         rows(stmt.query_map([], channel_delivery_attempt_from_row)?)
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_channel_delivery_observation(
         &self,
         delivery_attempt_id: &str,
@@ -1875,6 +1881,8 @@ impl Store {
         })
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn send_cloudflare_email(
         &self,
         account_id: &str,
@@ -2210,6 +2218,8 @@ impl Store {
             .map_err(Into::into)
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_existing_cloudflare_email_message(
         &self,
         account_id: &str,
@@ -2571,27 +2581,23 @@ impl Store {
         }
 
         let refresh_ready = self.get_secret_value("GMAIL_REFRESH_TOKEN")?.is_some();
-        if refresh_ready {
-            if let Ok(client_id) = self.resolve_gmail_oauth_client_id(None) {
-                let refresh = match oauth_base {
-                    Some(endpoint) => {
-                        self.gmail_oauth_refresh_with_base(&client_id, None, endpoint)
-                    }
-                    None => self.gmail_oauth_refresh(&client_id, None),
-                };
-                match refresh {
-                    Ok(_) => return self.get_usable_secret_value("GMAIL_ACCESS_TOKEN"),
-                    Err(error) => {
-                        let redacted = redact_secret_like_text(&error.to_string());
-                        if local_access.is_some() {
-                            bail!(
-                                "GMAIL_ACCESS_TOKEN is expired and Gmail OAuth refresh failed: {redacted}"
-                            );
-                        }
+        if refresh_ready && let Ok(client_id) = self.resolve_gmail_oauth_client_id(None) {
+            let refresh = match oauth_base {
+                Some(endpoint) => self.gmail_oauth_refresh_with_base(&client_id, None, endpoint),
+                None => self.gmail_oauth_refresh(&client_id, None),
+            };
+            match refresh {
+                Ok(_) => return self.get_usable_secret_value("GMAIL_ACCESS_TOKEN"),
+                Err(error) => {
+                    let redacted = redact_secret_like_text(&error.to_string());
+                    if local_access.is_some() {
                         bail!(
-                            "GMAIL_ACCESS_TOKEN is not configured and Gmail OAuth refresh failed: {redacted}"
+                            "GMAIL_ACCESS_TOKEN is expired and Gmail OAuth refresh failed: {redacted}"
                         );
                     }
+                    bail!(
+                        "GMAIL_ACCESS_TOKEN is not configured and Gmail OAuth refresh failed: {redacted}"
+                    );
                 }
             }
         }

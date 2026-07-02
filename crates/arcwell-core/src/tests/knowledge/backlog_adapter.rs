@@ -655,7 +655,7 @@ fn severe_resident_worker_runs_scheduled_backlog_then_expands_cluster() {
             .and_then(Value::as_str),
         Some("enqueued")
     );
-    assert!(store.list_digest_candidates().unwrap().len() >= 1);
+    assert!(!store.list_digest_candidates().unwrap().is_empty());
     assert!(
         store
             .list_knowledge_editorial_decisions(10)

@@ -137,16 +137,16 @@ fn augment(messages: &[Message], memories: &[String]) -> Vec<Message> {
     if memories.is_empty() {
         return out;
     }
-    if let Some(last) = out.last_mut() {
-        if last.role == "user" {
-            let bullets = memories
-                .iter()
-                .map(|m| format!("- {m}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let original = last.content.clone();
-            last.content = format!("Relevant memories:\n{bullets}\n\nUser query: {original}");
-        }
+    if let Some(last) = out.last_mut()
+        && last.role == "user"
+    {
+        let bullets = memories
+            .iter()
+            .map(|m| format!("- {m}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let original = last.content.clone();
+        last.content = format!("Relevant memories:\n{bullets}\n\nUser query: {original}");
     }
     out
 }

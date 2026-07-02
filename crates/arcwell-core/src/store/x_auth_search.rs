@@ -136,6 +136,8 @@ impl Store {
         )
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn x_oauth_exchange_code_with_base(
         &self,
         client_id: &str,
@@ -230,6 +232,8 @@ impl Store {
         )
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn x_oauth_revoke_with_base(
         &self,
         name: &str,
@@ -812,6 +816,8 @@ impl Store {
         Ok(())
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn finish_x_oauth_probe_report(
         &self,
         source_key: &str,
@@ -1991,14 +1997,12 @@ impl Store {
                     }
                 }
             }
-            if !exhausted {
-                if stop_reason == "not_started" {
-                    stop_reason = if seen >= max_bookmarks {
-                        "requested_limit_reached".to_string()
-                    } else {
-                        "stopped_before_exhaustion".to_string()
-                    };
-                }
+            if !exhausted && stop_reason == "not_started" {
+                stop_reason = if seen >= max_bookmarks {
+                    "requested_limit_reached".to_string()
+                } else {
+                    "stopped_before_exhaustion".to_string()
+                };
             }
             let source_card_projections = imported_items
                 .iter()

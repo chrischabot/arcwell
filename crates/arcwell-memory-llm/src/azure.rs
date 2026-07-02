@@ -78,11 +78,11 @@ impl Llm for AzureLlm {
     async fn generate(&self, messages: &[Message], options: &GenerateOptions) -> Result<String> {
         // Port of the quirk: the last message has "assistant" replaced with "ai".
         let mut wire = to_wire_messages(messages);
-        if let Some(last) = wire.last_mut() {
-            if let Some(content) = last.get("content").and_then(|c| c.as_str()) {
-                let replaced = content.replace("assistant", "ai");
-                last["content"] = json!(replaced);
-            }
+        if let Some(last) = wire.last_mut()
+            && let Some(content) = last.get("content").and_then(|c| c.as_str())
+        {
+            let replaced = content.replace("assistant", "ai");
+            last["content"] = json!(replaced);
         }
 
         let mut body = json!({ "model": self.model, "messages": wire });

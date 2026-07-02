@@ -429,11 +429,11 @@ impl Store {
             return Ok(None);
         }
         if !input.canonical_key.starts_with("url:")
-            && !input
+            && input
                 .metadata
                 .get("source_card_url")
                 .and_then(Value::as_str)
-                .is_some_and(|url| !url.trim().is_empty())
+                .is_none_or(|url| url.trim().is_empty())
         {
             return Ok(None);
         }
@@ -794,6 +794,8 @@ impl Store {
         Ok(proposals)
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_model_knowledge_entity_resolution(
         &self,
         left_entity_id: &str,

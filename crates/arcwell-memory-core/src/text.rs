@@ -25,17 +25,17 @@ pub fn remove_code_blocks(content: &str) -> String {
 pub fn extract_json(text: &str) -> String {
     let text = text.trim();
     let fenced = Regex::new(r"(?s)```(?:json)?\s*(.*?)\s*```").unwrap();
-    if let Some(caps) = fenced.captures(text) {
-        if let Some(m) = caps.get(1) {
-            return m.as_str().to_string();
-        }
+    if let Some(caps) = fenced.captures(text)
+        && let Some(m) = caps.get(1)
+    {
+        return m.as_str().to_string();
     }
     let start = text.find('{');
     let end = text.rfind('}');
-    if let (Some(s), Some(e)) = (start, end) {
-        if e > s {
-            return text[s..=e].to_string();
-        }
+    if let (Some(s), Some(e)) = (start, end)
+        && e > s
+    {
+        return text[s..=e].to_string();
     }
     text.to_string()
 }
@@ -67,10 +67,10 @@ pub fn normalize_facts(raw_facts: &[Value]) -> Vec<String> {
                 .and_then(|v| v.as_str().map(|s| s.to_string())),
             other => Some(other.to_string()),
         };
-        if let Some(f) = fact {
-            if !f.is_empty() {
-                normalized.push(f);
-            }
+        if let Some(f) = fact
+            && !f.is_empty()
+        {
+            normalized.push(f);
         }
     }
     normalized

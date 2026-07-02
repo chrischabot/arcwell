@@ -341,20 +341,19 @@ pub(crate) fn audit_research_document_anchors(
                         ),
                     ));
                 }
-                if let Some(cell_id) = &anchor.table_cell_id {
-                    if let Some(cell) = table.cells.iter().find(|cell| cell.id == *cell_id) {
-                        if cell.confidence < 0.85 {
-                            findings.push(corpus_finding(
-                                "warning",
-                                "document_anchor_low_confidence_cell",
-                                "Claim document anchor uses a low-confidence table cell.",
-                                format!(
-                                    "claim_id={} anchor={} cell_confidence={:.2}",
-                                    record.claim.id, anchor.anchor_label, cell.confidence
-                                ),
-                            ));
-                        }
-                    }
+                if let Some(cell_id) = &anchor.table_cell_id
+                    && let Some(cell) = table.cells.iter().find(|cell| cell.id == *cell_id)
+                    && cell.confidence < 0.85
+                {
+                    findings.push(corpus_finding(
+                        "warning",
+                        "document_anchor_low_confidence_cell",
+                        "Claim document anchor uses a low-confidence table cell.",
+                        format!(
+                            "claim_id={} anchor={} cell_confidence={:.2}",
+                            record.claim.id, anchor.anchor_label, cell.confidence
+                        ),
+                    ));
                 }
             }
         }

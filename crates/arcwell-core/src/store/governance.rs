@@ -21,6 +21,8 @@ impl Store {
         )
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_cost_for_source(
         &self,
         package: &str,
@@ -51,6 +53,8 @@ impl Store {
         )
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn insert_cost_entry(
         &self,
         package: &str,
@@ -231,6 +235,8 @@ impl Store {
         }
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn require_cost_budget(
         &self,
         package: &str,
@@ -1103,7 +1109,7 @@ impl Store {
             let gmail_scope_warning = format!(
                 "Gmail mailbox verification has {gmail_unverified_count} unverified gap(s), {gmail_repairable_count} Trash/Spam repairable gap(s), and {gmail_issue_schedule_dependency_count} active Gmail-recipient email issue schedule(s); stored Gmail OAuth credentials must include https://www.googleapis.com/auth/gmail.readonly for verification and https://www.googleapis.com/auth/gmail.modify for placement repair."
             );
-            if !access_ready && !(refresh_ready && client_ready) {
+            if !(access_ready || refresh_ready && client_ready) {
                 push_secret_warning(
                     &mut by_name,
                     "GMAIL_ACCESS_TOKEN",

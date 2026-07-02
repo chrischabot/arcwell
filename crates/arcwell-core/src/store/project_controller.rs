@@ -201,6 +201,8 @@ impl Store {
             .with_context(|| format!("inserted project status not found: {id}"))
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_verified_project_status_sync(
         &self,
         project_id: &str,
@@ -361,6 +363,8 @@ impl Store {
         rows(stmt.query_map(params![limit.clamp(1, 200) as i64], project_status_from_row)?)
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_controller_context(
         &self,
         channel: &str,
@@ -667,6 +671,8 @@ impl Store {
         }
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_controller_run(
         &self,
         thread_id: Option<&str>,
@@ -928,6 +934,8 @@ impl Store {
             .with_context(|| format!("controller run not found after stop request: {run_id}"))
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_controller_event(
         &self,
         run_id: Option<&str>,
@@ -1049,6 +1057,8 @@ impl Store {
         }
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_controller_pending_action(
         &self,
         channel: &str,
@@ -1276,7 +1286,7 @@ impl Store {
         let subject = format!("{channel}:{sender}");
         let authorized_read = self.channel_subject_can_read_projects(channel, &subject)?;
         let authorized_write =
-            self.channel_subject_can_write_projects(channel, &[subject.clone()])?;
+            self.channel_subject_can_write_projects(channel, std::slice::from_ref(&subject))?;
         let lower = text.to_ascii_lowercase();
         let intent = classify_controller_intent(&lower);
         let mut project = None;

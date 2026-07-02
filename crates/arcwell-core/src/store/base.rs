@@ -1581,7 +1581,7 @@ impl Store {
             "knowledge_adapter_contract_entity_resolution",
             false,
             None,
-            |conn| ensure_knowledge_schema_on(conn),
+            ensure_knowledge_schema_on,
         )?;
         self.apply_schema_migration(17, "worker_heartbeat_events", false, None, |conn| {
             ensure_worker_heartbeat_events_schema_on(conn)
@@ -1597,7 +1597,7 @@ impl Store {
             "job_weekly_report_delivery_preparation",
             false,
             None,
-            |conn| ensure_job_hunting_schema_on(conn),
+            ensure_job_hunting_schema_on,
         )?;
         self.apply_schema_migration(21, "x_watch_curation", false, None, |conn| {
             ensure_x_watch_curation_schema_on(conn)
@@ -1616,7 +1616,7 @@ impl Store {
             "x_watch_curation_audit_retention",
             false,
             None,
-            |conn| migrate_x_watch_curation_audit_retention_on(conn),
+            migrate_x_watch_curation_audit_retention_on,
         )?;
         repair_radar_source_quality_run_scope_on(&self.conn)?;
         self.conn.execute(

@@ -1084,10 +1084,11 @@ fn x_watch_normalized_signal_text(text: &str) -> String {
     let mut normalized = String::with_capacity(text.len() + 16);
     let mut previous: Option<char> = None;
     for ch in text.chars() {
-        if let Some(prev) = previous {
-            if prev.is_ascii_lowercase() && ch.is_ascii_uppercase() {
-                normalized.push(' ');
-            }
+        if let Some(prev) = previous
+            && prev.is_ascii_lowercase()
+            && ch.is_ascii_uppercase()
+        {
+            normalized.push(' ');
         }
         normalized.push(ch.to_ascii_lowercase());
         previous = Some(ch);

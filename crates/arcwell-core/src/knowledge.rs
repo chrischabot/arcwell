@@ -85,7 +85,6 @@ pub(crate) fn normalize_knowledge_alias(alias: &str) -> Option<String> {
 
 pub(crate) fn normalize_knowledge_alias_key(alias: &str) -> String {
     alias
-        .trim()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -1546,7 +1545,7 @@ pub(crate) fn source_card_external_domain(card: &SourceCard) -> Option<String> {
     card.metadata
         .get("external_url")
         .and_then(Value::as_str)
-        .or_else(|| Some(card.url.as_str()))
+        .or(Some(card.url.as_str()))
         .and_then(|url| Url::parse(url).ok())
         .and_then(|url| url.host_str().map(ToOwned::to_owned))
 }
@@ -1961,7 +1960,7 @@ pub(crate) fn knowledge_source_confidence_for_card(card: &SourceCard) -> f64 {
         .get("reliability_score")
         .and_then(Value::as_f64)
         .filter(|value| value.is_finite())
-        .unwrap_or_else(|| match card.provider.as_str() {
+        .unwrap_or(match card.provider.as_str() {
             "github" | "arxiv" => 0.9,
             "rss" => 0.82,
             "hackernews" | "reddit" | "x" => 0.68,
@@ -2404,15 +2403,9 @@ pub(crate) fn render_knowledge_cluster_investigation_artifact(
             primary_candidates.len(),
             source_cards.len()
         ),
-        "corroboration_scout" => format!(
-            "This pass grouped corroboration by provider, source type, and inferred source family. The goal is to separate official evidence, independent reaction, repository activity, and generated summaries before deciding whether the cluster is a real trend or a coincidence."
-        ),
-        "wiki_context_mapper" => format!(
-            "This pass identifies the wiki and entity context Arcwell already has for the cluster. It is meant to prevent duplicate-page creation and to steer future expansion toward existing pages when the evidence is better treated as an update."
-        ),
-        "digest_readiness_editor" => format!(
-            "This pass checks whether the cluster is ready to become a useful digest narrative. It does not authorize delivery; quiet hours, recipient authorization, dedupe, retry, and external-delivery policy remain separate gates."
-        ),
+        "corroboration_scout" => "This pass grouped corroboration by provider, source type, and inferred source family. The goal is to separate official evidence, independent reaction, repository activity, and generated summaries before deciding whether the cluster is a real trend or a coincidence.".to_string(),
+        "wiki_context_mapper" => "This pass identifies the wiki and entity context Arcwell already has for the cluster. It is meant to prevent duplicate-page creation and to steer future expansion toward existing pages when the evidence is better treated as an update.".to_string(),
+        "digest_readiness_editor" => "This pass checks whether the cluster is ready to become a useful digest narrative. It does not authorize delivery; quiet hours, recipient authorization, dedupe, retry, and external-delivery policy remain separate gates.".to_string(),
         _ => "This pass records deterministic source-card triage for the investigation role."
             .to_string(),
     };

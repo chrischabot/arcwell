@@ -218,12 +218,7 @@ impl Store {
             email_from,
             api_base,
         })?;
-        let tick_status = match delivery.delivery.status.as_str() {
-            "sent" => "sent",
-            "blocked" => "blocked",
-            "failed" => "failed",
-            other => other,
-        };
+        let tick_status = delivery.delivery.status.as_str();
         let updated = self.update_radar_schedule_tick(
             &tick.id,
             tick_status,

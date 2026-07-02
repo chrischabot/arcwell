@@ -464,7 +464,7 @@ pub(crate) fn telegram_retry_at(status: u16, headers: &HeaderMap) -> Option<Stri
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|seconds| *seconds > 0)
-        .unwrap_or_else(|| {
+        .unwrap_or({
             if status == 429 || status >= 500 {
                 60
             } else {
@@ -482,8 +482,6 @@ pub(crate) fn telegram_request_error_summary(error: &reqwest::Error) -> String {
         "request_timeout".to_string()
     } else if error.is_connect() {
         "request_connect_failed".to_string()
-    } else if error.is_request() {
-        "request_failed".to_string()
     } else {
         "request_failed".to_string()
     }
@@ -1031,11 +1029,11 @@ pub(crate) fn embedded_personal_memory_fragment(cleaned: &str) -> Option<String>
         "memorize my ",
         "store this forever: my ",
     ] {
-        if let Some(index) = lower.find(marker) {
-            if let Some(my_offset) = marker.find("my ") {
-                let start = index + my_offset;
-                return Some(cleaned[start..].trim().to_string());
-            }
+        if let Some(index) = lower.find(marker)
+            && let Some(my_offset) = marker.find("my ")
+        {
+            let start = index + my_offset;
+            return Some(cleaned[start..].trim().to_string());
         }
     }
     None

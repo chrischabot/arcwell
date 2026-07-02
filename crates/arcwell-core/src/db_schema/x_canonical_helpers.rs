@@ -393,23 +393,23 @@ pub(crate) fn resolve_x_profile_id_on(
             )
             .optional()?
         {
-            if let Some(existing_x_user_id) = existing_x_user_id {
-                if existing_x_user_id != x_user_id {
-                    record_x_profile_identity_conflict_on(
-                        conn,
-                        "handle_reuse",
-                        handle,
-                        &normalized_handle,
-                        Some(&existing_profile_id),
-                        Some(&x_profile_user_id(x_user_id)),
-                        Some(&existing_x_user_id),
-                        Some(x_user_id),
-                        input,
-                    )?;
-                    bail!(
-                        "X profile identity conflict for handle @{normalized_handle}: existing user id differs from incoming user id"
-                    );
-                }
+            if let Some(existing_x_user_id) = existing_x_user_id
+                && existing_x_user_id != x_user_id
+            {
+                record_x_profile_identity_conflict_on(
+                    conn,
+                    "handle_reuse",
+                    handle,
+                    &normalized_handle,
+                    Some(&existing_profile_id),
+                    Some(&x_profile_user_id(x_user_id)),
+                    Some(&existing_x_user_id),
+                    Some(x_user_id),
+                    input,
+                )?;
+                bail!(
+                    "X profile identity conflict for handle @{normalized_handle}: existing user id differs from incoming user id"
+                );
             }
             return Ok(existing_profile_id);
         }
@@ -604,6 +604,8 @@ pub(crate) fn upsert_x_profile_alias_on(
     Ok(())
 }
 
+// allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn record_x_profile_identity_conflict_on(
     conn: &Connection,
     conflict_kind: &str,

@@ -247,7 +247,7 @@ impl Store {
             "#,
             params![id, title, path.to_string_lossy(), content_sha, source, now],
         )?;
-        self.index_wiki_page(&id, title, content)?;
+        self.index_wiki_page(id, title, content)?;
         Ok(())
     }
 

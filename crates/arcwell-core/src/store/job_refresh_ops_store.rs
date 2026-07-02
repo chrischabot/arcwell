@@ -151,8 +151,16 @@ impl Store {
             observed_role_ids.retain(|existing| existing != role_id);
         }
 
-        let mut planned_events: Vec<(String, String, Option<String>, Option<String>, String)> =
-            Vec::new();
+        // allow: factoring this tuple into a named type is a real data-structure
+        // change out of scope for the lint-cleanup pass.
+        #[allow(clippy::type_complexity)]
+        let mut planned_events: Vec<(
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+        )> = Vec::new();
         let mut new_role_count = 0usize;
         let mut unchanged_role_count = 0usize;
         let mut promoted_role_count = 0usize;
@@ -967,10 +975,10 @@ impl Store {
             let card = self
                 .read_job_evidence_card(evidence_card_id)?
                 .with_context(|| format!("job evidence card not found: {evidence_card_id}"))?;
-            if let Some(profile_id) = profile_id {
-                if card.profile_id != profile_id {
-                    bail!("job evidence card belongs to a different profile");
-                }
+            if let Some(profile_id) = profile_id
+                && card.profile_id != profile_id
+            {
+                bail!("job evidence card belongs to a different profile");
             }
             if !allow_private_blocked && card.visibility == "private_blocked" {
                 bail!("private-blocked job evidence cannot be used in role material");

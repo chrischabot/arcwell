@@ -29,23 +29,23 @@ pub fn validate_and_trim_entity_id(value: Option<&str>, name: &str) -> Result<Op
 
 /// Validate search parameters. Port of `_validate_search_params`.
 pub fn validate_search_params(threshold: Option<f64>, top_k: Option<i64>) -> Result<()> {
-    if let Some(t) = top_k {
-        if t <= 0 {
-            return Err(Mem0Error::validation_code(
-                "VALIDATION_004",
-                "top_k must be a positive integer.",
-                Some("Pass a top_k greater than 0.".into()),
-            ));
-        }
+    if let Some(t) = top_k
+        && t <= 0
+    {
+        return Err(Mem0Error::validation_code(
+            "VALIDATION_004",
+            "top_k must be a positive integer.",
+            Some("Pass a top_k greater than 0.".into()),
+        ));
     }
-    if let Some(th) = threshold {
-        if !(0.0..=1.0).contains(&th) {
-            return Err(Mem0Error::validation_code(
-                "VALIDATION_005",
-                "threshold must be between 0.0 and 1.0.",
-                Some("Pass a threshold in the [0.0, 1.0] range.".into()),
-            ));
-        }
+    if let Some(th) = threshold
+        && !(0.0..=1.0).contains(&th)
+    {
+        return Err(Mem0Error::validation_code(
+            "VALIDATION_005",
+            "threshold must be between 0.0 and 1.0.",
+            Some("Pass a threshold in the [0.0, 1.0] range.".into()),
+        ));
     }
     Ok(())
 }
@@ -110,10 +110,10 @@ pub fn build_session_scope(filters: &JsonMap) -> String {
     let mut parts: Vec<String> = Vec::new();
     // Python sorts the key list: ["agent_id", "run_id", "user_id"].
     for key in ["agent_id", "run_id", "user_id"] {
-        if let Some(val) = filters.get(key).and_then(|v| v.as_str()) {
-            if !val.is_empty() {
-                parts.push(format!("{key}={val}"));
-            }
+        if let Some(val) = filters.get(key).and_then(|v| v.as_str())
+            && !val.is_empty()
+        {
+            parts.push(format!("{key}={val}"));
         }
     }
     parts.join("&")
@@ -123,10 +123,10 @@ pub fn build_session_scope(filters: &JsonMap) -> String {
 pub fn session_filters(filters: &JsonMap) -> JsonMap {
     let mut out = JsonMap::new();
     for key in ["user_id", "agent_id", "run_id"] {
-        if let Some(v) = filters.get(key) {
-            if v.as_str().map(|s| !s.is_empty()).unwrap_or(false) {
-                out.insert(key.to_string(), v.clone());
-            }
+        if let Some(v) = filters.get(key)
+            && v.as_str().map(|s| !s.is_empty()).unwrap_or(false)
+        {
+            out.insert(key.to_string(), v.clone());
         }
     }
     out

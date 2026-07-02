@@ -978,6 +978,8 @@ pub(crate) fn convergence_stop_reason(
     "continue".to_string()
 }
 
+// allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_research_report_judgment(
     run_id: &str,
     report_id: Option<&str>,

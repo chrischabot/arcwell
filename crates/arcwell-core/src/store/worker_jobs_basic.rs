@@ -554,45 +554,45 @@ impl Store {
             input.get("delivery"),
         )?;
 
-        if let Some(lineage) = input.get("lineage") {
-            if let Some(source_key) = lineage.get("watch_source_key").and_then(Value::as_str) {
-                let source_kind = lineage
-                    .get("source_kind")
+        if let Some(lineage) = input.get("lineage")
+            && let Some(source_key) = lineage.get("watch_source_key").and_then(Value::as_str)
+        {
+            let source_kind = lineage
+                .get("source_kind")
+                .and_then(Value::as_str)
+                .unwrap_or("job_radar");
+            let locator = lineage
+                .get("locator")
+                .and_then(Value::as_str)
+                .unwrap_or(profile.id.as_str());
+            if refresh_report.error_count == 0 {
+                let next_run_at = lineage
+                    .get("cadence")
                     .and_then(Value::as_str)
-                    .unwrap_or("job_radar");
-                let locator = lineage
-                    .get("locator")
-                    .and_then(Value::as_str)
-                    .unwrap_or(profile.id.as_str());
-                if refresh_report.error_count == 0 {
-                    let next_run_at = lineage
-                        .get("cadence")
-                        .and_then(Value::as_str)
-                        .and_then(watch_source_cadence_seconds)
-                        .map(now_plus_seconds);
-                    self.record_source_success(SourceHealthUpdate {
-                        key: source_key,
-                        provider: "arcwell",
-                        source_kind,
-                        locator,
-                        last_item_id: Some(&refresh_report.run.id),
-                        last_item_date: refresh_report.run.completed_at.as_deref(),
-                        cursor_key: None,
-                        cursor_value: None,
-                        next_run_at: next_run_at.as_deref(),
-                    })?;
-                } else {
-                    self.record_source_failure(
-                        source_key,
-                        "arcwell",
-                        source_kind,
-                        locator,
-                        &format!(
-                            "job radar refresh completed with {} unhealthy source(s)",
-                            refresh_report.error_count
-                        ),
-                    )?;
-                }
+                    .and_then(watch_source_cadence_seconds)
+                    .map(now_plus_seconds);
+                self.record_source_success(SourceHealthUpdate {
+                    key: source_key,
+                    provider: "arcwell",
+                    source_kind,
+                    locator,
+                    last_item_id: Some(&refresh_report.run.id),
+                    last_item_date: refresh_report.run.completed_at.as_deref(),
+                    cursor_key: None,
+                    cursor_value: None,
+                    next_run_at: next_run_at.as_deref(),
+                })?;
+            } else {
+                self.record_source_failure(
+                    source_key,
+                    "arcwell",
+                    source_kind,
+                    locator,
+                    &format!(
+                        "job radar refresh completed with {} unhealthy source(s)",
+                        refresh_report.error_count
+                    ),
+                )?;
             }
         }
 

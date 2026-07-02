@@ -19,6 +19,8 @@ pub(crate) fn research_run_status_from_parts(
     }
 }
 
+// allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_research_convergence_report(
     run: &ResearchRun,
     iterations: &[ResearchIteration],
@@ -496,6 +498,8 @@ pub(crate) fn render_research_convergence_report(
     markdown
 }
 
+// allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_deep_research_report(
     run: &ResearchRun,
     sources: &[ResearchRunSourceRecord],
@@ -798,6 +802,8 @@ pub(crate) fn render_deep_research_report(
     markdown
 }
 
+// allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_executive_judgment(
     run: &ResearchRun,
     coverage: &ResearchCoverageSummary,

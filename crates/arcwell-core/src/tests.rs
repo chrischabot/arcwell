@@ -263,7 +263,7 @@ fn job_fixture_reviewed_evidence_with_claim(
         .record_job_evidence_card(JobEvidenceCardInput {
             profile_id: profile_id.to_string(),
             title: format!("Public evidence {index}"),
-            evidence_type: if index % 2 == 0 {
+            evidence_type: if index.is_multiple_of(2) {
                 "github".to_string()
             } else {
                 "blog".to_string()
@@ -508,7 +508,7 @@ fn seed_research_convergence_claim(store: &Store, run_id: &str, text: &str) -> S
             title: "Primary convergence fixture".to_string(),
             url: format!(
                 "https://example.com/convergence-fixture-{}",
-                sha256(format!("{run_id}\n{text}").as_bytes())[..12].to_string()
+                &sha256(format!("{run_id}\n{text}").as_bytes())[..12]
             ),
             source_type: "paper".to_string(),
             provider: "test".to_string(),

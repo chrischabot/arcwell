@@ -337,17 +337,17 @@ pub(crate) fn x_link_candidates(
         .into_iter()
         .flatten()
     {
-        if let Some(object) = entity.as_object() {
-            if let Some(url) = first_string(object, &["expanded_url", "unwound_url", "url"]) {
-                candidates.push(XLinkCandidate {
-                    url: url.to_string(),
-                    expanded_url: first_string(object, &["expanded_url", "unwound_url"])
-                        .map(ToOwned::to_owned),
-                    display_url: first_string(object, &["display_url"]).map(ToOwned::to_owned),
-                    source: "entity".to_string(),
-                    raw: entity.clone(),
-                });
-            }
+        if let Some(object) = entity.as_object()
+            && let Some(url) = first_string(object, &["expanded_url", "unwound_url", "url"])
+        {
+            candidates.push(XLinkCandidate {
+                url: url.to_string(),
+                expanded_url: first_string(object, &["expanded_url", "unwound_url"])
+                    .map(ToOwned::to_owned),
+                display_url: first_string(object, &["display_url"]).map(ToOwned::to_owned),
+                source: "entity".to_string(),
+                raw: entity.clone(),
+            });
         }
     }
     for entity in raw
@@ -356,17 +356,17 @@ pub(crate) fn x_link_candidates(
         .into_iter()
         .flatten()
     {
-        if let Some(object) = entity.as_object() {
-            if let Some(url) = first_string(object, &["expanded_url", "unwound_url", "url"]) {
-                candidates.push(XLinkCandidate {
-                    url: url.to_string(),
-                    expanded_url: first_string(object, &["expanded_url", "unwound_url"])
-                        .map(ToOwned::to_owned),
-                    display_url: first_string(object, &["display_url"]).map(ToOwned::to_owned),
-                    source: "raw_entity".to_string(),
-                    raw: entity.clone(),
-                });
-            }
+        if let Some(object) = entity.as_object()
+            && let Some(url) = first_string(object, &["expanded_url", "unwound_url", "url"])
+        {
+            candidates.push(XLinkCandidate {
+                url: url.to_string(),
+                expanded_url: first_string(object, &["expanded_url", "unwound_url"])
+                    .map(ToOwned::to_owned),
+                display_url: first_string(object, &["display_url"]).map(ToOwned::to_owned),
+                source: "raw_entity".to_string(),
+                raw: entity.clone(),
+            });
         }
     }
     for token in text.split_whitespace().chain([tweet_url]) {

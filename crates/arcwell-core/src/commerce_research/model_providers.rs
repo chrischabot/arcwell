@@ -557,18 +557,17 @@ pub(crate) fn is_editorial_contract_object(value: &Value) -> bool {
 }
 
 pub(crate) fn extract_editorial_output_text(value: &Value) -> Option<String> {
-    if let Some(text) = value.get("output_text").and_then(Value::as_str) {
-        if !text.trim().is_empty() {
-            return Some(text.to_string());
-        }
+    if let Some(text) = value.get("output_text").and_then(Value::as_str)
+        && !text.trim().is_empty()
+    {
+        return Some(text.to_string());
     }
     if let Some(text) = value
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
+        && !text.trim().is_empty()
     {
-        if !text.trim().is_empty() {
-            return Some(text.to_string());
-        }
+        return Some(text.to_string());
     }
 
     let mut parts = Vec::new();

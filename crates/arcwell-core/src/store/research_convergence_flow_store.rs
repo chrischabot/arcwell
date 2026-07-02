@@ -22,12 +22,12 @@ impl Store {
             .collect::<Vec<_>>();
         let projected_cost_usd =
             estimated_web_search_cost(max_results) * pending_tasks.len() as f64;
-        if let Some(cap) = input.cost_cap_usd {
-            if projected_cost_usd > cap {
-                bail!(
-                    "convergence provider search projected cost ${projected_cost_usd:.4} exceeds cap ${cap:.4}"
-                );
-            }
+        if let Some(cap) = input.cost_cap_usd
+            && projected_cost_usd > cap
+        {
+            bail!(
+                "convergence provider search projected cost ${projected_cost_usd:.4} exceeds cap ${cap:.4}"
+            );
         }
         let mut attempted = Vec::new();
         let mut ingest_jobs = Vec::new();

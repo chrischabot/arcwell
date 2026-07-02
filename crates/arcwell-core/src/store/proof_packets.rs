@@ -636,10 +636,10 @@ fn validate_proof_packet_input(input: &ProofPacketInput) -> Result<()> {
         validate_required_text("check_kind", &check.check_kind, 120)?;
         validate_required_text("check.command", &check.command, 2_000)?;
         validate_proof_check_status(&check.status)?;
-        if let Some(duration_ms) = check.duration_ms {
-            if !(0..=86_400_000).contains(&duration_ms) {
-                bail!("check.duration_ms out of range");
-            }
+        if let Some(duration_ms) = check.duration_ms
+            && !(0..=86_400_000).contains(&duration_ms)
+        {
+            bail!("check.duration_ms out of range");
         }
         if let Some(output) = &check.output_excerpt {
             validate_required_text("check.output_excerpt", output, PROOF_PACKET_MAX_OUTPUT)?;

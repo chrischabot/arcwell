@@ -22,6 +22,8 @@ pub(crate) struct LoopbackRedirect {
     pub(crate) path: String,
 }
 
+// allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn x_oauth_reauthorize(
     store: &Store,
     client_id: Option<&str>,
