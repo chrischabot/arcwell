@@ -355,7 +355,7 @@ impl Store {
         let mut skipped_unsafe = 0;
         let mut seen = BTreeSet::new();
         for (tweet_x_id, text, tweet_url, entities, raw, seen_at) in &tweets {
-            for candidate in x_link_candidates(&text, &tweet_url, &entities, &raw) {
+            for candidate in x_link_candidates(text, tweet_url, entities, raw) {
                 let selected_url = candidate
                     .expanded_url
                     .as_deref()

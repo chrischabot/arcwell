@@ -642,10 +642,7 @@ pub(crate) fn record_unsupported_x_archive_file(
 }
 
 pub(crate) fn x_archive_unsupported_slice_kind(path: &str) -> Option<&'static str> {
-    let normalized = path
-        .to_ascii_lowercase()
-        .replace('_', "-")
-        .replace(' ', "-");
+    let normalized = path.to_ascii_lowercase().replace(['_', ' '], "-");
     let file_name = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
     if normalized.contains("direct-message")
         || normalized.contains("/dm")

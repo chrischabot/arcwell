@@ -129,20 +129,20 @@ impl Memory {
             None,
         )?;
 
-        if let Some(mt) = &opts.memory_type {
-            if mt != MemoryType::Procedural.as_str() {
-                return Err(Mem0Error::validation_code(
-                    "VALIDATION_002",
-                    format!(
-                        "Invalid 'memory_type'. Please pass {} to create procedural memories.",
-                        MemoryType::Procedural.as_str()
-                    ),
-                    Some(format!(
-                        "Use '{}' to create procedural memories.",
-                        MemoryType::Procedural.as_str()
-                    )),
-                ));
-            }
+        if let Some(mt) = &opts.memory_type
+            && mt != MemoryType::Procedural.as_str()
+        {
+            return Err(Mem0Error::validation_code(
+                "VALIDATION_002",
+                format!(
+                    "Invalid 'memory_type'. Please pass {} to create procedural memories.",
+                    MemoryType::Procedural.as_str()
+                ),
+                Some(format!(
+                    "Use '{}' to create procedural memories.",
+                    MemoryType::Procedural.as_str()
+                )),
+            ));
         }
 
         let messages = messages.into().into_messages();
@@ -629,33 +629,32 @@ impl Memory {
             .search_vector_store(query, &effective, options.top_k, options.threshold)
             .await?;
 
-        if options.rerank {
-            if let Some(reranker) = &self.reranker {
-                if !results.is_empty() {
-                    let docs: Vec<String> = results
-                        .iter()
-                        .map(|v| {
-                            v.get("memory")
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("")
-                                .to_string()
-                        })
-                        .collect();
-                    match reranker.rerank(query, &docs, options.top_k).await {
-                        Ok(order) => {
-                            let mut reordered = Vec::with_capacity(order.len());
-                            for (idx, score) in order {
-                                if let Some(item) = results.get(idx) {
-                                    let mut it = item.clone();
-                                    it["score"] = json!(score);
-                                    reordered.push(it);
-                                }
-                            }
-                            results = reordered;
+        if options.rerank
+            && let Some(reranker) = &self.reranker
+            && !results.is_empty()
+        {
+            let docs: Vec<String> = results
+                .iter()
+                .map(|v| {
+                    v.get("memory")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                })
+                .collect();
+            match reranker.rerank(query, &docs, options.top_k).await {
+                Ok(order) => {
+                    let mut reordered = Vec::with_capacity(order.len());
+                    for (idx, score) in order {
+                        if let Some(item) = results.get(idx) {
+                            let mut it = item.clone();
+                            it["score"] = json!(score);
+                            reordered.push(it);
                         }
-                        Err(e) => tracing::warn!("Reranking failed, using original results: {e}"),
                     }
+                    results = reordered;
                 }
+                Err(e) => tracing::warn!("Reranking failed, using original results: {e}"),
             }
         }
 
@@ -804,28 +803,28 @@ impl Memory {
                 .search(etext, &emb, 1, search_filters)
                 .await
                 .unwrap_or_default();
-            if let Some(m) = matches.first() {
-                if m.score >= 0.95 {
-                    let mut payload = m.payload.clone();
-                    let mut linked: BTreeSet<String> = payload
-                        .get("linked_memory_ids")
-                        .and_then(|v| v.as_array())
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    for mid in mids {
-                        linked.insert(mid.clone());
-                    }
-                    payload.insert(
-                        "linked_memory_ids".into(),
-                        Value::Array(linked.into_iter().map(Value::String).collect()),
-                    );
-                    let _ = store.update(&m.id, None, Some(payload)).await;
-                    continue;
+            if let Some(m) = matches.first()
+                && m.score >= 0.95
+            {
+                let mut payload = m.payload.clone();
+                let mut linked: BTreeSet<String> = payload
+                    .get("linked_memory_ids")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for mid in mids {
+                    linked.insert(mid.clone());
                 }
+                payload.insert(
+                    "linked_memory_ids".into(),
+                    Value::Array(linked.into_iter().map(Value::String).collect()),
+                );
+                let _ = store.update(&m.id, None, Some(payload)).await;
+                continue;
             }
             let mut payload = JsonMap::new();
             payload.insert("data".into(), Value::String(etext.clone()));
@@ -960,19 +959,19 @@ impl Memory {
         new_metadata.insert("updated_at".into(), Value::String(updated_at.clone()));
 
         for key in ["user_id", "agent_id", "run_id"] {
-            if !new_metadata.contains_key(key) {
-                if let Some(v) = existing.payload.get(key) {
-                    new_metadata.insert(key.into(), v.clone());
-                }
+            if !new_metadata.contains_key(key)
+                && let Some(v) = existing.payload.get(key)
+            {
+                new_metadata.insert(key.into(), v.clone());
             }
         }
         if let Some(v) = existing.payload.get("actor_id") {
             new_metadata.insert("actor_id".into(), v.clone());
         }
-        if !new_metadata.contains_key("role") {
-            if let Some(v) = existing.payload.get("role") {
-                new_metadata.insert("role".into(), v.clone());
-            }
+        if !new_metadata.contains_key("role")
+            && let Some(v) = existing.payload.get("role")
+        {
+            new_metadata.insert("role".into(), v.clone());
         }
 
         let actor_id = new_metadata
@@ -1122,16 +1121,16 @@ impl Memory {
 /// Parse a `{"memory": [...]}` array from cleaned LLM output, with an
 /// `extract_json` fallback. Returns `[]` on failure.
 fn parse_memory_array(cleaned: &str) -> Vec<Value> {
-    if let Ok(v) = serde_json::from_str::<Value>(cleaned) {
-        if let Some(arr) = v.get("memory").and_then(|m| m.as_array()) {
-            return arr.clone();
-        }
+    if let Ok(v) = serde_json::from_str::<Value>(cleaned)
+        && let Some(arr) = v.get("memory").and_then(|m| m.as_array())
+    {
+        return arr.clone();
     }
     let ej = extract_json(cleaned);
-    if let Ok(v) = serde_json::from_str::<Value>(&ej) {
-        if let Some(arr) = v.get("memory").and_then(|m| m.as_array()) {
-            return arr.clone();
-        }
+    if let Ok(v) = serde_json::from_str::<Value>(&ej)
+        && let Some(arr) = v.get("memory").and_then(|m| m.as_array())
+    {
+        return arr.clone();
     }
     vec![]
 }

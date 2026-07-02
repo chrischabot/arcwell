@@ -501,6 +501,10 @@ pub(crate) struct ProcedureCommand {
     pub(crate) command: ProcedureSubcommand,
 }
 
+// allow: this is a clap::Subcommand CLI parsing enum, not a hot-path data
+// structure; boxing variants to shrink it is a real API change out of scope
+// for the lint-cleanup pass.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub(crate) enum ProcedureSubcommand {
     Propose {

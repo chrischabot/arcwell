@@ -186,7 +186,7 @@ fn severe_narrative_claim_filter_excludes_titles_and_page_dumps() {
     fn record(text: &str, confidence: f64, caveats: Vec<&str>) -> ResearchClaimRecord {
         ResearchClaimRecord {
             claim: ResearchClaim {
-                id: format!("rclaim-{}", sha256(text.as_bytes())[..16].to_string()),
+                id: format!("rclaim-{}", &sha256(text.as_bytes())[..16]),
                 run_id: "rrun-narrative-filter".to_string(),
                 text: text.to_string(),
                 kind: "measurement".to_string(),

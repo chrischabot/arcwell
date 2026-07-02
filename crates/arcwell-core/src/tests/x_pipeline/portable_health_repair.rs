@@ -56,7 +56,7 @@ fn severe_x_portable_export_validate_import_round_trips_and_is_idempotent() {
         .unwrap();
     assert_eq!(search.len(), 1);
     assert_eq!(search[0].x_id, "portable-1");
-    assert_eq!(search[0].source_card_id.is_some(), true);
+    assert!(search[0].source_card_id.is_some());
 
     let second = destination.import_x_portable(&out_dir).unwrap();
     assert_eq!(second.import.imported, 0);

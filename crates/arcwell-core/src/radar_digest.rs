@@ -61,11 +61,7 @@ pub(crate) fn radar_profile_status(source_selectors: &Value) -> String {
     let unsupported = unsupported_radar_selectors(source_selectors);
     let supported = source_selectors
         .as_array()
-        .map(|selectors| {
-            selectors
-                .iter()
-                .any(|selector| radar_selector_is_source_card_backed(selector))
-        })
+        .map(|selectors| selectors.iter().any(radar_selector_is_source_card_backed))
         .unwrap_or(false);
     match (supported, unsupported.is_empty()) {
         (true, true) => "local_proof_ready".to_string(),
@@ -697,6 +693,8 @@ pub(crate) fn issue_schedule_tick_key(
 }
 
 #[cfg(test)]
+// allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn issue_schedule_due_slots(
     latest_due_at: Option<&str>,
     created_at: &str,
@@ -720,6 +718,8 @@ pub(crate) fn issue_schedule_due_slots(
     )
 }
 
+// allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn issue_schedule_due_slots_with_metadata(
     latest_due_at: Option<&str>,
     created_at: &str,
@@ -1591,10 +1591,10 @@ pub(crate) fn daily_briefing_story_title(
             .filter(|label| !label.is_empty())
             .take(3)
             .collect::<Vec<_>>();
-        if !repo_names.is_empty() {
-            if let Some(entity) = daily_briefing_title_entity(&topic) {
-                return entity;
-            }
+        if !repo_names.is_empty()
+            && let Some(entity) = daily_briefing_title_entity(&topic)
+        {
+            return entity;
         }
     }
     daily_briefing_title_entity(&topic).unwrap_or(topic)

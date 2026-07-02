@@ -522,6 +522,8 @@ impl Store {
         )
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn enqueue_knowledge_cluster_model_writer_job_with_lineage(
         &self,
         cluster_id: &str,
@@ -570,6 +572,8 @@ impl Store {
         self.enqueue_wiki_job("knowledge_cluster_model_write", input)
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn schedule_job_radar_refresh(
         &self,
         profile_id: &str,
@@ -668,6 +672,8 @@ impl Store {
         )
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn enqueue_job_radar_refresh_job_with_lineage(
         &self,
         profile_id: &str,
@@ -700,6 +706,8 @@ impl Store {
         self.enqueue_wiki_job("job_radar_refresh", input)
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn schedule_knowledge_cluster_model_write(
         &self,
         cluster_id: &str,
@@ -769,6 +777,8 @@ impl Store {
         )
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn enqueue_knowledge_entity_resolution_model_job_with_lineage(
         &self,
         left_entity_id: &str,
@@ -830,6 +840,8 @@ impl Store {
         self.enqueue_wiki_job("knowledge_entity_resolution_model", input)
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn schedule_knowledge_entity_resolution(
         &self,
         model_provider: &str,
@@ -1060,6 +1072,8 @@ impl Store {
         self.enqueue_wiki_job("knowledge_cluster_backlog", input)
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn enqueue_knowledge_cluster_model_proposal_job(
         &self,
         query: &str,
@@ -1082,6 +1096,8 @@ impl Store {
         )
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn enqueue_knowledge_cluster_model_proposal_job_with_lineage(
         &self,
         query: &str,
@@ -1148,6 +1164,8 @@ impl Store {
         })
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn schedule_knowledge_cluster_model_proposals(
         &self,
         query: &str,
@@ -2698,6 +2716,8 @@ impl Store {
         self.execute_wiki_job(job)
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_knowledge_cluster_model_proposal_job(
         &self,
         query: &str,

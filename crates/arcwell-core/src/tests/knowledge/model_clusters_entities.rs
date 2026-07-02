@@ -601,7 +601,7 @@ fn severe_model_cluster_broad_sweep_uses_only_fresh_real_source_cards() {
             .get("skipped_clustered_source_cards")
             .and_then(Value::as_u64)
             .unwrap_or_default()
-            >= selected.len() as u64 + 1,
+            > selected.len() as u64,
         "{replay_result:#?}"
     );
     assert_eq!(

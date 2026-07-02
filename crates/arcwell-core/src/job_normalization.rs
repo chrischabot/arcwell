@@ -74,10 +74,10 @@ pub(crate) fn normalize_job_source_health_input(
 ) -> Result<JobSourceHealthInput> {
     validate_id(&input.source_id)?;
     input.status = normalize_job_source_health_status(&input.status)?;
-    if let Some(http_status) = input.http_status {
-        if !(100..=599).contains(&http_status) {
-            bail!("job source health http_status must be between 100 and 599");
-        }
+    if let Some(http_status) = input.http_status
+        && !(100..=599).contains(&http_status)
+    {
+        bail!("job source health http_status must be between 100 and 599");
     }
     input.error_code = input
         .error_code
@@ -569,6 +569,8 @@ pub(crate) fn job_json_looks_like_lever(value: &Value) -> bool {
     }) || (value.get("hostedUrl").is_some() && value.get("text").is_some())
 }
 
+// allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn job_role_input_from_structured_posting(
     source: &JobSource,
     title: &str,
@@ -2971,13 +2973,13 @@ fn job_report_strip_trailing_geo_suffix(title: &str) -> String {
                 changed = true;
             }
         }
-        if let Some(start) = current.rfind(" (") {
-            if current.ends_with(')') {
-                let suffix = current[start + 2..current.len() - 1].trim();
-                if job_report_geo_suffix_is_location(suffix) {
-                    current.truncate(start);
-                    changed = true;
-                }
+        if let Some(start) = current.rfind(" (")
+            && current.ends_with(')')
+        {
+            let suffix = current[start + 2..current.len() - 1].trim();
+            if job_report_geo_suffix_is_location(suffix) {
+                current.truncate(start);
+                changed = true;
             }
         }
         if !changed {
@@ -3022,12 +3024,13 @@ fn job_report_strip_trailing_geo_suffix(title: &str) -> String {
         }
         if !changed {
             for separator in [" - ", " | ", " / ", ", "] {
-                if let Some((prefix, suffix)) = current.rsplit_once(separator) {
-                    if !prefix.trim().is_empty() && job_report_geo_suffix_is_location(suffix) {
-                        current = prefix.trim().to_string();
-                        changed = true;
-                        break;
-                    }
+                if let Some((prefix, suffix)) = current.rsplit_once(separator)
+                    && !prefix.trim().is_empty()
+                    && job_report_geo_suffix_is_location(suffix)
+                {
+                    current = prefix.trim().to_string();
+                    changed = true;
+                    break;
                 }
             }
         }

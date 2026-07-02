@@ -91,10 +91,10 @@ pub fn generate_additive_extraction_prompt(args: &AdditivePromptArgs) -> String 
     sections.push(format!("## Observation Date\n{observation_date}"));
     sections.push(format!("## Current Date\n{current_date}"));
 
-    if let Some(ci) = args.custom_instructions {
-        if !ci.is_empty() {
-            sections.push(format!("## Custom Instructions\n{ci}"));
-        }
+    if let Some(ci) = args.custom_instructions
+        && !ci.is_empty()
+    {
+        sections.push(format!("## Custom Instructions\n{ci}"));
     }
 
     if args.use_input_language {

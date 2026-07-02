@@ -28,10 +28,10 @@ pub(crate) fn normalize_research_host_search_input(
         .filter(|value| !value.is_empty())
         .map(|value| sanitize_work_text(value, 500))
         .transpose()?;
-    if let Some(recency) = input.requested_recency {
-        if !(0..=3650).contains(&recency) {
-            bail!("host search requested_recency must be between 0 and 3650 days");
-        }
+    if let Some(recency) = input.requested_recency
+        && !(0..=3650).contains(&recency)
+    {
+        bail!("host search requested_recency must be between 0 and 3650 days");
     }
     if input.requested_domains.len() > RESEARCH_HOST_SEARCH_MAX_DOMAINS {
         bail!("too many host search requested domains");
@@ -421,7 +421,7 @@ pub(crate) fn parse_table_numeric_and_footnote_refs(raw: &str) -> (Option<f64>, 
     if cleaned.is_empty() || cleaned.starts_with('=') || cleaned.starts_with('@') {
         return (None, Vec::new());
     }
-    if let Some(value) = cleaned.parse::<f64>().ok() {
+    if let Ok(value) = cleaned.parse::<f64>() {
         return (Some(value), Vec::new());
     }
     let mut candidate = cleaned.as_str();
@@ -531,11 +531,7 @@ pub(crate) fn extract_xlsx_document(
         let rows = range.rows().collect::<Vec<_>>();
         let headers = rows
             .first()
-            .map(|row| {
-                row.iter()
-                    .map(|cell| xlsx_cell_cached_text(cell))
-                    .collect::<Vec<_>>()
-            })
+            .map(|row| row.iter().map(xlsx_cell_cached_text).collect::<Vec<_>>())
             .unwrap_or_default();
         let mut cells = Vec::new();
         let mut formula_count = 0usize;
@@ -859,6 +855,8 @@ pub(crate) fn xlsx_cell_ref_to_zero_based(cell_ref: &str) -> Option<(usize, usiz
     Some((row - 1, column - 1))
 }
 
+// allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn xlsx_cell_metadata_json(
     sheet_name: &str,
     row_index: usize,
@@ -1221,18 +1219,18 @@ pub(crate) fn parse_pdf_layout_table_line(line: &str, line_number: usize) -> Vec
     for (index, ch) in line.char_indices() {
         if ch.is_whitespace() {
             whitespace_run += 1;
-            if whitespace_run >= 2 {
-                if let Some(cell_start) = start.take() {
-                    let cell_end = index + ch.len_utf8() - whitespace_run;
-                    let text = line[cell_start..=cell_end].trim().to_string();
-                    if !text.is_empty() {
-                        cells.push(PdfLayoutCell {
-                            text,
-                            char_start: cell_start,
-                            char_end: cell_end + 1,
-                            line_number,
-                        });
-                    }
+            if whitespace_run >= 2
+                && let Some(cell_start) = start.take()
+            {
+                let cell_end = index + ch.len_utf8() - whitespace_run;
+                let text = line[cell_start..=cell_end].trim().to_string();
+                if !text.is_empty() {
+                    cells.push(PdfLayoutCell {
+                        text,
+                        char_start: cell_start,
+                        char_end: cell_end + 1,
+                        line_number,
+                    });
                 }
             }
         } else {

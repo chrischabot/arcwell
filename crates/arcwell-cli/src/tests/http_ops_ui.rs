@@ -574,12 +574,11 @@ fn severe_mcp_controller_tools_route_and_expose_state() {
         resolved.get("status").and_then(Value::as_str),
         Some("completed")
     );
-    assert_eq!(
+    assert!(
         resolved
             .get("resolved_at")
             .and_then(Value::as_str)
-            .is_some(),
-        true
+            .is_some()
     );
 
     let resource = dispatch_mcp(

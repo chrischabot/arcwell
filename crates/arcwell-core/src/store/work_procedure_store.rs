@@ -1218,10 +1218,10 @@ impl Store {
             .get("duplicate_of")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        if let Some(duplicate_of) = duplicate_of.as_deref() {
-            if duplicate_of == procedure_id {
-                bail!("procedure merge target cannot be the same procedure");
-            }
+        if let Some(duplicate_of) = duplicate_of.as_deref()
+            && duplicate_of == procedure_id
+        {
+            bail!("procedure merge target cannot be the same procedure");
         }
         let timestamp = now();
         self.conn.execute(

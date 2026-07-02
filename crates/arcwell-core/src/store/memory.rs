@@ -666,6 +666,8 @@ impl Store {
         rows(stmt.query_map(params![limit], memory_decision_from_row)?)
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_memory_forget_tombstone(
         &self,
         user_id: &str,

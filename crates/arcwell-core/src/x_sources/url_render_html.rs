@@ -570,9 +570,7 @@ pub(crate) fn html_attr_value(tag: &str, attr: &str) -> Option<String> {
                 .get(start.wrapping_sub(1))
                 .is_some_and(|ch| ch.is_ascii_whitespace() || matches!(*ch, b'<' | b'/'));
         let after_attr = start + attr_lower.len();
-        let Some(after) = lower.as_bytes().get(after_attr) else {
-            return None;
-        };
+        let after = lower.as_bytes().get(after_attr)?;
         if !before_ok || !after.is_ascii_whitespace() && *after != b'=' {
             cursor = after_attr;
             continue;

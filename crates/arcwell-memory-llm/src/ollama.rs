@@ -52,11 +52,10 @@ impl Llm for OllamaLlm {
                 .and_then(|r| r.as_str())
                 == Some("user");
             if appended {
-                if let Some(last) = wire.last_mut() {
-                    if let Some(c) = last.get("content").and_then(|c| c.as_str()) {
-                        last["content"] =
-                            json!(format!("{c}\n\nPlease respond with valid JSON only."));
-                    }
+                if let Some(last) = wire.last_mut()
+                    && let Some(c) = last.get("content").and_then(|c| c.as_str())
+                {
+                    last["content"] = json!(format!("{c}\n\nPlease respond with valid JSON only."));
                 }
             } else {
                 wire.push(

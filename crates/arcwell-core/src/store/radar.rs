@@ -2035,23 +2035,23 @@ impl Store {
                 }
             }
             let category = radar_balance_category_for_item(item, tags, &balance_config);
-            if let Some(category) = category.as_deref() {
-                if let Some(max_per_category) = balance_config.category_quotas.get(category) {
-                    let selected_for_category =
-                        category_selected_counts.get(category).copied().unwrap_or(0);
-                    if selected_for_category >= *max_per_category {
-                        balance_rejections.insert(
-                            item.id.clone(),
-                            (
-                                "category_quota".to_string(),
-                                format!(
-                                    "category quota cap {max_per_category} reached for `{category}`"
-                                ),
-                                format!("category-quota-{category}"),
+            if let Some(category) = category.as_deref()
+                && let Some(max_per_category) = balance_config.category_quotas.get(category)
+            {
+                let selected_for_category =
+                    category_selected_counts.get(category).copied().unwrap_or(0);
+                if selected_for_category >= *max_per_category {
+                    balance_rejections.insert(
+                        item.id.clone(),
+                        (
+                            "category_quota".to_string(),
+                            format!(
+                                "category quota cap {max_per_category} reached for `{category}`"
                             ),
-                        );
-                        continue;
-                    }
+                            format!("category-quota-{category}"),
+                        ),
+                    );
+                    continue;
                 }
             }
             selected_ids.insert(item.id.clone());

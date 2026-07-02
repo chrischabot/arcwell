@@ -684,6 +684,8 @@ impl Store {
         self.write_reddit_rss_fallback_items(source_key, locator, feed_items, json_error)
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn write_reddit_json_listing(
         &self,
         base: &str,
@@ -822,6 +824,8 @@ impl Store {
         )
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn finish_reddit_fetch(
         &self,
         source_key: &str,

@@ -255,12 +255,12 @@ fn guard_git_root(cwd: &str) -> Option<String> {
 /// gateway) is entirely new files that `git diff` alone would never show.
 fn guard_collect_changes(repo_root: &str) -> String {
     let mut out = String::new();
-    if let Some(diff) = guard_run_git(repo_root, &["--no-pager", "diff", "HEAD"]) {
-        if !diff.trim().is_empty() {
-            out.push_str("# Tracked changes (git diff HEAD)\n");
-            out.push_str(&diff);
-            out.push('\n');
-        }
+    if let Some(diff) = guard_run_git(repo_root, &["--no-pager", "diff", "HEAD"])
+        && !diff.trim().is_empty()
+    {
+        out.push_str("# Tracked changes (git diff HEAD)\n");
+        out.push_str(&diff);
+        out.push('\n');
     }
     if let Some(list) = guard_run_git(repo_root, &["ls-files", "--others", "--exclude-standard"]) {
         let files: Vec<&str> = list.lines().filter(|l| !l.trim().is_empty()).collect();

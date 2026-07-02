@@ -25,10 +25,10 @@ pub(crate) fn hook_text_from_input(input: &str) -> Option<String> {
         "/last_message",
         "/lastMessage",
     ] {
-        if let Some(text) = value.pointer(pointer).and_then(Value::as_str) {
-            if !text.trim().is_empty() {
-                return Some(text.to_string());
-            }
+        if let Some(text) = value.pointer(pointer).and_then(Value::as_str)
+            && !text.trim().is_empty()
+        {
+            return Some(text.to_string());
         }
     }
     if let Some(messages) = value.get("messages").and_then(Value::as_array) {

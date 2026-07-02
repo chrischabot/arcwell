@@ -944,7 +944,7 @@ priority = 20
     let updated = store
         .add_source_cards_to_knowledge_cluster(
             &cluster.id,
-            &[fresh.id.clone()],
+            std::slice::from_ref(&fresh.id),
             Some("Fresh registry evidence arrived for the promoted model-origin cluster."),
         )
         .unwrap();

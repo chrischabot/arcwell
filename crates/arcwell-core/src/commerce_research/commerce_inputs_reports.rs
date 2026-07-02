@@ -19,15 +19,15 @@ pub(crate) fn normalize_commerce_run_config_input(
     )?;
     input.allowed_public_source_families =
         normalize_commerce_key_list(input.allowed_public_source_families, "public source family")?;
-    if let Some(max_provider_calls) = input.max_provider_calls {
-        if max_provider_calls > COMMERCE_MAX_PROVIDER_CALLS {
-            bail!("commerce max_provider_calls is too large");
-        }
+    if let Some(max_provider_calls) = input.max_provider_calls
+        && max_provider_calls > COMMERCE_MAX_PROVIDER_CALLS
+    {
+        bail!("commerce max_provider_calls is too large");
     }
-    if let Some(max_browser_pages) = input.max_browser_pages {
-        if max_browser_pages > COMMERCE_MAX_BROWSER_PAGES {
-            bail!("commerce max_browser_pages is too large");
-        }
+    if let Some(max_browser_pages) = input.max_browser_pages
+        && max_browser_pages > COMMERCE_MAX_BROWSER_PAGES
+    {
+        bail!("commerce max_browser_pages is too large");
     }
     if let Some(cost) = input.max_cost_usd {
         validate_non_negative_cost(cost, "commerce max_cost_usd")?;
@@ -137,10 +137,10 @@ pub(crate) fn normalize_commerce_verification_attempt_input(
             canonical_source_url(value)
         })
         .transpose()?;
-    if let Some(status) = input.http_status {
-        if !(100..=599).contains(&status) {
-            bail!("commerce verification http_status must be between 100 and 599");
-        }
+    if let Some(status) = input.http_status
+        && !(100..=599).contains(&status)
+    {
+        bail!("commerce verification http_status must be between 100 and 599");
     }
     if input.result == "blocked" && input.next_action.as_deref().unwrap_or("").trim().is_empty() {
         bail!("blocked commerce verification requires a next_action");
@@ -176,15 +176,14 @@ pub(crate) fn normalize_commerce_report_judgment_input(
     input.availability_proofs_checked = sanitize_work_json(input.availability_proofs_checked)?;
     input.privacy_review = sanitize_work_json(input.privacy_review)?;
     input.remaining_risks = sanitize_work_json(input.remaining_risks)?;
-    if input.decision == "accept" {
-        if input
+    if input.decision == "accept"
+        && input
             .blocking_findings
             .as_array()
             .map(|items| !items.is_empty())
             .unwrap_or(false)
-        {
-            bail!("accepted commerce report judgment cannot include blocking findings");
-        }
+    {
+        bail!("accepted commerce report judgment cannot include blocking findings");
     }
     Ok(input)
 }

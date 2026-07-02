@@ -25,13 +25,13 @@ pub(crate) fn doctor(store: Store, args: DoctorArgs) -> Result<()> {
         max_backup_age_seconds: args.max_backup_age_seconds,
         service_plist_path: service_plist_path.clone(),
     })?;
-    if args.strict {
-        if let Some(path) = service_plist_path {
-            report
-                .failures
-                .extend(service_plist_contract_failures(&path));
-            report.ok = report.health.ok && report.failures.is_empty();
-        }
+    if args.strict
+        && let Some(path) = service_plist_path
+    {
+        report
+            .failures
+            .extend(service_plist_contract_failures(&path));
+        report.ok = report.health.ok && report.failures.is_empty();
     }
     print_json(&report)?;
     if args.strict && !report.ok {
@@ -402,6 +402,8 @@ pub(crate) fn service_plist_path() -> Result<PathBuf> {
         .join(format!("{SERVICE_LABEL}.plist")))
 }
 
+// allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn launch_agent_plist(
     binary: &std::path::Path,
     home: &std::path::Path,

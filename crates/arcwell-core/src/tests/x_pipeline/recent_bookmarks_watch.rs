@@ -574,7 +574,7 @@ priority = 20
     });
 
     assert_eq!(report.imported, 1);
-    assert_eq!(report.items[0].source_card_id.is_some(), true);
+    assert!(report.items[0].source_card_id.is_some());
     assert_eq!(
         store
             .get_cursor("x:recent-search:agents")

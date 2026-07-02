@@ -216,6 +216,8 @@ impl Store {
         )
     }
 
+    // allow: refactoring this N-arg signature is out of scope for the lint-cleanup pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn project_knowledge_from_source_cards(
         &self,
         topic: &str,

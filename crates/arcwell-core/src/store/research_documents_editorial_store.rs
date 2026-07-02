@@ -836,10 +836,10 @@ impl Store {
         if missing_completed_body {
             status = "failed".to_string();
         }
-        let output_artifact = if matches!(status.as_str(), "completed" | "accepted")
-            && body.is_some()
+        let output_artifact = if let Some(body) = body
+            .as_ref()
+            .filter(|_| matches!(status.as_str(), "completed" | "accepted"))
         {
-            let body = body.as_ref().expect("body checked present");
             Some(self.record_research_artifact(ResearchArtifactInput {
                     run_id: input.run_id.clone(),
                     role_run_id: None,

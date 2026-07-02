@@ -491,7 +491,9 @@ fn severe_x_discover_archives_is_no_write_and_shallow() {
         zip.finish().unwrap();
     }
 
-    let report = store.discover_x_archives(&[root.clone()], 10).unwrap();
+    let report = store
+        .discover_x_archives(std::slice::from_ref(&root), 10)
+        .unwrap();
     assert_eq!(report.candidates.len(), 1);
     let candidate = &report.candidates[0];
     assert_eq!(candidate.path, archive_path.display().to_string());
@@ -534,7 +536,7 @@ fn severe_x_discover_archives_reports_unsafe_members_without_importing() {
     }
 
     let report = store
-        .discover_x_archives(&[archive_path.clone()], 10)
+        .discover_x_archives(std::slice::from_ref(&archive_path), 10)
         .unwrap();
     assert_eq!(report.candidates.len(), 1);
     let candidate = &report.candidates[0];
@@ -579,7 +581,7 @@ fn severe_x_discover_archives_warns_about_unsupported_slices_without_support_cla
     }
 
     let report = store
-        .discover_x_archives(&[archive_path.clone()], 10)
+        .discover_x_archives(std::slice::from_ref(&archive_path), 10)
         .unwrap();
     assert_eq!(report.candidates.len(), 1);
     let candidate = &report.candidates[0];

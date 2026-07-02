@@ -322,10 +322,10 @@ pub(crate) fn validate_source_card_metadata(metadata: &Value) -> Result<()> {
         }
         bail!("source-card metadata must be an object");
     };
-    if let Some(version) = object.get("schema_version") {
-        if version.as_u64() != Some(SOURCE_CARD_SCHEMA_VERSION) {
-            bail!("unsupported source-card schema version");
-        }
+    if let Some(version) = object.get("schema_version")
+        && version.as_u64() != Some(SOURCE_CARD_SCHEMA_VERSION)
+    {
+        bail!("unsupported source-card schema version");
     }
     if let Some(role) = object.get("source_role").and_then(Value::as_str) {
         validate_source_role(role)?;

@@ -1762,21 +1762,21 @@ impl Store {
                 });
             }
 
-            if let Some(existing) = existing_delivery.as_ref() {
-                if existing.status == "prepared" {
-                    let delivery = self.record_job_weekly_report_delivery_state(
-                        &input,
-                        "prepared",
-                        Some(&privacy_check.id),
-                        existing.channel_message_id.as_deref(),
-                        None,
-                    )?;
-                    return self.hydrate_job_weekly_report_delivery_report(
-                        delivery,
-                        weekly_report.clone(),
-                        true,
-                    );
-                }
+            if let Some(existing) = existing_delivery.as_ref()
+                && existing.status == "prepared"
+            {
+                let delivery = self.record_job_weekly_report_delivery_state(
+                    &input,
+                    "prepared",
+                    Some(&privacy_check.id),
+                    existing.channel_message_id.as_deref(),
+                    None,
+                )?;
+                return self.hydrate_job_weekly_report_delivery_report(
+                    delivery,
+                    weekly_report.clone(),
+                    true,
+                );
             }
 
             let message = self.record_channel_message_with_status(

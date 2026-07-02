@@ -146,13 +146,13 @@ pub(crate) fn qdrant_filter(filters: &JsonMap) -> Option<Value> {
             "AND" | "OR" | "NOT" => {
                 if let Some(arr) = value.as_array() {
                     for sub in arr {
-                        if let Some(obj) = sub.as_object() {
-                            if let Some(f) = qdrant_filter(obj) {
-                                match key.as_str() {
-                                    "AND" => must.push(f),
-                                    "OR" => should.push(f),
-                                    _ => must_not.push(f),
-                                }
+                        if let Some(obj) = sub.as_object()
+                            && let Some(f) = qdrant_filter(obj)
+                        {
+                            match key.as_str() {
+                                "AND" => must.push(f),
+                                "OR" => should.push(f),
+                                _ => must_not.push(f),
                             }
                         }
                     }
