@@ -71,6 +71,8 @@ mod radar_digest;
 pub(crate) use radar_digest::*;
 mod health_validation;
 pub(crate) use health_validation::*;
+mod job_normalization;
+pub(crate) use job_normalization::*;
 mod commerce_research;
 pub(crate) use commerce_research::*;
 mod x_sources;
