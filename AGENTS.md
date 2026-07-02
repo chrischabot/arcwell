@@ -33,6 +33,8 @@ scripts/arcwell-dev smoke
 scripts/arcwell-dev sync
 ```
 
+CI (`.github/workflows/ci.yml`) runs these on every push and pull request.
+
 ## Codex Plugin Dev Loop
 
 Arcwell has two plugin modes:

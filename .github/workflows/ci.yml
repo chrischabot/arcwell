@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      # TODO: tighten to `-- -D warnings` after existing lints are cleared (124 warnings at 63932ae4)
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features
+      - name: Test
+        run: cargo test --workspace --all-features
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  workers:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: packages/arcwell-edge-inbox/worker
+            typecheck: true
+          - dir: packages/arcwell-garderobe
+            typecheck: true
+          - dir: packages/arcwell-email
+            typecheck: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        working-directory: ${{ matrix.dir }}
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-save; fi
+      - name: Typecheck
+        if: matrix.typecheck
+        working-directory: ${{ matrix.dir }}
+        run: npm run typecheck
+      - name: Test
+        working-directory: ${{ matrix.dir }}
+        run: npm test
